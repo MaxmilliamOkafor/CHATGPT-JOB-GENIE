@@ -1548,11 +1548,11 @@ class ATSTailor {
     const advToggle = document.getElementById('linkedinAutoAdvanceToggle');
     if (advToggle) advToggle.checked = result.linkedin_autoadvance_enabled !== false;
     const subToggle = document.getElementById('linkedinAutoSubmitToggle');
-    if (subToggle) subToggle.checked = result.linkedin_autosubmit_enabled !== false;
+    if (subToggle) subToggle.checked = result.linkedin_autosubmit_enabled === true;
     this.syncLinkedInAutoUI();
     // Follow-up email: preference, saved template, and live Gmail status.
     const fuToggle = document.getElementById('followupEnabledToggle');
-    if (fuToggle) fuToggle.checked = result.followup_enabled !== false;
+    if (fuToggle) fuToggle.checked = result.followup_enabled === true;
     // Defaults ON: attaching the tailored documents is the useful case.
     const atToggle = document.getElementById('followupAttachToggle');
     if (atToggle) atToggle.checked = result.followup_attach_enabled !== false;
@@ -2925,7 +2925,7 @@ class ATSTailor {
       }
 
       const cfg = await new Promise((r) => chrome.storage.local.get(['followup_enabled'], (x) => r(x || {})));
-      if (cfg.followup_enabled === false) {
+      if (cfg.followup_enabled !== true) {
         await outcome('disabled',
           'Follow-up email is switched off, so no note was sent. Turn on '
           + '"Application Follow-up Email" in Settings.', 'warning');
@@ -2942,6 +2942,12 @@ class ATSTailor {
         const enrichState = await this.followupEnrichmentState();
         await outcome('no-recipient',
           'No address found for this role, so no note was sent. ' + enrichState, 'warning');
+        return;
+      }
+
+      const recipient = this.jdContact || this.generatedDocuments?.jdContact || {};
+      if (recipient.requiresReview || /enriched/.test(recipient.emailSource || '')) {
+        await outcome('review-recipient', 'A possible hiring contact was found. Review the recipient, job reference and draft, then choose Send follow-up.', 'warning');
         return;
       }
 
@@ -3449,7 +3455,7 @@ class ATSTailor {
       //    else works -- and it was silent about it.
       const st = await new Promise((r) => chrome.storage.local.get(
         ['followup_enabled', 'followup_attach_enabled', 'followup_last_outcome'], (x) => r(x || {})));
-      if (st.followup_enabled !== false) ok('Follow-up email is ON');
+      if (st.followup_enabled === true) ok('Follow-up email is ON');
       else bad('Follow-up email is OFF, so nothing will send',
         'turn on "Application Follow-up Email" in Settings');
       if (st.followup_attach_enabled === false) {
@@ -4020,6 +4026,7 @@ class ATSTailor {
         detected.email = hit.email;
         detected.contactName = hit.name || detected.contactName;
         detected.emailSource = 'enriched';
+        detected.requiresReview = true;
         detected.hasPublishedEmail = false;
       }
       const toEl = document.getElementById('followupTo');
@@ -6376,7 +6383,7 @@ class ATSTailor {
       // Filename: {FirstName}_{LastName}_{Role}_CV.docx
       //
       // The role belongs in the name. A recruiter downloads a batch into
-      // one folder, and "Maxmilliam_Okafor_CV.docx" tells them nothing
+      // one folder, and "Candidate_Name_CV.docx" tells them nothing
       // about which req it belongs to, while every other candidate's
       // file is called something equally generic. Greenhouse profiles
       // also get revisited for adjacent openings later, and the filename
@@ -6895,13 +6902,7 @@ class ATSTailor {
           .replace(/^\s*Company\s*$/gm, '')
           .replace(/\n\s*Company\s*\n/gi, '\n')
           .replace(/\n\n\n+/g, '\n\n');
-        // Add portfolio URL after date line if not present
-        if (!/maxmilliamlabs-ai\.web\.app|maxmilliam/i.test(coverText.split('Dear')[0] || '')) {
-          coverText = coverText.replace(
-            /((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4})\n/i,
-            '$1\nmaxmilliamlabs-ai.web.app\n'
-          );
-        }
+        // Preserve only portfolio details already supplied by the candidate.
         // Force the cover-letter header location to the job-adaptive
         // value (replacing whatever the model wrote, typically "Dublin, IE").
         const clLocation = this.getApplicationLocation();
@@ -8168,7 +8169,7 @@ class ATSTailor {
     // THE PARSE ABOVE FAILS ON THE "JSON" A MODEL ACTUALLY WRITES: a
     // quoted value holding LITERAL newlines, which JSON forbids. That
     // shipped a document whose name line was "{" and whose headline was
-    // '"tailoredResume": "Maxmilliam Okafor'. The tail of the envelope
+    // '"tailoredResume": "Candidate Name'. The tail of the envelope
     // was already stripped below; the HEAD never was. Strip it by hand:
     // the opening brace and this document's own key.
     const ownKey = type === 'cv' ? 'tailoredResume' : 'tailoredCoverLetter';

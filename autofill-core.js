@@ -127,15 +127,7 @@
   // the /location/ or /state/ rule. Each guard below encodes a real
   // mis-fill observed on a live ATS form.
   // ===================================================================
-  const DEFAULTS = {
-    authorized: 'Yes', sponsorship: 'No', relocation: 'Yes', remote: 'Yes',
-    // No `years` default on purpose: it is computed from the employment
-    // history, and inventing one is a knockout answer either way.
-    country: 'Ireland', phoneCode: '+353',
-    availability: 'Immediately', howHeard: 'LinkedIn',
-    gender: 'Prefer not to say', ethnicity: 'Prefer not to say',
-    veteran: 'I am not a protected veteran', disability: 'I do not have a disability',
-  };
+  const DEFAULTS = Object.freeze({}); // Unknown personal facts stay unanswered.
 
   const ISO2_NAMES = {
     IE: 'Ireland', US: 'United States', GB: 'United Kingdom', UK: 'United Kingdom',
@@ -220,17 +212,7 @@
     if (Array.isArray(explicit) && explicit.length) {
       return explicit.map(_toIso).filter(Boolean);
     }
-    const home = String(P.country || P.location || P.city || '').toUpperCase();
-    const iso = Object.keys(ISO2_NAMES).find((k) => home === k
-      || home.indexOf(ISO2_NAMES[k].toUpperCase()) !== -1) || '';
-    if (!iso) return [];
-    // An EEA citizenship carries the whole EEA, and Ireland and the UK
-    // carry each other under the Common Travel Area.
-    if (_EEA.indexOf(iso) !== -1) {
-      return _EEA.concat(iso === 'IE' ? ['GB', 'UK'] : []);
-    }
-    if (iso === 'GB' || iso === 'UK') return ['GB', 'UK', 'IE'];
-    return [iso];
+    return []; // Residence or citizenship is not an explicit work-authorization answer.
   }
 
   // The country a question is asking about, if it names one.
@@ -351,11 +333,14 @@
   }
 
   function answerFor(label, p, opts) {
-    const o = opts || {};
+    const o = { ...(opts || {}) };
     const raw = String(label || '');
     const l = raw.toLowerCase().replace(/[^a-z0-9/ ]/g, ' ').replace(/\s+/g, ' ').trim();
     if (!l) return '';
     const P = p || {};
+    const saved = P.application_answers?.[raw];
+    if (saved !== undefined && saved !== null) return String(saved);
+    if (/^(are|do|did|have|has|will|would|can|could|is)\b/.test(l) && !/years/.test(l)) return yesNoFor(raw, P);
 
     // --- compound / trap questions FIRST -----------------------------
     // Referral-name asks for a person we don't have; the /state/ rule
@@ -363,7 +348,7 @@
     if (/referral.*name|referr(er|ing).*name|employee.?s? .*name|name of .*(referr|employee)/.test(l)) return '';
     // "What sponsorship would you require" needs a sentence, not Yes/No.
     if (/what .*sponsor|which .*sponsor|sponsor(ship)? .*(would|do) .*(require|need)/.test(l)) {
-      return 'None - I do not require sponsorship.';
+      return P.sponsorship_details || '';
     }
 
     // --- open-ended motivation questions ------------------------------
@@ -422,7 +407,8 @@
       return P.state || '';
     }
     if (/zip|postal|eircode|post.?code/.test(l)) return P.postal_code || P.zip || '';
-    if (/country|nationality|citizenship/.test(l) && !/code|phone|dial/.test(l)) return _country(P);
+    if (/nationality|citizenship/.test(l)) return P.nationality || P.citizenship || '';
+    if (/country/.test(l) && !/code|phone|dial/.test(l)) return _country(P);
     if (/address|street/.test(l) && !/email/.test(l)) return P.address || '';
     // Location FIELDS only -- not eligibility questions mentioning "location".
     if (/location|where .*(you|do you) (live|based)|based in/.test(l) && !/authoriz|authoris|sponsor|relocat|eligib|stated|willing/.test(l)) {
@@ -434,7 +420,7 @@
     if (/github/.test(l)) return P.github || P.github_url || '';
     if (/website|portfolio|personal.?url|personal.?site/.test(l)) return P.website || P.portfolio || P.website_url || '';
     if (/university|school|college|institution|alma.?mater/.test(l)) return P.school || P.university || '';
-    if (/\bdegree\b|qualification level/.test(l)) return P.degree || "Bachelor's";
+    if (/\bdegree\b|qualification level/.test(l)) return P.degree || '';
     if (/major|field.?of.?study|discipline|concentration/.test(l)) return P.major || '';
     if (/\bgpa\b|grade.?point/.test(l)) return P.gpa || '';
     if (/graduation|grad.?year|grad.?date/.test(l)) return P.graduation_year || P.grad_year || '';
@@ -490,11 +476,11 @@
     if (/ethnic|\brace\b|racial|heritage/.test(l)) return P.ethnicity || P.race || DEFAULTS.ethnicity;
     if (/veteran|military|armed forces/.test(l)) return P.veteran || DEFAULTS.veteran;
     if (/disabilit/.test(l)) return P.disability || DEFAULTS.disability;
-    if (/\bage\b|over 18|at least 18|18 years/.test(l)) return 'Yes';
-    if (/convicted|criminal|felony/.test(l)) return 'No';
-    if (/drivers? licen[sc]e/.test(l)) return P.drivers_license || 'Yes';
-    if (/security clearance/.test(l)) return P.security_clearance || 'None';
-    if (/languages?|fluen/.test(l)) return P.languages || 'English';
+    if (/\bage\b|over 18|at least 18|18 years/.test(l)) return '';
+    if (/convicted|criminal|felony/.test(l)) return P.criminal_record || '';
+    if (/drivers? licen[sc]e/.test(l)) return P.drivers_license || '';
+    if (/security clearance/.test(l)) return P.security_clearance || '';
+    if (/languages?|fluen/.test(l)) return P.languages || '';
     if (/skills/.test(l) && !/soft/.test(l)) return Array.isArray(P.skills) ? P.skills.slice(0, 12).join(', ') : (P.skills || '');
     if (/cover.?letter|message to|additional info|anything else/.test(l)) return o.coverLetter || P.cover_letter || '';
     if (/summary|about (yourself|you)|\bbio\b/.test(l)) return P.summary || P.cover_letter || '';
@@ -506,7 +492,7 @@
     if (/^to$|to (date|month|year)|end (date|month)/.test(l) && !/salary|pay|email/.test(l)) {
       return P.work_end_year ? ('12/' + P.work_end_year) : '';
     }
-    if (/agree|acknowledge|consent|certif|attest|confirm/.test(l)) return 'Yes';
+    if (/agree|acknowledge|consent|certif|attest|confirm/.test(l)) return '';
     return '';
   }
 
@@ -605,8 +591,8 @@
       // question about the United States, not about the applicant's
       // usual answer.
       const byCountry = authorisedForQuestion(question, P);
-      const needsSponsor = byCountry ? (byCountry === 'Yes' ? 'No' : 'Yes')
-        : _pref(P.sponsorship_required, 'No');
+      const needsSponsor = _pref(P.sponsorship_required, '');
+      if (!needsSponsor) return '';
       if (/without[a-z ]{0,30}sponsor|not require|dont require|do not need|no sponsor/.test(l)) {
         // Inverted phrasing, so invert the SAME answer rather than
         // defaulting separately -- defaulting to the opposite here made
@@ -616,52 +602,52 @@
       return needsSponsor;
     }
     if (/authoriz|authoris|legally (?:able|entitled|permitted|allowed)|right to work|eligible to work|permission to work|permitted to work/.test(l)) {
-      return authorisedForQuestion(question, P) || _pref(P.work_authorized, 'Yes');
+      return authorisedForQuestion(question, P) || _pref(P.work_authorized, '');
     }
 
     // --- location / working pattern ----------------------------------
     // "commute" is the one that used to resolve to the user's city.
-    if (/commut|travel to (?:the )?(?:office|site)|report to (?:the )?office/.test(l)) return 'Yes';
-    if (/relocat|willing to move/.test(l)) return _pref(P.willing_to_relocate, 'Yes');
-    if (/remote|work from home|hybrid|on ?site|in ?office|in person/.test(l)) return 'Yes';
+    if (/commut|travel to (?:the )?(?:office|site)|report to (?:the )?office/.test(l)) return '';
+    if (/relocat|willing to move/.test(l)) return _pref(P.willing_to_relocate, '');
+    if (/remote|work from home|hybrid|on ?site|in ?office|in person/.test(l)) return '';
 
     // --- this employer, specifically ---------------------------------
     // "Have you worked here before" is not "are you employed" -- and a
     // wrong Yes here is a claim about a relationship that can be checked.
     if (/(?:current(?:ly)?|previous(?:ly)?|former(?:ly)?|ever) .{0,24}(?:employee|employed|worked|intern)\b.{0,4}(?:at|for|with|by|of)\b/.test(l)
         || /(?:employee|worked|intern) (?:at|for|with|of) (?:this|our) (?:company|organi)/.test(l)) {
-      return _pref(P.worked_here_before, 'No');
+      return _pref(P.worked_here_before, '');
     }
-    if (/related to|family member|relative .{0,20}(?:work|employ)|know anyone who works/.test(l)) return 'No';
-    if (/referred by|were you referred|employee referral/.test(l)) return _pref(P.was_referred, 'No');
-    if (/currently employed|are you working/.test(l)) return _pref(P.currently_employed, 'Yes');
+    if (/related to|family member|relative .{0,20}(?:work|employ)|know anyone who works/.test(l)) return '';
+    if (/referred by|were you referred|employee referral/.test(l)) return _pref(P.was_referred, '');
+    if (/currently employed|are you working/.test(l)) return _pref(P.currently_employed, '');
 
     // --- claims: answered from the profile or not at all -------------
     const subject = _skillSubject(l);
     if (subject) return _profileMentions(P, subject) ? 'Yes' : '';
     if (/do you (?:speak|write)|fluent|proficiency in|native speaker/.test(l)) {
       const lang = (l.match(/(?:speak|fluent in|proficiency in|write)\s+([a-z ]+)/) || [])[1] || '';
-      if (lang && _profileMentions(P, lang.trim())) return 'Yes';
-      return /english/.test(l) ? 'Yes' : '';
+      if (lang && _profileMentions(P, lang.trim())) return '';
+      return '';
     }
     if (/do you (?:have|hold) (?:a|an) .{0,30}(?:degree|diploma|certification|qualification|licen[sc]e|clearance|passport)/.test(l)
         || /have you completed|do you possess/.test(l)) {
       const what = (l.match(/(?:have|hold|possess|completed) (?:a|an|the)?\s*(.+)$/) || [])[1] || '';
-      if (/driver/.test(l)) return _pref(P.drivers_license, 'Yes');
+      if (/driver/.test(l)) return _pref(P.drivers_license, '');
       if (/degree|diploma|bachelor|master/.test(l)) return P.degree || P.school || P.university ? 'Yes' : '';
       return what && _profileMentions(P, what) ? 'Yes' : '';
     }
 
     // --- standard screening ------------------------------------------
-    if (/\b(?:over|at least|older than|minimum of)\b.{0,12}\b(?:18|16|21)\b|age of majority|legal working age/.test(l)) return 'Yes';
-    if (/convicted|felony|criminal (?:record|history|convict)|pleaded guilty/.test(l)) return _pref(P.criminal_record, 'No');
-    if (/background check|drug (?:test|screen)|reference check|credit check|right to represent/.test(l)) return 'Yes';
-    if (/agree|acknowledge|consent|certif|attest|confirm|understand and accept|terms/.test(l)) return 'Yes';
-    if (/available to start|able to start|can you start|start (?:on|by|immediately)/.test(l)) return 'Yes';
-    if (/require .{0,20}(?:accommodation|adjustment)/.test(l)) return _pref(P.needs_accommodation, 'No');
-    if (/veteran|armed forces|military service/.test(l)) return _pref(P.veteran_status, 'No');
-    if (/disabilit/.test(l)) return _pref(P.disability_status, 'No');
-    if (/willing to|are you able to|can you |comfortable (?:with|working)/.test(l)) return 'Yes';
+    if (/\b(?:over|at least|older than|minimum of)\b.{0,12}\b(?:18|16|21)\b|age of majority|legal working age/.test(l)) return '';
+    if (/convicted|felony|criminal (?:record|history|convict)|pleaded guilty/.test(l)) return _pref(P.criminal_record, '');
+    if (/background check|drug (?:test|screen)|reference check|credit check|right to represent/.test(l)) return '';
+    if (/agree|acknowledge|consent|certif|attest|confirm|understand and accept|terms/.test(l)) return '';
+    if (/available to start|able to start|can you start|start (?:on|by|immediately)/.test(l)) return '';
+    if (/require .{0,20}(?:accommodation|adjustment)/.test(l)) return _pref(P.needs_accommodation, '');
+    if (/veteran|armed forces|military service/.test(l)) return _pref(P.veteran_status, '');
+    if (/disabilit/.test(l)) return _pref(P.disability_status, '');
+    if (/willing to|are you able to|can you |comfortable (?:with|working)/.test(l)) return '';
 
     return '';
   }
@@ -724,7 +710,7 @@
   // directly leaves their internal state stale and the value reverts.
   // A VALUE THAT CANNOT BE RIGHT FOR THIS FIELD IS NOT WRITTEN.
   //
-  // A Greenhouse form came back with "Maxmilliam" in the Email box and
+  // A Greenhouse form came back with a first name in the Email box and
   // the form's own validator saying "Please enter a valid email
   // address". Whatever mismatched the label -- and on a form that
   // stacks "Preferred First Name" directly above "Email" there are
@@ -752,8 +738,8 @@
     if (!v) return true;                       // clearing is always allowed
     switch (_fieldKind(el)) {
       case 'email': return /^[^@\s]+@[^@\s]+\.[^@\s]{2,}$/.test(v);
-      // Enough digits to be a phone number. "+353 087 426 1508" and
-      // "0874261508" pass; a name or a single digit does not.
+      // Enough digits to be a phone number. "+1 202 555 0100" and
+      // "2025550100" pass; a name or a single digit does not.
       case 'phone': return (v.replace(/\D/g, '').length >= 7);
       case 'url': return /^(https?:\/\/|www\.)|\.[a-z]{2,}(\/|$)/i.test(v);
       default: return true;
@@ -767,7 +753,7 @@
           + '" into a ' + _fieldKind(el) + ' field -- it is not a valid '
           + _fieldKind(el) + ', so the box is left for you to fill.');
       } catch (e) {}
-      return;
+      return false;
     }
     const clamped = _clampToMaxLength(el, value);
     try {
@@ -783,6 +769,7 @@
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
     el.dispatchEvent(new Event('blur', { bubbles: true }));
+    return String(el.value) === String(clamped);
   }
 
   function _norm(s) {
@@ -793,8 +780,7 @@
    * The number without its country code, for a form that asks for the
    * code separately.
    *
-   * Strips the stored code when the number carries it, so "+353 874 261
-   * 508" with a code of "+353" becomes "874 261 508". Falls back to
+   * Strips the stored code when the number carries it, so "+1 202 555 0100" with a code of "+1" becomes "202 555 0100". Falls back to
    * removing a leading + and one to three digits when no code is stored.
    * The remaining digits are never altered: only the prefix is removed,
    * and a number that does not start with a code is returned untouched.
@@ -816,8 +802,7 @@
         return raw.slice(i).trim();
       }
     }
-    const m = raw.match(/^\+\d{1,3}[\s-]*(.+)$/);
-    return m ? m[1].trim() : raw;
+    return raw; // Cannot infer a dialing prefix from an unseparated number.
   }
 
   // Option matching that understands yes/no semantics -- the single most
@@ -828,7 +813,7 @@
     if (!o || !w) return false;
     if (o === w) return true;
     if (w === 'yes' || w === 'no') return o === w || o.startsWith(w + ' ');
-    return o.includes(w) || w.includes(o);
+    return false; // Ambiguous partial matches must be reviewed, not guessed.
   }
 
   function fillSelect(el, value) {
@@ -838,11 +823,12 @@
     if (cur && cur.value && !/select|choose|^--|please/i.test(cur.textContent || '')) return false;
     let best = null;
     for (const opt of el.options) {
-      if (!opt.value && /select|choose|^--/i.test(opt.textContent || '')) continue;
+      if (opt.disabled || opt.parentElement?.disabled || !opt.value) continue;
       if (optionMatches(opt.textContent, value) || optionMatches(opt.value, value)) { best = opt; break; }
     }
     if (!best) return false;
-    el.value = best.value;
+    const proto = el.ownerDocument.defaultView.HTMLSelectElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, best.value);
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
@@ -855,7 +841,7 @@
     for (const r of group) if (r.checked) return false;   // already answered
     for (const r of group) {
       const t = labelFor(r) || r.value;
-      if (optionMatches(t, value)) { r.click(); return true; }
+      if (!r.disabled && isVisible(r) && optionMatches(t, value)) { r.click(); return r.checked; }
     }
     return false;
   }
@@ -863,10 +849,12 @@
   // Custom (non-<select>) dropdowns: LinkedIn/Ashby/Greenhouse render a
   // button + listbox. Open it, pick the matching option, and bail out
   // cleanly if the listbox never appears.
-  async function fillCustomDropdown(el, value) {
+  async function fillCustomDropdown(el, value, options = {}) {
     try {
       const doc = el.ownerDocument;
       const isInput = el.tagName === 'INPUT';
+      const previous = el.value || '';
+      if (previous || el.getAttribute('aria-disabled') === 'true') return false;
       el.click();
       try { el.focus(); } catch (e) {}
 
@@ -878,7 +866,8 @@
         el.dispatchEvent(new KeyboardEvent('keydown', { key: value.slice(-1), bubbles: true }));
         el.dispatchEvent(new KeyboardEvent('keyup', { key: value.slice(-1), bubbles: true }));
       }
-      await new Promise((r) => setTimeout(r, 260));
+      await new Promise((r) => setTimeout(r, 350));
+      if (options.shouldContinue && !options.shouldContinue()) return false;
 
       // The listbox is usually rendered at body level and tied to the
       // control by aria-controls/aria-owns, so searching the control's
@@ -890,27 +879,20 @@
         const box = doc.getElementById(owns);
         if (box) opts = Array.prototype.slice.call(box.querySelectorAll('[role="option"], li, [class*="option" i]'));
       }
-      if (!opts.length) {
+      if (!owns && !opts.length) {
         opts = Array.prototype.slice.call(
           doc.querySelectorAll('[role="option"], li[role="option"], [class*="option" i][role]'));
       }
       for (const o of opts) {
-        if (optionMatches(o.textContent, value)) {
+        if (isVisible(o) && o.getAttribute('aria-disabled') !== 'true' && optionMatches(o.textContent, value)) {
           o.click();
           await new Promise((r) => setTimeout(r, 80));
           return true;
         }
       }
 
-      // No listbox, or nothing in it matched. For a typeahead the typed
-      // value is itself a legitimate answer, so keep it rather than
-      // reverting to an empty required field.
-      if (isInput && String(el.value || '').trim()) {
-        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.dispatchEvent(new Event('blur', { bubbles: true }));
-        return true;
-      }
+      // Typed filter text is not a committed selection. Leave it for review.
+      if (isInput) setValue(el, previous);
       el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       return false;
     } catch (e) {
@@ -925,7 +907,7 @@
    * never clicks a submit control.
    */
   async function fillContainer(root, profile, opts) {
-    const o = opts || {};
+    const o = { ...(opts || {}) };
     const doc = (root && root.ownerDocument) || document;
     const scope = root || doc;
     const seenRadio = new Set();
@@ -946,7 +928,7 @@
     // already set to Ireland (+353) and the number field filled from the
     // profile:
     //
-    //   +353 874 261 508
+    //   +1 202 555 0100
     //   Error: Enter a phone number in the valid format. The number
     //   isn't recognized. Verify the country phone code and number.
     //
@@ -966,6 +948,7 @@
     if (hasCountryCodeField) o.hasCountryCodeField = true;
 
     for (const el of controls) {
+      if (o.shouldContinue && !o.shouldContinue()) break;
       try {
         const type = (el.type || '').toLowerCase();
         if (['hidden', 'file', 'submit', 'button', 'reset', 'image', 'password'].includes(type)) continue;
@@ -1016,7 +999,7 @@
           }
         } else if (type === 'checkbox') {
           // Only affirmative consent boxes -- never opt-ins to marketing.
-          if (!el.checked && /agree|acknowledge|consent|certif|attest|confirm|terms|privacy/i.test(label)) {
+          if (o.allowConsent === true && !el.checked && /^(yes|true)$/i.test(String(value)) && /agree|acknowledge|consent|certif|attest|confirm|terms|privacy/i.test(label) && !/marketing|subscribe|newsletter/i.test(label)) {
             el.click();
             filled++;
           }
@@ -1026,11 +1009,10 @@
           // text without ever committing a selection, so the step stays
           // invalid and the flow stalls on a field that looks filled.
           if (String(el.value || '').trim()) { alreadySet++; continue; }
-          if (await fillCustomDropdown(el, value)) filled++;
+          if (await fillCustomDropdown(el, value, o)) filled++;
         } else {
           if (String(el.value || '').trim()) { alreadySet++; continue; }  // respect user input
-          setValue(el, value);
-          filled++;
+          if (setValue(el, value)) filled++;
         }
       } catch (e) { /* one bad field must never abort the pass */ }
     }
@@ -1073,8 +1055,8 @@
     // is on -- runAutoFlow checks this toggle first -- so they cannot act
     // on their own.
     'linkedin_autoadvance_enabled',
-    'linkedin_autosubmit_enabled',
-    'followup_enabled',
+    // Submission requires an explicit opt-in.
+    // Follow-up messages require an explicit opt-in.
   ]);
 
   function isToggleOn(key) {

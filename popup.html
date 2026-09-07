@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>QuantumHire AI - ATS Tailor</title>
+  <title>Job Genie — Application workspace</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
@@ -11,14 +11,14 @@
     <!-- Premium Header -->
     <header class="header">
       <div class="logo">
-        <img src="icons/icon48.png" alt="QuantumHire AI" class="logo-icon">
+        <img src="icons/icon48.png" alt="Job Genie" class="logo-icon">
         <div class="logo-text">
-          <h1>QuantumHire AI</h1>
-          <span class="tagline">ATS Optimisation Engine v2.5</span>
+          <h1>Job Genie</h1>
+          <span class="tagline">Your application workspace</span>
         </div>
       </div>
       <div class="header-controls">
-        <div class="status-indicator" id="statusIndicator">
+        <div class="status-indicator" id="statusIndicator" role="status" aria-live="polite">
           <span class="status-dot"></span>
           <span class="status-text">Ready</span>
         </div>
@@ -31,7 +31,7 @@
         <div class="login-header">
           <div class="login-icon">🔐</div>
           <h2>Sign In</h2>
-          <p class="login-subtitle">Use your QuantumHire account</p>
+          <p class="login-subtitle">Use your Job Genie account</p>
         </div>
         <div class="input-group">
           <label for="email">Email</label>
@@ -117,7 +117,8 @@
       </div>
 
       <!-- Settings Panel -->
-      <div class="settings-panel">
+      <details class="settings-panel workspace-settings">
+        <summary>Automation &amp; preferences <span>Manage</span></summary>
         <!-- Auto-Trigger Toggle (NEW) -->
         <div class="setting-row auto-trigger-setting">
           <label class="toggle-row" for="autoTriggerToggle">
@@ -223,6 +224,7 @@
         </div>
         <p class="setting-help">After you submit, if the job posting <strong>published</strong> a recruiter email, offers to send a short note from your Gmail with the job title and Job ID so they can find your application. Nothing sends without your click.</p>
 
+        <p class="setting-help">Hiring contacts are suggestions for this listing. Review the recipient and draft before sending. API lookups require a configured provider account and may consume credits.</p>
         <details id="followupPanel" class="fu-panel">
           <summary>✉️ Gmail &amp; email template - setup and test</summary>
           <div class="fu-body">
@@ -519,7 +521,7 @@
           </label>
           <p class="setting-help" style="margin-top:2px">Adapts to each job's location so geo-filters don't knock you out (misspelled or malformed job locations are ignored). Falls back to your profile location (Dublin, IE).</p>
         </div>
-      </div>
+      </details>
 
       <!-- Detected Job Card -->
       <div class="job-card" id="jobCard">
@@ -543,6 +545,8 @@
         <span id="noJobBadge" class="no-job-badge hidden">No job detected</span>
       </div>
 
+      <aside class="ats-guidance"><strong>Application quality first</strong><p>Use relevant skills you can demonstrate. Keep a simple, text-based CV and follow the employer’s file requirements. Keyword coverage is a guide, not an ATS score or hiring prediction.</p></aside>
+
       <!-- History Panel -->
       <details class="history-panel" id="historyPanel">
         <summary class="history-header">
@@ -553,6 +557,8 @@
           <p class="history-empty">No recent jobs. Tailor a job to see history.</p>
         </div>
       </details>
+
+      <p class="workspace-guidance">Tailor to the role. Review your facts. Export and check before applying.</p>
 
       <!-- Main Actions Card -->
       <div class="actions-card">
@@ -632,13 +638,13 @@
 
       <!-- Generated Documents Card -->
       <div class="documents-card hidden" id="documentsCard">
-        <!-- AI Match Analysis Panel -->
+        <!-- Keyword Coverage Panel -->
         <div class="ai-match-analysis" id="aiMatchAnalysis">
           <div class="match-panel-header">
             <div class="panel-logo">
               <span class="logo-icon">🎯</span>
               <div class="logo-text">
-                <span class="panel-title">AI Match Analysis</span>
+                <span class="panel-title">Keyword Coverage</span>
                 <span class="panel-subtitle">Powered by <span id="matchPanelProvider">Kimi K2</span></span>
               </div>
             </div>
@@ -1154,7 +1160,7 @@
       </details>
       <!-- Footer with Dashboard Link -->
       <div class="popup-footer">
-        <a href="https://id-preview--2777be38-8dd2-4b20-ad45-fa61a1988fa3.lovable.app" target="_blank" class="dashboard-link">
+        <a href="https://id-preview--2777be38-8dd2-4b20-ad45-fa61a1988fa3.lovable.app" target="_blank" rel="noopener noreferrer" class="dashboard-link">
           <span class="link-icon">📊</span>
           <span>Open Dashboard</span>
           <span class="link-arrow">→</span>
@@ -1166,7 +1172,7 @@
     </section>
 
     <!-- Toast Container -->
-    <div class="toast-container" id="toastContainer"></div>
+    <div class="toast-container" id="toastContainer" role="status" aria-live="polite" aria-atomic="true"></div>
   </div>
 
   <!-- Debug Panel Scripts (MUST load before popup.js) -->

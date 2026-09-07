@@ -57,7 +57,7 @@
   // answers instantly, so the very fix that would have found the address
   // never runs. Entries stamped with any other version are ignored, which
   // clears them without the user having to know a cache exists.
-  const CACHE_V = 2;
+  const CACHE_V = 3;
   const log = (...a) => { try { console.log(TAG, ...a); } catch (e) {} };
 
   function _clean(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); }
@@ -720,7 +720,7 @@
       label: 'Apollo.io',
       keyKind: 'api-key',
       keyUrl: 'https://app.apollo.io/#/settings/integrations/api',
-      hint: 'Settings -> Integrations -> API. Basic plans must use the api_search endpoint.',
+      hint: 'API key required. Search identifies people; resolving up to two candidate IDs uses the paid enrichment endpoint. Results require review.',
       request: (q, cred) => ({
         // api_search, not search: /mixed_people/search returns 403 on Basic.
         url: 'https://api.apollo.io/api/v1/mixed_people/api_search',
@@ -729,6 +729,7 @@
           headers: { 'Content-Type': 'application/json', 'x-api-key': cred.apiKey },
           body: JSON.stringify({
             q_organization_name: q.company || undefined,
+            q_organization_domains_list: q.domain ? [q.domain] : undefined,
             person_titles: q.titles,
             person_locations: q.location ? [q.location] : undefined,
             page: 1,
@@ -739,6 +740,7 @@
       parse: (json) => {
         const list = (json && (json.people || json.contacts)) || [];
         return list.map((p) => ({
+          id: p.id,
           name: _clean(p.name || [p.first_name, p.last_name].filter(Boolean).join(' ')),
           title: _clean(p.title),
           company: _clean(p.organization && p.organization.name),
@@ -747,6 +749,18 @@
           // unlocked; isRealEmail() drops those rather than mailing them.
           email: _clean(p.email),
         }));
+      },
+      lookupById: (personId, cred) => ({
+        url: 'https://api.apollo.io/api/v1/people/match',
+        init: {method:'POST', headers:{'Content-Type':'application/json', 'x-api-key':cred.apiKey},
+          body:JSON.stringify({id:personId, reveal_personal_emails:false, reveal_phone_number:false})},
+      }),
+      parsePerson: json => {
+        const p = json?.person;
+        if (!p) return [];
+        return [{id:p.id, name:_clean(p.name), title:_clean(p.title),
+          company:_clean(p.organization?.name), email:_clean(p.email),
+          verified:p.email_status === 'verified', verificationStatus:p.email_status || 'unknown'}];
       },
       test: (cred) => ({
         url: 'https://api.apollo.io/api/v1/auth/health',
@@ -1517,6 +1531,7 @@
 
     // Runs one request and normalises every failure mode into a reason.
     const call = async (req, parse, q, opts2) => {
+      if (calls >= 8) return {fatal:'lookup-budget-reached'};
       calls++;
       let res;
       try { res = await fetch(req.url, req.init); }
@@ -1567,7 +1582,7 @@
       const keepEmpty = !!(opts2 && opts2.keepEmpty);
       return {
         rows: rows
-          .filter((p) => isRealEmail(p.email) || (keepEmpty && p.profile))
+          .filter((p) => isRealEmail(p.email) || (keepEmpty && (p.profile || (p.id && provider.lookupById))))
           .map((p) => Object.assign({}, p, { score: scoreCandidate(p, q || {}, ctx) })),
       };
     };
@@ -1633,6 +1648,7 @@
     }
 
     if (!out.length && provider.searchByCompany !== false && provider.request) {
+      let resolvedIds = 0;
       for (const q of buildQueries(ctx)) {
         // The search identifies WHO. It does not always carry a usable
         // address, and the one it does carry is not necessarily verified.
@@ -1648,6 +1664,14 @@
           .sort((a, b) => b.score - a.score);
 
         for (const p of ranked) {
+          if (!isRealEmail(p.email) && p.id && provider.lookupById && resolvedIds < 2) {
+            resolvedIds++;
+            const resolved = await call(provider.lookupById(p.id, cred), provider.parsePerson, q);
+            if (resolved.fatal) return {results:[],reason:resolved.fatal,calls,notes};
+            for (const hit of resolved.rows) out.push({...p,...hit,provider:id,score:scoreCandidate(hit,q,ctx)});
+            continue;
+          }
+
           if (isRealEmail(p.email)) { out.push(Object.assign({}, p, { provider: id })); continue; }
           // No inline address: resolve the profile the search found. This
           // is the step that returns a VERIFIED work address, which is the
@@ -1693,13 +1717,16 @@
         // shows this instead of guessing at generic advice.
         profileWhy: r.profileWhy || '', trace: r.trace || [] };
     }
-    const top = r.results[0];
+    const top = r.results.find(p => !isPersonalEmail(p.email) && _companyAgrees(p.company, ctx?.company) === true && /recruit|talent|hiring|people|human resources/i.test(p.title || '') && (p.verified === true || p.source === 'job-poster'));
+    if (!top) return {email:'',name:'',reason:'needs-recipient-review',alternatives:r.results,requiresReview:true};
     return {
       email: top.email,
       name: top.name || '',
       title: top.title || '',
       personal: isPersonalEmail(top.email),
       source: 'enriched',
+      requiresReview: true,
+      verified: top.verified === true,
       provider: r.source || '',
       alternatives: r.results.slice(1),
     };
