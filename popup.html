@@ -129,7 +129,7 @@
             <input type="checkbox" id="autoTriggerToggle" checked />
           </label>
         </div>
-        <p class="setting-help">Automatically runs "Extract & Apply" when Workday, Greenhouse, etc. are detected.</p>
+        <p class="setting-help">Automatically runs "Tailor & Review CV" when Workday, Greenhouse, etc. are detected.</p>
         
         <div class="setting-row">
           <label class="toggle-row" for="autoTailorToggle">
@@ -519,7 +519,7 @@
             <span class="setting-icon">📍</span>
             Your Location (CV Header)
           </label>
-          <p class="setting-help" style="margin-top:2px">Adapts to each job's location so geo-filters don't knock you out (misspelled or malformed job locations are ignored). Falls back to your profile location (Dublin, IE).</p>
+          <p class="setting-help" style="margin-top:2px">Uses your saved profile location. A job's location does not change where you live; state relocation preferences separately.</p>
         </div>
       </details>
 
@@ -565,7 +565,7 @@
         <!-- Primary Action Button -->
         <button id="tailorBtn" class="btn btn-primary btn-large btn-gradient">
           <span class="btn-icon-left">⚡</span>
-          <span class="btn-text">Extract & Apply Keywords to CV</span>
+          <span class="btn-text">Tailor & Review CV</span>
           <span class="btn-time">~5s</span>
         </button>
         
@@ -583,7 +583,7 @@
             </div>
             <div class="pipeline-step" id="step2">
               <span class="step-icon">⏳</span>
-              <span class="step-text">Step 2/3: Boosting CV to 95-100% match...</span>
+              <span class="step-text">Step 2/3: Tailoring to your experience...</span>
             </div>
             <div class="pipeline-step" id="step3">
               <span class="step-icon">⏳</span>
@@ -1218,6 +1218,7 @@
   <script src="location-db.js"></script>
   <script src="city-dataset.js"></script>
   <script src="universal-location-strategy.js"></script>
+  <script src="dynamic-score.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

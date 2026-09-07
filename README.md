@@ -29,6 +29,10 @@ Configure an existing Hunter or Apollo account in preferences for optional busin
 
 Provider references: https://hunter.io/api-documentation and https://docs.apollo.io/reference/people-enrichment
 
+## Candidate accuracy
+
+The popup reports keyword coverage without automatically stuffing missing terms into your CV. Candidate location comes from the saved profile rather than the job posting. AI-generated drafts still require factual review before export or submission.
+
 ## Compatibility and test scope
 
 Run `node --test tests/*.test.cjs` and `node scripts/check-release.cjs --strict` with Node 22 or later. No dependency installation is needed for these checks.

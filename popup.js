@@ -5526,25 +5526,8 @@ class ATSTailor {
    * OPTIMIZED: Calculate match score with single-pass matching
    */
   calculateMatchScore(cvText, keywords) {
-    if (!cvText || !keywords?.all || keywords.all.length === 0) {
-      return { matchScore: 0, matchedKeywords: [], missingKeywords: keywords?.all || [] };
-    }
-    
-    const cvTextLower = cvText.toLowerCase();
-    const matched = [];
-    const missing = [];
-    
-    for (const kw of keywords.all) {
-      if (cvTextLower.includes(kw.toLowerCase())) {
-        matched.push(kw);
-      } else {
-        missing.push(kw);
-      }
-    }
-    
-    const matchScore = keywords.all.length > 0 ? Math.round((matched.length / keywords.all.length) * 100) : 0;
-    
-    return { matchScore, matchedKeywords: matched, missingKeywords: missing };
+    const result = window.DynamicScore.calculateDynamicMatch(cvText, keywords?.all || []);
+    return {matchScore:result.score, matchedKeywords:result.matched, missingKeywords:result.missing};
   }
 
   /**
@@ -5552,62 +5535,11 @@ class ATSTailor {
    * Called automatically by tailorDocuments - no separate button needed
    */
   async boostCVTo95Plus(cvText, keywords, updateProgress) {
-    if (!cvText || !keywords?.all || keywords.all.length === 0) {
-      return { tailoredCV: cvText, finalScore: 0, matchedKeywords: [], missingKeywords: [] };
-    }
-    
-    const initial = this.calculateMatchScore(cvText, keywords);
-    
-    if (initial.matchScore >= 95) {
-      return { 
-        tailoredCV: cvText, 
-        finalScore: initial.matchScore, 
-        matchedKeywords: initial.matchedKeywords, 
-        missingKeywords: initial.missingKeywords,
-        keywords 
-      };
-    }
-    
-    let tailorResult = null;
-    
-    // Try optimized tailoring modules
-    if (window.TailorUniversal) {
-      tailorResult = await window.TailorUniversal.tailorCV(cvText, keywords, { targetScore: 95 });
-    } else if (window.AutoTailor95) {
-      const tailor = new window.AutoTailor95({
-        onProgress: updateProgress,
-        onScoreUpdate: (score) => {
-          const interim = this.calculateMatchScore(cvText, keywords);
-          this.updateMatchGauge(score, interim.matchedKeywords.length, keywords.all.length);
-        }
-      });
-      tailorResult = await tailor.autoTailorTo95Plus(this.currentJob?.description || '', cvText);
-    } else if (window.CVTailor) {
-      tailorResult = window.CVTailor.tailorCV(cvText, keywords, { targetScore: 95 });
-    } else {
-      // FAST fallback: Simple keyword injection
-      tailorResult = this.fastKeywordInjection(cvText, keywords, initial.missingKeywords);
-    }
-    
-    if (tailorResult?.tailoredCV) {
-      const finalMatch = this.calculateMatchScore(tailorResult.tailoredCV, keywords);
-      return {
-        tailoredCV: tailorResult.tailoredCV,
-        finalScore: finalMatch.matchScore,
-        matchedKeywords: finalMatch.matchedKeywords,
-        missingKeywords: finalMatch.missingKeywords,
-        injectedKeywords: tailorResult.injectedKeywords || [],
-        keywords
-      };
-    }
-    
-    return { 
-      tailoredCV: cvText, 
-      finalScore: initial.matchScore, 
-      matchedKeywords: initial.matchedKeywords, 
-      missingKeywords: initial.missingKeywords,
-      keywords 
-    };
+    const match = this.calculateMatchScore(cvText, keywords);
+    if (updateProgress) updateProgress(100, 'Keyword review complete; check missing requirements against your experience.');
+    return {tailoredCV:cvText, finalScore:match.matchScore,
+      matchedKeywords:match.matchedKeywords, missingKeywords:match.missingKeywords,
+      injectedKeywords:[], keywords};
   }
 
   /**
@@ -5650,232 +5582,8 @@ class ATSTailor {
   }
 
   fastKeywordInjection(cvText, keywords, missingKeywords) {
-    if (!missingKeywords || missingKeywords.length === 0) {
-      return { tailoredCV: cvText, injectedKeywords: [] };
-    }
-
-    // ██ JUNK KEYWORD FILTER ██
-    // These words from job descriptions provide ZERO ATS value and make CVs look unprofessional
-    const JUNK_KEYWORDS = new Set([
-      // Generic JD filler words
-      'customer service', 'high school diploma', 'commission', 'customer-facing',
-      'lawn care', 'independent work', 'motivated', 'benefits', 'fast-paced',
-      'work environment', 'crm software', 'motivation', 'self-motivated',
-      'go-getter', 'passion', 'passionate', 'enthusiasm', 'enthusiastic',
-      'dedicated', 'dedication', 'driven', 'dynamic', 'proactive',
-      'synergy', 'paradigm', 'robust', 'commitment', 'reliable', 'reliability',
-      'integrity', 'professionalism', 'multitasking', 'positive attitude',
-      'work ethic', 'goal-oriented', 'results-oriented', 'mission',
-      'love for technology', 'able to withstand work pressure',
-      'good learning', 'goodjob', 'sidekiq', 'canvas',
-      // JD boilerplate fragments
-      'equal opportunity', 'competitive salary', 'full-time', 'part-time',
-      'base salary', 'bonus', 'stock options', 'health insurance',
-      'dental', 'vision', '401k', 'pto', 'paid time off', 'remote work',
-      'hybrid', 'on-site', 'office', 'headquarters', 'location',
-      'apply now', 'submit resume', 'cover letter', 'interview',
-      // Too generic to be useful
-      'can-do attitude', 'people person', 'go above and beyond',
-      'think outside the box', 'hit the ground running', 'wear many hats'
-    ]);
-
-    // PROTECTED KEYWORDS: These are valid ATS terms that must NEVER be filtered out
-    const PROTECTED_KEYWORDS = new Set([
-      'collaboration skills', 'communication skills', 'programming skills',
-      'problem solving', 'troubleshoot issues', 'resolve issues', 'implement tools',
-      'improve efficiency', 'game development', 'mobile games', 'mobile applications',
-      'technical qa', 'performance metrics', 'project management',
-      'business', 'solutions', 'services', 'communication', 'collaboration'
-    ]);
-
-    // Filter out junk keywords before injection
-    const cleanMissing = missingKeywords.filter(kw => {
-      const kwLower = kw.toLowerCase().trim();
-      if (PROTECTED_KEYWORDS.has(kwLower)) return true; // Always keep protected terms
-      if (JUNK_KEYWORDS.has(kwLower)) return false;
-      if (kwLower.length < 3) return false;  // Too short to be meaningful
-      if (kwLower.length > 60) return false;  // Too long, likely a sentence fragment
-      return true;
-    });
-
-    if (cleanMissing.length === 0) {
-      return { tailoredCV: cvText, injectedKeywords: [] };
-    }
-
-    let tailoredCV = cvText;
-    let injectedKeywords = [];
-
-    // ██ ONLY WHAT THE PROFILE ACTUALLY EVIDENCES ██
-    //
-    // "Missing" here means "the posting asked for it and the generated
-    // CV does not contain it". That is two different situations wearing
-    // one label:
-    //
-    //   a) the candidate HAS it and the tailoring dropped it -- true,
-    //      worth restoring, and the whole point of this pass
-    //   b) the candidate has never touched it -- and adding it is a
-    //      lie that a single interview question exposes
-    //
-    // Nothing here could tell them apart, so it added both. The profile
-    // is what tells them apart: it is the candidate's own record of
-    // what they have done, so a term that appears in it is theirs to
-    // claim and a term that does not is not.
-    //
-    // With no profile to check against, nothing is added. That is the
-    // safe direction: a keyword left off a CV costs a match, a keyword
-    // invented onto one costs the application and the reputation.
-    const evidence = (() => {
-      // Same rule as the render: a helper on the tailoring path gets a
-      // boundary. An empty blob means "add nothing", which is the safe
-      // direction, so a failure here costs a few keywords and never the
-      // run itself.
-      try {
-        return typeof this._profileEvidenceBlob === 'function'
-          ? this._profileEvidenceBlob() : '';
-      } catch (e) {
-        console.warn('[ATS Tailor] profile evidence unavailable, adding no keywords:',
-          e && e.message);
-        return '';
-      }
-    })();
-    const unevidenced = [];
-    let remaining = cleanMissing.filter((kw) => {
-      const k = String(kw || '').toLowerCase().trim();
-      if (!k) return false;
-      if (!evidence) { unevidenced.push(kw); return false; }
-      const ok = evidence.indexOf(k) !== -1;
-      if (!ok) unevidenced.push(kw);
-      return ok;
-    });
-    if (unevidenced.length) {
-      console.warn('[ATS Tailor] ' + unevidenced.length + ' posting keyword(s) left OFF the CV '
-        + 'because your profile does not evidence them: ' + unevidenced.join(', ')
-        + '. If you do have any of these, add them to your profile and re-run.');
-      this._unevidencedKeywords = unevidenced;
-    }
-
-    // ██ NOTHING IS EVER APPENDED TO A BULLET ██
-    //
-    // This step used to walk the experience bullets and bolt a missing
-    // keyword onto the end of every other one with "using X" or
-    // "with X". Run on real Citigroup bullets it produced:
-    //
-    //   "Rebuilt the credit risk reporting suite in SQL and Python for
-    //    a GBP 2.6bn portfolio ... exposure figures, USING SALESFORCE."
-    //   "Redesigned the grouping and scoring of anti money laundering
-    //    alerts in Python ... genuine cases, WITH WORKDAY."
-    //   "Led the analysis behind the IFRS 9 staging criteria review ...
-    //    loan performance data, USING SNOWFLAKE."
-    //
-    // The candidate has never used any of the three. A bullet is a
-    // claim about a specific piece of work, so a tool appended to it is
-    // a claim that the tool was used FOR THAT WORK. This was not
-    // keyword optimisation, it was writing fiction onto true
-    // accomplishments -- and it survives into the interview, where
-    // "tell me about the Salesforce side of the credit risk rebuild"
-    // has no answer.
-    //
-    // It also reads as machine output. Three bullets on one page ending
-    // in ", using X." is a recognised stuffing pattern, and the
-    // tailoring prompt already forbids exactly this ("never append a
-    // keyword with connectors like 'via X' or 'built with X' where the
-    // result is not a grammatical, truthful sentence"). The model was
-    // obeying that rule and this code was undoing it afterwards.
-    //
-    // Weaving a keyword into a bullet truthfully requires the source
-    // material and judgement about what the work actually involved.
-    // That is the tailoring model's job, with the profile in hand. A
-    // regex at the end of the pipeline cannot do it and must not try.
-    //
-    // What remains below places a keyword only where it is a statement
-    // about the CANDIDATE rather than about a piece of work, and only
-    // when their own profile evidences it.
-    // STEP 2: EVERY KEYWORD LANDS IN THE SKILLS SECTION, AND ONLY THERE.
-    //
-    // Two other landing sites existed and both are now closed:
-    //
-    //   THE SUMMARY. "Expertise includes X, Y, Z." was appended there --
-    //   but the audit clamps the summary to two lines moments later, so
-    //   the sentence was written and then deleted in the same run and
-    //   the keywords silently went nowhere. Even when it survived, a
-    //   bolted-on expertise sentence is the pattern reviewers read as
-    //   stuffing.
-    //
-    //   BULLET TAILS. Soft skills were appended to real bullets as
-    //   ", demonstrating stakeholder management." -- the same
-    //   fabrication shape as the ", using Salesforce." tails removed
-    //   earlier: a claim about a specific piece of work that the work
-    //   never made. A bullet is the writer's sentence; nothing is
-    //   appended to one, ever.
-    //
-    // The skills section is the one place a keyword is a statement
-    // about the candidate rather than about a piece of work, and every
-    // keyword that reaches here is already profile-evidenced.
-    //
-    // THE GROUPED FORMAT SURVIVES. The old merge split the section on
-    // commas and rejoined it as one flat line, which welded the group
-    // labels into their first items ("Programming: Python") and threw
-    // the grouping away. A grouped section now keeps every existing
-    // line byte-identical and gains ONE new labelled line; only a flat
-    // single-line section is extended in place.
-    if (remaining.length > 0) {
-      // Line-based section detection. The regex this replaces ended the
-      // body at (?=\n[A-Z]{3,}) UNDER /i -- which matches any three
-      // letters -- so it "ended" the section at its own second line and
-      // a grouped section was never seen whole.
-      const cvLines = tailoredCV.split('\n');
-      const SKILLS_HEAD = /^(SKILLS|TECHNICAL SKILLS|CORE COMPETENCIES|KEY SKILLS|TECHNICAL PROFICIENCIES):?$/i;
-      let head = -1;
-      for (let li = 0; li < cvLines.length; li++) {
-        if (SKILLS_HEAD.test(cvLines[li].trim())) { head = li; break; }
-      }
-      if (head !== -1) {
-        // The section runs to the first blank line or the next ALL-CAPS
-        // heading, checked case-sensitively.
-        let end = cvLines.length;
-        for (let li = head + 1; li < cvLines.length; li++) {
-          const s = cvLines[li].trim();
-          if (!s) { end = li; break; }
-          if (s === s.toUpperCase() && /^[A-Z][A-Z &/]{2,}$/.test(s)) { end = li; break; }
-        }
-        const body = cvLines.slice(head + 1, end).join('\n');
-        // Word-bounded dedupe against the WHOLE section, so "SQL"
-        // already sitting inside "Programming: Python, SQL" is not
-        // added a second time.
-        const hasAlready = (kw) => new RegExp(
-          '\\b' + kw.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(body);
-        const fresh = [];
-        const seen = new Set();
-        for (const kw of remaining) {
-          const key = String(kw || '').toLowerCase().trim();
-          if (!key || seen.has(key)) continue;
-          seen.add(key);
-          if (!hasAlready(kw)) fresh.push(String(kw).trim());
-        }
-        if (fresh.length > 0) {
-          const grouped = body.indexOf('\n') !== -1
-            || /^[A-Z][A-Za-z &/]{1,28}:\s/.test(body.trim());
-          if (!body.trim()) {
-            cvLines.splice(head + 1, 0, fresh.join(', '));
-          } else if (grouped) {
-            // Mixed-case label, so neither the audit's all-caps heading
-            // detector nor the renderer's section list reads it as a
-            // new section -- it renders as one more bold-labelled
-            // group line, and every existing line stays byte-identical.
-            cvLines.splice(end, 0, 'Additional Skills: ' + fresh.join(', '));
-          } else {
-            cvLines[head + 1] = body.trim() + ', ' + fresh.join(', ');
-          }
-          tailoredCV = cvLines.join('\n');
-          injectedKeywords.push(...fresh);
-        }
-        remaining = [];
-      }
-      // No skills section -> nothing is created and nothing is added:
-      // inventing a section here is how the duplicate-SKILLS bug began.
-    }
-    
-    return { tailoredCV, injectedKeywords };
+    // Missing requirements are review items, never evidence of experience.
+    return {tailoredCV:cvText, injectedKeywords:[], reviewKeywords:missingKeywords || []};
   }
 
   /**
@@ -6144,6 +5852,7 @@ class ATSTailor {
 
       // Apply user location rules for tailoring/output
       // IMPORTANT: never include "Remote" in the candidate location line.
+      this._cachedProfile = p;
       const rawCity = String(p.city || '').split('|')[0].trim();
       const rawCountry = String(p.country || '').trim();
       const country = rawCountry && rawCountry.toLowerCase() === 'ireland' ? 'IE' : rawCountry;
@@ -6499,157 +6208,19 @@ class ATSTailor {
       console.log('[ATS Tailor] Step 2 - Initial match score:', this.generatedDocuments.matchScore + '%');
       updateStep(2, 'complete');
 
-      // ============ STEP 3: GUARANTEED 100% MATCH - No keywords left behind ============
+      // Review coverage without manufacturing credentials or targeting a score.
       updateStep(3, 'working');
-      updateProgress(55, 'Step 3/3: Guaranteeing 100% keyword match...');
-
-      const currentScore = this.generatedDocuments.matchScore || 0;
-      
-      // ALWAYS boost to 100% - no keywords left unmatched
-      if (currentScore < 100 && keywords.all?.length > 0) {
-        try {
-          let boostResult = await this.boostCVTo95Plus(
-            this.generatedDocuments.cv,
-            keywords,
-            (percent, text) => {
-              updateProgress(55 + (percent * 0.15), `Step 3/3: ${text}`);
-            }
-          );
-
-          // If still not 100%, use aggressive injection
-          if (boostResult.finalScore < 100 && boostResult.missingKeywords?.length > 0) {
-            console.log('[ATS Tailor] Applying final injection for remaining', boostResult.missingKeywords.length, 'keywords');
-            const finalInject = this.fastKeywordInjection(
-              boostResult.tailoredCV || this.generatedDocuments.cv,
-              keywords,
-              boostResult.missingKeywords
-            );
-            
-            if (finalInject.tailoredCV) {
-              boostResult.tailoredCV = finalInject.tailoredCV;
-              boostResult.injectedKeywords = [...(boostResult.injectedKeywords || []), ...finalInject.injectedKeywords];
-              
-              // Recalculate final score - should now be 100%
-              const finalMatch = this.calculateMatchScore(boostResult.tailoredCV, keywords);
-              boostResult.finalScore = finalMatch.matchScore;
-              boostResult.matchedKeywords = finalMatch.matchedKeywords;
-              boostResult.missingKeywords = finalMatch.missingKeywords;
-            }
-          }
-
-          if (boostResult.tailoredCV) {
-            this.generatedDocuments.cv = boostResult.tailoredCV;
-            this.generatedDocuments.matchScore = boostResult.finalScore;
-            this.generatedDocuments.matchedKeywords = boostResult.matchedKeywords;
-            this.generatedDocuments.missingKeywords = boostResult.missingKeywords;
-            
-            // UPDATE UI: Show final 100% match score
-            this.updateMatchAnalysisUI();
-            
-            console.log('[ATS Tailor] Step 3 - Final score:', boostResult.finalScore + '%', 
-                        'injected:', boostResult.injectedKeywords?.length || 0, 'keywords');
-          }
-        } catch (boostError) {
-          console.warn('[ATS Tailor] Boost failed, applying fallback injection:', boostError);
-          // Fallback: aggressive injection
-          const fallbackInject = this.fastKeywordInjection(
-            this.generatedDocuments.cv,
-            keywords,
-            this.generatedDocuments.missingKeywords
-          );
-          if (fallbackInject.tailoredCV) {
-            this.generatedDocuments.cv = fallbackInject.tailoredCV;
-            const finalMatch = this.calculateMatchScore(fallbackInject.tailoredCV, keywords);
-            this.generatedDocuments.matchScore = finalMatch.matchScore;
-            this.generatedDocuments.matchedKeywords = finalMatch.matchedKeywords;
-            this.generatedDocuments.missingKeywords = finalMatch.missingKeywords;
-            this.updateMatchAnalysisUI();
-          }
-        }
-      } else if (currentScore >= 100) {
-        console.log('[ATS Tailor] Step 3 - Already at 100%');
-      }
-
-      // ============ QUALIFICATION THRESHOLD CHECK (75%+) ============
-      // After keyword boost, verify the CV meets the 75% required qualification threshold
-      // If not, inject gap-closing keywords from unmet qualifications
-      if (typeof QualificationThresholdEngine !== 'undefined' && this.currentJob?.description) {
-        try {
-          const thresholdResult = QualificationThresholdEngine.autoTailorForThreshold(
-            this.generatedDocuments.cv,
-            this.currentJob.description,
-            { threshold: 75 }
-          );
-
-          // Store qualification results for UI display
-          this.generatedDocuments.qualificationMatch = thresholdResult;
-          this.generatedDocuments.qualificationDashboard = thresholdResult.dashboard;
-
-          // TAILORING FOCUS: read GENUINE fit (thresholdResult.initialScore,
-          // captured BEFORE the gap-closing injection below inflates it) and
-          // turn the JD's highest-leverage gaps into tailoring direction --
-          // what this CV should LEAD WITH for this specific role. Guidance
-          // only; it never gates or discourages an application.
-          if (typeof ApplyVerdict !== 'undefined') {
-            try {
-              const verdict = ApplyVerdict.evaluate({
-                thresholdResult,
-                jdText: this.currentJob.description || '',
-                originalCV: this.getOriginalCVText() || this.generatedDocuments.cv || '',
-              });
-              this.generatedDocuments.applyVerdict = verdict;
-              console.log('[ATS Tailor] Tailoring focus:', verdict.focus, '|', verdict.summary);
-              this.renderApplyVerdict(verdict);
-              // Contact detection deliberately does NOT live here: see the
-              // top of tailorDocuments. A failure in this block must not
-              // cost the application its recipient.
-            } catch (e) {
-              console.warn('[ATS Tailor] Apply verdict failed:', e && e.message);
-            }
-          }
-
-          if (thresholdResult.needsTailoring && thresholdResult.keywordsToInject?.length > 0) {
-            console.log(`[ATS Tailor] Qualification gap detected: ${thresholdResult.initialScore}% (need ${thresholdResult.targetScore}%). Injecting ${thresholdResult.keywordsToInject.length} gap-closing keywords.`);
-
-            // Inject gap-closing keywords into CV using fastKeywordInjection
-            const gapInject = this.fastKeywordInjection(
-              this.generatedDocuments.cv,
-              { all: thresholdResult.keywordsToInject },
-              thresholdResult.keywordsToInject
-            );
-
-            if (gapInject.tailoredCV) {
-              this.generatedDocuments.cv = gapInject.tailoredCV;
-
-              // Recalculate both keyword score and qualification score
-              const postGapMatch = this.calculateMatchScore(this.generatedDocuments.cv, keywords);
-              this.generatedDocuments.matchScore = postGapMatch.matchScore;
-              this.generatedDocuments.matchedKeywords = postGapMatch.matchedKeywords;
-              this.generatedDocuments.missingKeywords = postGapMatch.missingKeywords;
-
-              // Recalculate qualification threshold
-              const postGapQual = QualificationThresholdEngine.autoTailorForThreshold(
-                this.generatedDocuments.cv,
-                this.currentJob.description,
-                { threshold: 75 }
-              );
-              this.generatedDocuments.qualificationMatch = postGapQual;
-              this.generatedDocuments.qualificationDashboard = postGapQual.dashboard;
-
-              console.log(`[ATS Tailor] Post-gap qualification score: ${postGapQual.initialScore}%`);
-            }
-          } else {
-            console.log(`[ATS Tailor] Qualification threshold met: ${thresholdResult.initialScore}%`);
-          }
-        } catch (qualError) {
-          console.warn('[ATS Tailor] Qualification threshold check failed:', qualError);
-        }
-      }
+      updateProgress(55, 'Step 3/3: Reviewing keyword coverage and preparing documents...');
+      const review = this.calculateMatchScore(this.generatedDocuments.cv, keywords);
+      this.generatedDocuments.matchScore = review.matchScore;
+      this.generatedDocuments.matchedKeywords = review.matchedKeywords;
+      this.generatedDocuments.missingKeywords = review.missingKeywords;
+      this.updateMatchAnalysisUI();
 
       // Build keyword coverage report for debugging (injected locations in CV)
       this.buildKeywordCoverageReport(keywords);
 
-      updateProgress(80, 'Step 3/3: Regenerating PDF with boosted CV...');
+      updateProgress(80, 'Step 3/3: Preparing reviewed documents...');
       
       // WIRE UP DEBUG PANELS: Log before PDF generation
       this.logDebug('tailorDocuments', 'Pre-PDF boost complete', { 
@@ -6687,125 +6258,12 @@ class ATSTailor {
         }
       }
 
-      // ============ POST-SANITISATION KEYWORD RE-INJECTION ============
-      // ContentQualityEngine may have altered/removed keywords during sanitisation.
-      // Verify all JD keywords are still present and re-inject any that were lost.
-      if (keywords.all?.length > 0 && this.generatedDocuments.cv) {
-        const postSanitiseMatch = this.calculateMatchScore(this.generatedDocuments.cv, keywords);
-        if (postSanitiseMatch.missingKeywords?.length > 0) {
-          console.log(`[ATS Tailor] Post-sanitisation: ${postSanitiseMatch.missingKeywords.length} keywords lost during sanitisation, re-injecting...`);
-          
-          let cvText = this.generatedDocuments.cv;
-          const toReInject = postSanitiseMatch.missingKeywords;
-
-          // A KEYWORD THAT FITS NOWHERE TRUTHFULLY GOES IN THE SKILLS
-          // LIST, NOT INTO A MANUFACTURED ACHIEVEMENT.
-          //
-          // This used to write a whole new bullet under the most recent
-          // role whenever a multi-word phrase had no home:
-          //
-          //   "- Applied real-time applications and data integration to
-          //    troubleshoot, optimise, driving measurable improvements
-          //    across development workflows."
-          //
-          // That is a fabricated accomplishment. It claims work the
-          // candidate never described, in the exact register a recruiter
-          // reads as machine-written, and it lands under the most recent
-          // role -- the first three bullets, the part that actually gets
-          // read. It also cannot survive an interview, because there is
-          // no story behind it.
-          //
-          // The keyword coverage it bought is real but small, and the
-          // skills section captures the same terms honestly. So every
-          // unplaceable keyword now routes there, multi-word included.
-          // A SOFT SKILL IS NOT A TECHNICAL SKILL.
-          //
-          // Everything unplaceable routed here, soft skills included, so
-          // the generated CV ended its TECHNICAL SKILLS list with
-          //
-          //   ... Jenkins, GitHub Actions, thorough, Creativity
-          //
-          // read back off the real PDF by the OpenResume parser. A
-          // recruiter reading "thorough" in a list of languages and cloud
-          // platforms knows the document was assembled by a machine, and
-          // it costs more than the keyword is worth. Soft skills belong in
-          // the summary and in the bullets, where they are evidenced by
-          // the work described around them.
-          //
-          // They are dropped rather than moved: writing one into a bullet
-          // means writing a claim the candidate did not make, which is
-          // the fabricated-achievement problem this block already exists
-          // to avoid.
-          const _isSoft = (kw) => {
-            try {
-              const X = window.JDSkillExtractor;
-              if (!X) return false;
-              const n = X._norm(kw).replace(/ skills$/, '');
-              return X.SOFT_SKILLS.some((s) => X._norm(s) === n);
-            } catch (e) { return false; }
-          };
-          const softDropped = toReInject.filter(_isSoft);
-          const singleWord = toReInject.filter((kw) => !_isSoft(kw));
-          if (softDropped.length) {
-            console.log('[ATS Tailor] Soft skills kept out of the technical list:',
-              softDropped.join(', '));
-          }
-
-          if (singleWord.length > 0) {
-            // Anchored to the start of a line and to the heading's own
-            // line. Unanchored and case-insensitive, this matched the
-            // word "skills" wherever it happened to end a line -- inside
-            // a bullet, inside the summary -- and spliced a comma list
-            // of raw JD keywords into the middle of a sentence. It also
-            // masked the real fault below: any accidental match counted
-            // as "section found", and a genuine miss then appended a
-            // second TECHNICAL PROFICIENCIES heading.
-            const skillsMatch = cvText.match(
-              /^[ \t]*(?:TECHNICAL\s+PROFICIENCIES|TECHNICAL\s+SKILLS|SKILLS)[ \t]*:?[ \t]*\n([^\n]*(?:\n(?![A-Z]{3,})[^\n]*)*)/m
-            );
-            if (skillsMatch) {
-              const sectionStart = skillsMatch.index;
-              const fullMatch = skillsMatch[0];
-              const sectionContent = fullMatch.trimEnd();
-              // Don't re-add a keyword the section already lists. The
-              // keyword is "missing" per the whole-document scan only
-              // because that scan is word-boundary matched and this one
-              // is not, so without the check the same term gets printed
-              // twice in the same comma list.
-              const already = new Set(
-                sectionContent.split(/[,\n]/).map((s) => s.trim().toLowerCase()).filter(Boolean)
-              );
-              const toAdd = singleWord.filter((kw) => !already.has(kw.trim().toLowerCase()));
-              if (toAdd.length) {
-                const separator = sectionContent.endsWith(',') ? ' ' : ', ';
-                const enriched = sectionContent + separator + toAdd.join(', ');
-                cvText = cvText.substring(0, sectionStart) + enriched + cvText.substring(sectionStart + fullMatch.length);
-              }
-            } else {
-              const insertBefore = cvText.match(/\n(CERTIFICATIONS|EDUCATION|ACHIEVEMENTS)\b/i);
-              if (insertBefore && insertBefore.index !== undefined) {
-                const newSection = `\n\nTECHNICAL SKILLS\n${singleWord.join(', ')}\n`;
-                cvText = cvText.substring(0, insertBefore.index) + newSection + cvText.substring(insertBefore.index);
-              } else {
-                cvText += `\n\nTECHNICAL SKILLS\n${singleWord.join(', ')}\n`;
-              }
-            }
-          }
-
-          this.generatedDocuments.cv = cvText;
-          
-          // Recalculate final score
-          const finalCheck = this.calculateMatchScore(cvText, keywords);
-          this.generatedDocuments.matchScore = finalCheck.matchScore;
-          this.generatedDocuments.matchedKeywords = finalCheck.matchedKeywords;
-          this.generatedDocuments.missingKeywords = finalCheck.missingKeywords;
-          this.updateMatchAnalysisUI();
-          
-          console.log(`[ATS Tailor] Post-sanitisation re-injection complete: ${finalCheck.matchScore}% (${finalCheck.matchedKeywords?.length}/${keywords.all.length})`);
-        } else {
-          console.log('[ATS Tailor] Post-sanitisation: all keywords intact ✓');
-        }
-      }
+      // Recalculate after editing; never restore unsupported terms for a score.
+      const finalCoverage = this.calculateMatchScore(this.generatedDocuments.cv, keywords);
+      this.generatedDocuments.matchScore = finalCoverage.matchScore;
+      this.generatedDocuments.matchedKeywords = finalCoverage.matchedKeywords;
+      this.generatedDocuments.missingKeywords = finalCoverage.missingKeywords;
+      this.updateMatchAnalysisUI();
 
       // CRITICAL: Ensure the CV header carries the JOB-ADAPTIVE candidate
       // address. The model often pre-writes "Dublin, IE" (it sees the
@@ -7101,7 +6559,7 @@ class ATSTailor {
         // Don't throw - document generation was successful
       }
 
-      updateProgress(100, 'Complete! 100% keyword match achieved.');
+      updateProgress(100, 'Documents prepared. Review missing requirements and confirm all facts before applying.');
 
       // WITHOUT THE BLOBS. This key exists so the popup can redisplay the
       // last run after it is reopened; it does not need the base64,
@@ -7290,22 +6748,12 @@ class ATSTailor {
   }
 
   getApplicationLocation() {
-    const fallback = this._defaultLocation || 'Dublin, IE';
-    const raw = this.currentJob?.location || '';
-    let loc = '';
-    try {
-      if (window.ATSLocationTailor?.normalizeJobLocationForApplication) {
-        loc = window.ATSLocationTailor.normalizeJobLocationForApplication(raw, fallback);
-      } else {
-        loc = raw || fallback;
-      }
-    } catch (e) {
-      loc = fallback;
-    }
-    const result = this.sanitizeLocationString(loc, fallback, { rawSource: raw });
-    // Diagnostic: shows exactly why a location was (or wasn't) adapted.
-    console.log(`[ATS Tailor] Location: raw="${raw}" -> normalized="${loc}" -> final="${result}"`);
-    return result;
+    const profile = this._cachedProfile || this.profileData || this.profileInfo || {};
+    const parts = [profile.city, profile.state, profile.country]
+      .filter(value => typeof value === 'string' && value.trim())
+      .map(value => value.trim());
+    return [...new Set(parts)].join(', ') ||
+      (typeof profile.location === 'string' ? profile.location.trim() : '');
   }
 
   sanitizeLocationString(loc, fallback, opts = {}) {

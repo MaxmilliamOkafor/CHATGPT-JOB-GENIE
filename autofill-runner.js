@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   if (window.JobGenieAutofill) return;
-  let enabled = false, active = null, timer = null;
+  let enabled = false, active = null, timer = null, pending = false;
   const core = window.AutofillCore;
   function eligible() {
     const platform = window.ATSPlatforms?.detect(location.hostname, location.href);
@@ -24,17 +24,20 @@
       const report = { success: enabled, filledCount: result.filled, alreadySet: result.alreadySet, validation };
       window.JobGenieAutofill.lastResult = report;
       return report;
-    })().finally(() => { active = null; });
+    })().finally(() => { active = null; if (pending) { pending = false; schedule(); } });
     return active;
   }
   function schedule() {
-    if (!enabled || active || timer) return;
+    if (!enabled) return;
+    if (active) { pending = true; return; }
+    if (timer) return;
     timer = setTimeout(() => { timer = null; run().catch(() => {}); }, 500);
   }
   const observer = new MutationObserver(schedule);
   function setEnabled(value) {
     enabled = value === true;
     observer.disconnect();
+    pending = false;
     clearTimeout(timer); timer = null;
     if (enabled) { observer.observe(document.documentElement, {childList:true,subtree:true}); schedule(); }
   }

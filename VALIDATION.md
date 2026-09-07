@@ -2,7 +2,7 @@
 
 ## Automated checks
 
-- 53 Node tests pass.
+- 63 Node tests pass.
 - 33 registry entries tested for host resolution and fallback selector availability. This checks registry logic, not live DOM compatibility.
 - Regression tests cover JSON-LD recovery, cross-posting field mixing, keyword false positives, punctuated technical terms, duplicate keywords, explicit screening answers, no residence-to-authorization inference, phone-prefix handling, and opt-in submission/email defaults.
 - Manifest/resource checks validate 69 packaged entry-point resources and JavaScript syntax. Store description length passes. Missing icons are restored; missing vendor bundle references are removed. Placeholder Gmail OAuth is removed, with a clear configuration error for unconfigured API sending.
@@ -38,3 +38,14 @@ Personal signature and portfolio literals were removed from the changed follow-u
 ## Contact extraction and enrichment
 
 Six additional tests cover purpose-specific inbox rejection, recruiting-context selection, name/address association, own-email exclusion, mailto context, and the Apollo search-to-enrichment request/response contract. All addresses in these fixtures use reserved `.invalid` domains. Apollo lookup was checked against official documentation; no paid provider request was made and real credential/credit behavior remains untested. Suggestions require recipient review before automatic follow-up.
+
+## Second hardening pass
+
+- Connected popup scoring to DynamicScore (the earlier popup method still used substring matching).
+- Removed automatic score-targeted keyword injection and qualification-gap stuffing from the popup pipeline. Missing requirements remain review items.
+- Candidate header location now comes from the saved profile, not the employer's location.
+- Added actual popup-method regression tests via an isolated VM.
+- Added autofill lifecycle tests for disabled state, cancellation during profile loading, concurrent runs, password-page exclusion and rescanning new controls during an active pass.
+- DOCX exports pass ZIP CRC, XML parsing, selectable text preservation (technical punctuation and Unicode), no-layout-table/no-textbox checks, and preservation of the last paragraph in a long fixture. These checks do not prove visual rendering or vendor ATS parsing.
+
+The extension has still not been installed into the managed browser. Existing browser-policy restrictions and authenticated upload/API gates remain unresolved. This is not a deployment certification.
