@@ -1,0 +1,1677 @@
+// professional-pdf-engine.js - Enterprise-Grade ATS PDF Generator v3.0
+// PERFECT FORMAT: Garamond/Arial hybrid, exact margins, precise typography
+// Features: Multi-page support, font embedding, perfect text metrics, ATS 100% parsing
+
+(function(global) {
+  'use strict';
+
+  // ============ PDF CONFIGURATION (ATS-PERFECT SPECIFICATION) ============
+  const PDF_CONFIG = {
+    // Page dimensions in points. A4 is the default and the fallback;
+    // _applyPageFormat swaps in US Letter when the posting is North
+    // American. Margins are unchanged between the two -- both sit well
+    // inside either printable area, and one margin set means a reviewer
+    // sees the same line breaks whichever country they are in.
+    //
+    // This is a print concern only. No ATS reads page dimensions; every
+    // one of them reads the text stream. Neither choice can cause a
+    // rejection, which is exactly why it is safe to switch.
+    page: {
+      width: 595.28,
+      height: 841.89,
+      format: 'a4'
+    },
+    // Margins (0.75 inches = 54pt - ATS standard)
+    margins: {
+      top: 54,
+      bottom: 54,
+      left: 54,
+      right: 54
+    },
+    // Typography specification
+    fonts: {
+      heading: 'helvetica',      // Clean sans-serif for headers
+      body: 'helvetica',         // ATS-safe body font
+      sizes: {
+        name: 16,                // Name: 16pt Bold
+        sectionTitle: 12,        // Section headers: 12pt Bold
+        companyName: 11,         // Company names: 11pt Bold
+        jobTitle: 10.5,          // Job titles: 10.5pt Regular
+        body: 10.5,              // Body text: 10.5pt Regular
+        bullets: 10.5,           // Bullet points: 10.5pt
+        contact: 10,             // Contact info: 10pt
+        small: 9                 // Small text: 9pt
+      }
+    },
+    // Line spacing
+    lineHeight: {
+      tight: 1.1,
+      normal: 1.2,
+      relaxed: 1.4,
+      section: 1.5
+    },
+    // Section spacing (in points)
+    spacing: {
+      afterName: 4,
+      afterContact: 12,
+      beforeSection: 14,
+      afterSectionTitle: 6,
+      betweenJobs: 10,
+      betweenBullets: 2,
+      paragraphGap: 8
+    },
+    // Colors (conservative for ATS)
+    colors: {
+      black: [0, 0, 0],
+      darkGray: [51, 51, 51],
+      mediumGray: [102, 102, 102]
+    },
+    // Bullet character (ATS-safe)
+    bullet: '•',
+    bulletIndent: 8
+  };
+
+  // ============ PROFESSIONAL PDF ENGINE ============
+  const ProfessionalPDFEngine = {
+
+    // ============ MAIN ENTRY: GENERATE CV PDF ============
+    // Choose the paper for this application and make every later
+    // width/height read agree with it. Called once, synchronously, right
+    // before the jsPDF document is constructed; the whole render pass
+    // that follows is synchronous, so nothing can observe a half-applied
+    // page. Returns the format string jsPDF wants.
+    _applyPageFormat(jobData, candidateData) {
+      const A4 = { width: 595.28, height: 841.89, format: 'a4' };
+      try {
+        const RF = (typeof window !== 'undefined' && window.RegionalFormat) || global.RegionalFormat;
+        if (!RF) { Object.assign(PDF_CONFIG.page, A4); return 'a4'; }
+        const region = RF.resolveRegion(
+          (jobData && (jobData.location || jobData.jobLocation)) || '',
+          (candidateData && candidateData.location) || ''
+        );
+        if (region.page === 'LETTER') {
+          Object.assign(PDF_CONFIG.page, { width: 612, height: 792, format: 'letter' });
+          return 'letter';
+        }
+      } catch (e) {
+        // A location we cannot read is not a reason to fail a CV.
+        console.warn('[ProfessionalPDFEngine] page format fell back to A4:', e && e.message);
+      }
+      Object.assign(PDF_CONFIG.page, A4);
+      return 'a4';
+    },
+
+    async generateCV(candidateData, tailoredContent, options = {}, jobData = null) {
+      const startTime = performance.now();
+      console.log('[ProfessionalPDFEngine] Generating ATS-perfect CV (SPEED OPTIMIZED)...');
+
+      try {
+        // Validate jsPDF availability
+        if (typeof jspdf === 'undefined' || !jspdf.jsPDF) {
+          throw new Error('jsPDF library not loaded');
+        }
+
+        // Parse and structure CV data ONCE
+        const cvData = this.structureCVData(candidateData, tailoredContent, jobData);
+        
+        // Create PDF document with maximum compression for speed
+        const doc = new jspdf.jsPDF({
+          orientation: 'portrait',
+          unit: 'pt',
+          format: this._applyPageFormat(jobData, candidateData),
+          compress: true,
+          putOnlyUsedFonts: true, // SPEED: Only embed used fonts
+          floatPrecision: 2 // SPEED: Reduce float precision for smaller file
+        });
+
+        // Reset section dedup tracker for each new PDF
+        this._renderedSections = new Set();
+
+        // Build PDF content
+        let currentY = PDF_CONFIG.margins.top;
+        currentY = this.renderHeader(doc, cvData.contact, currentY);
+        currentY = this.renderSummary(doc, cvData.summary, currentY);
+        // Skills directly under the summary, in the six-second scan zone
+        // where the competencies used to sit -- they are the same section
+        // now, and structureCVData has already folded them together.
+        // Education last: above experience it is the graduate convention
+        // and reads as early-career on a CV with years of history behind
+        // it. Certifications sit between them as the detail block.
+        currentY = this.renderSkills(doc, cvData.skills, currentY);
+        currentY = this.renderCoreCompetencies(doc, cvData.coreCompetencies, currentY, cvData);
+        currentY = this.renderExperience(doc, cvData.experience, currentY);
+        currentY = this.renderCertifications(doc, cvData.certifications, currentY);
+        currentY = this.renderEducation(doc, cvData.education, currentY);
+
+        // Generate output
+        const pdfBlob = doc.output('blob');
+        const pdfBase64 = doc.output('datauristring').split(',')[1];
+        
+        // Generate filename
+        const firstName = this.sanitizeFilename(candidateData?.firstName || candidateData?.first_name || 'Applicant');
+        const lastName = this.sanitizeFilename(candidateData?.lastName || candidateData?.last_name || '');
+        const filename = lastName ? `${firstName}_${lastName}_CV.pdf` : `${firstName}_CV.pdf`;
+
+        const timing = performance.now() - startTime;
+        console.log(`[ProfessionalPDFEngine] CV generated in ${timing.toFixed(0)}ms`);
+
+        return {
+          success: true,
+          pdf: pdfBase64,
+          blob: pdfBlob,
+          filename,
+          pageCount: doc.internal.getNumberOfPages(),
+          timing,
+          data: cvData
+        };
+
+      } catch (error) {
+        console.error('[ProfessionalPDFEngine] Error:', error);
+        return {
+          success: false,
+          error: error.message
+        };
+      }
+    },
+
+    // ============ GENERATE COVER LETTER PDF ============
+    async generateCoverLetter(candidateData, coverContent, jobData, options = {}) {
+      const startTime = performance.now();
+      console.log('[ProfessionalPDFEngine] Generating Cover Letter (SPEED OPTIMIZED)...');
+
+      try {
+        if (typeof jspdf === 'undefined' || !jspdf.jsPDF) {
+          throw new Error('jsPDF library not loaded');
+        }
+
+        const doc = new jspdf.jsPDF({
+          orientation: 'portrait',
+          unit: 'pt',
+          format: this._applyPageFormat(jobData, candidateData),
+          compress: true,
+          putOnlyUsedFonts: true, // SPEED: Only embed used fonts
+          floatPrecision: 2 // SPEED: Reduce float precision
+        });
+
+        let currentY = PDF_CONFIG.margins.top;
+
+        // Render cover letter header (pass jobData for extracted location)
+        currentY = this.renderCoverHeader(doc, candidateData, currentY, jobData);
+
+        // Render recipient info (Re: Job Title)
+        currentY = this.renderRecipientInfo(doc, jobData, candidateData, currentY);
+
+        // Render cover letter body
+        currentY = this.renderCoverBody(doc, coverContent, currentY);
+        
+        // Render signature
+        currentY = this.renderSignature(doc, candidateData, currentY);
+
+        const pdfBlob = doc.output('blob');
+        const pdfBase64 = doc.output('datauristring').split(',')[1];
+        
+        const firstName = this.sanitizeFilename(candidateData?.firstName || candidateData?.first_name || 'Applicant');
+        const lastName = this.sanitizeFilename(candidateData?.lastName || candidateData?.last_name || '');
+        const filename = lastName ? `${firstName}_${lastName}_Cover_Letter.pdf` : `${firstName}_Cover_Letter.pdf`;
+
+        const timing = performance.now() - startTime;
+        console.log(`[ProfessionalPDFEngine] Cover Letter generated in ${timing.toFixed(0)}ms`);
+
+        return {
+          success: true,
+          pdf: pdfBase64,
+          blob: pdfBlob,
+          filename,
+          timing
+        };
+
+      } catch (error) {
+        console.error('[ProfessionalPDFEngine] Cover Letter Error:', error);
+        return {
+          success: false,
+          error: error.message
+        };
+      }
+    },
+
+    // ============ STRUCTURE CV DATA ============
+    // FIX 27-01-26: Added robust data extraction with multiple fallbacks for OpenAI speed
+    structureCVData(candidateData, tailoredContent, jobData = null) {
+      const data = {
+        contact: this.extractContact(candidateData, jobData),
+        summary: '',
+        coreCompetencies: [],
+        experience: [],
+        education: [],
+        skills: [],
+        certifications: []
+      };
+
+      // FIX: Try to get professional experience from candidateData first (most reliable)
+      // This ensures we always have experience data even if tailoredContent is incomplete
+      let experienceFromCandidate = [];
+      if (candidateData) {
+        experienceFromCandidate = candidateData.professional_experience || 
+                                   candidateData.professionalExperience ||
+                                   candidateData.workExperience ||
+                                   candidateData.work_experience || [];
+      }
+
+      // Parse tailored content sections
+      if (typeof tailoredContent === 'string') {
+        const parsed = this.parseSections(tailoredContent);
+        data.summary = parsed.summary || '';
+        data.experience = parsed.experience || [];
+        data.education = parsed.education || [];
+        const skillsSource = parsed.skills || candidateData?.skills || '';
+        data.skills = this.parseSkills(skillsSource);
+        data.certifications = this.parseCertifications(parsed.certifications || candidateData?.certifications || '');
+      } else if (typeof tailoredContent === 'object' && tailoredContent !== null) {
+        // Structured data from profile - check ALL possible field names
+        data.summary = tailoredContent.summary || tailoredContent.professionalSummary || tailoredContent.professional_summary || '';
+        
+        // FIX 27-01-26: Comprehensive experience field checking with candidateData fallback
+        const tailoredExperience = tailoredContent.experience || 
+                                   tailoredContent.professionalExperience || 
+                                   tailoredContent.professional_experience ||
+                                   tailoredContent.workExperience ||
+                                   tailoredContent.work_experience || [];
+        
+        // Use tailored experience if available, otherwise fall back to candidate data
+        const rawExperience = (Array.isArray(tailoredExperience) && tailoredExperience.length > 0) 
+          ? tailoredExperience 
+          : experienceFromCandidate;
+        
+        data.experience = this.normalizeExperience(rawExperience);
+        
+        // Education with fallback
+        const tailoredEducation = tailoredContent.education || candidateData?.education || [];
+        data.education = Array.isArray(tailoredEducation) ? tailoredEducation : [];
+        
+        data.skills = this.parseSkills(tailoredContent.skills || candidateData?.skills);
+        data.certifications = this.parseCertifications(tailoredContent.certifications || candidateData?.certifications);
+        
+        // Core Competencies from AI tailoring response
+        if (Array.isArray(tailoredContent.coreCompetencies) && tailoredContent.coreCompetencies.length > 0) {
+          data.coreCompetencies = tailoredContent.coreCompetencies.slice(0, 9);
+        }
+      }
+
+      // ONE SKILLS SECTION, NOT TWO.
+      //
+      // Competencies and proficiencies were two fields, two renderers and
+      // two headings, and the same skill could print under both -- padding
+      // to a human, and no gain at all to a keyword-scoring ATS. That was
+      // patched by removing the overlap from proficiencies, which fixed
+      // the repetition and left the deeper problem in place: a parser
+      // finds the skills section by looking for the word "skill" in the
+      // heading, so everything under CORE COMPETENCIES was never indexed
+      // as a skill. A live parse of a real generated CV came back with the
+      // competencies empty.
+      //
+      // The two lists are one list. Competencies lead, because they are
+      // the tailored, job-matched phrases, and the rest follows in order,
+      // each skill once, compared by shape rather than spelling. The
+      // heading that prints over it is TECHNICAL SKILLS, and the DOCX
+      // generator does exactly the same thing to the tailored text, so
+      // the same application looks the same whichever file the portal
+      // accepted.
+      if (data.coreCompetencies.length) {
+        const seen = new Set();
+        const merged = [];
+        for (const s of data.coreCompetencies.concat(data.skills)) {
+          const k = this.skillKey(s);
+          if (!k || seen.has(k)) continue;
+          seen.add(k);
+          merged.push(String(s).trim());
+        }
+        data.skills = merged;
+        data.coreCompetencies = [];
+      }
+
+      return data;
+    },
+
+    // Compare skills by shape, not spelling: "Power BI", "power bi" and
+    // "PowerBI" are one skill, and a trailing comma or bullet left over
+    // from parsing must not make a duplicate look distinct.
+    skillKey(s) {
+      return String(s === null || s === undefined ? '' : s)
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '');
+    },
+
+    // ============ EXTRACT CONTACT INFO ============
+    extractContact(data, jobData = null) {
+      if (!data) return { name: 'Applicant', email: '', phone: '', location: '', linkedin: '', github: '', portfolio: '', extractedJobLocation: '' };
+
+      const firstName = data.firstName || data.first_name || '';
+      const lastName = data.lastName || data.last_name || '';
+      const name = `${firstName} ${lastName}`.trim() || 'Applicant';
+
+      let location = data.city || data.location || '';
+      location = this.cleanLocation(location);
+      // Dublin, IE ALWAYS present as home base
+      if (!location || location.length < 3) {
+        location = 'Dublin, IE';
+      }
+
+      // Portfolio: strip protocol prefix for cleaner display
+      let portfolio = data.portfolio || '';
+      if (portfolio) {
+        portfolio = portfolio.replace(/^https?:\/\//i, '').replace(/\/$/,'');
+      }
+
+      // Extract job location from job data
+      let extractedJobLocation = '';
+      if (jobData) {
+        extractedJobLocation = jobData.location || jobData.jobLocation || jobData.extractedLocation || '';
+        extractedJobLocation = this.cleanLocation(extractedJobLocation);
+      }
+
+      // The role being applied for, printed under the name. The DOCX
+      // gets this from the CV text, which the PDF never sees -- it
+      // renders from the structured record -- so without carrying it
+      // here the same application would show a target title in one
+      // format and not the other.
+      let targetTitle = '';
+      if (jobData) {
+        targetTitle = String(jobData.title || jobData.jobTitle || '')
+          .replace(/\([^)]*\)/g, ' ')
+          .replace(/\s*[-\u2013\u2014|]\s*(remote|hybrid|onsite|contract|permanent|full[- ]time|part[- ]time)\b.*$/i, '')
+          .replace(/\s{2,}/g, ' ')
+          .trim();
+        if (targetTitle.length > 60) targetTitle = '';
+      }
+
+      return {
+        name,
+        email: data.email || '',
+        phone: this.formatPhone(data.phone || ''),
+        location,
+        linkedin: this.formatLinkedIn(data.linkedin || ''),
+        github: this.formatGitHub(data.github || ''),
+        portfolio,
+        extractedJobLocation,
+        targetTitle
+      };
+    },
+
+    // ============ CLEAN LOCATION (Remove "Remote" and prefixes) ============
+    // UPDATED: Uses ATSLocationTailor.cleanLocation if available
+
+    cleanLocation(location) {
+      if (!location) return '';
+
+      let cleaned = String(location)
+        .replace(/\b(open\s+to\s+relocation)\b/gi, '')
+        .replace(/\s*\|\s*\b(open\s+to\s+relocation)\b/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
+      // Use ATSLocationTailor.cleanLocation + strict formatter if available
+      if (typeof window !== 'undefined' && window.ATSLocationTailor?.cleanLocation) {
+        cleaned = window.ATSLocationTailor.cleanLocation(cleaned);
+      }
+      if (typeof window !== 'undefined' && window.ATSLocationTailor?.normalizeJobLocationForApplication) {
+        cleaned = window.ATSLocationTailor.normalizeJobLocationForApplication(cleaned, 'Dublin, IE');
+      }
+
+      return cleaned
+        .replace(/\b(remote|work from home|wfh|virtual|fully remote|remote first)\b/gi, '')
+        .replace(/\s*[\(\[]?\s*(remote|wfh|virtual)\s*[\)\]]?\s*/gi, '')
+        .replace(/\s*(\||,|\/|–|-)\s*(\||,|\/|–|-)\s*/g, ', ')
+        .replace(/\s*(\||,|\/|–|-)\s*$/g, '')
+        .replace(/^\s*(\||,|\/|–|-)\s*/g, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+    },
+
+    // ============ FORMAT PHONE ============
+    // International standard "+CC NNN NNN NNNN", no colon, no leading 0.
+    formatPhone(phone) {
+      if (!phone) return '';
+      const cleaned = String(phone).replace(/[^\d+]/g, '');
+      const m = cleaned.match(/^\+(\d{1,3})0?(\d+)$/);
+      if (m) {
+        const cc = m[1];
+        const local = m[2];
+        let grouped = local;
+        if (local.length >= 9) grouped = `${local.slice(0, 3)} ${local.slice(3, 6)} ${local.slice(6)}`;
+        else if (local.length >= 7) grouped = `${local.slice(0, 3)} ${local.slice(3)}`;
+        return `+${cc} ${grouped}`;
+      }
+      return phone;
+    },
+
+    // ============ FORMAT LINKEDIN ============
+    formatLinkedIn(url) {
+      if (!url) return '';
+      // Extract username from full URL
+      const match = url.match(/linkedin\.com\/in\/([^\/\?]+)/i);
+      if (match) {
+        return `linkedin.com/in/${match[1]}`;
+      }
+      return url.replace(/^https?:\/\/(www\.)?/i, '');
+    },
+
+    // ============ FORMAT GITHUB ============
+    formatGitHub(url) {
+      if (!url) return '';
+      const match = url.match(/github\.com\/([^\/\?]+)/i);
+      if (match) {
+        return `github.com/${match[1]}`;
+      }
+      return url.replace(/^https?:\/\/(www\.)?/i, '');
+    },
+
+    // ============ PARSE CV SECTIONS ============
+    // FIX v4.2.0: Handles inline headers like "SKILLS: PYTHON, JAVA, C++" by splitting them
+    parseSections(text) {
+      if (!text) return {};
+      
+      const sections = {
+        summary: '',
+        experience: [],
+        education: [],
+        skills: '',
+        certifications: ''
+      };
+
+      // FIX v3.3.2: Added TECHNICAL PROFICIENCIES mapping to skills section
+      const sectionMap = {
+        'PROFESSIONAL SUMMARY': 'summary',
+        'SUMMARY': 'summary',
+        'PROFILE': 'summary',
+        'PROFESSIONAL EXPERIENCE': 'experience',
+        'WORK EXPERIENCE': 'experience',
+        'EXPERIENCE': 'experience',
+        'EMPLOYMENT': 'experience',
+        'EDUCATION': 'education',
+        'ACADEMIC': 'education',
+        'SKILLS': 'skills',
+        'TECHNICAL SKILLS': 'skills',
+        'CORE SKILLS': 'skills',
+        'TECHNICAL PROFICIENCIES': 'skills',
+        'KEY SKILLS': 'skills',
+        'CORE COMPETENCIES': 'skills',
+        'ADDITIONAL SKILLS': 'skills',
+        'CERTIFICATIONS': 'certifications',
+        'LICENSES': 'certifications'
+      };
+
+      /**
+       * INLINE HEADER DETECTION: Matches "SKILLS: content" or "CERTIFICATIONS: content"
+       * Returns { header, content } or null if not an inline header.
+       */
+      const parseInlineHeader = (line) => {
+        const trimmed = (line || '').trim();
+        // Pattern: HEADER: content (header is all caps, followed by colon and content)
+        const inlineMatch = trimmed.match(/^([A-Z][A-Z\s]{2,30}):\s*(.+)$/);
+        if (inlineMatch) {
+          const potentialHeader = inlineMatch[1].trim().toUpperCase();
+          if (sectionMap[potentialHeader]) {
+            return { header: potentialHeader, content: inlineMatch[2].trim() };
+          }
+        }
+        return null;
+      };
+
+      const lines = text.split('\n');
+      let currentSection = '';
+      let currentContent = [];
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        
+        // FIRST: Check for inline header (e.g., "SKILLS: PYTHON, JAVA, C++")
+        const inlineResult = parseInlineHeader(line);
+        if (inlineResult) {
+          // Save previous section
+          this.saveSection(sections, currentSection, currentContent);
+          // Start new section with the inline content
+          currentSection = sectionMap[inlineResult.header];
+          currentContent = [inlineResult.content]; // Content goes directly into the section
+          continue;
+        }
+        
+        // Standard header detection (header on its own line)
+        const upperTrimmed = trimmed.toUpperCase().replace(/[:\s]+$/, '');
+
+        if (sectionMap[upperTrimmed]) {
+          this.saveSection(sections, currentSection, currentContent);
+          currentSection = sectionMap[upperTrimmed];
+          currentContent = [];
+        } else if (currentSection) {
+          currentContent.push(line);
+        }
+      }
+
+      this.saveSection(sections, currentSection, currentContent);
+      return sections;
+    },
+
+    saveSection(sections, section, content) {
+      if (!section || content.length === 0) return;
+
+      const text = content.join('\n').trim();
+
+      switch (section) {
+        case 'summary':
+          sections.summary = text;
+          break;
+        case 'experience':
+          sections.experience = this.parseExperience(text);
+          break;
+        case 'education':
+          sections.education = this.parseEducationText(text);
+          break;
+        case 'skills':
+          sections.skills = text;
+          break;
+        case 'certifications':
+          sections.certifications = text;
+          break;
+      }
+    },
+
+    // ============ PARSE EXPERIENCE ============
+    parseExperience(text) {
+      const jobs = [];
+      const lines = text.split('\n');
+      let currentJob = null;
+      
+      // Section headers that should be skipped when parsing
+      const sectionHeaders = [
+        'professional experience', 'work experience', 'experience', 
+        'employment history', 'career history', 'current role',
+        'previous role', 'positions held', 'work history'
+      ];
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        
+        // Skip lines that are just section headers
+        const lowerTrimmed = trimmed.toLowerCase().replace(/[#:\s]+/g, ' ').trim();
+        if (sectionHeaders.includes(lowerTrimmed)) {
+          continue;
+        }
+
+        // Detect job header (Company | Title | Dates format)
+        if (trimmed.includes('|') && !trimmed.startsWith('•') && !trimmed.startsWith('-')) {
+          if (currentJob && currentJob.company) jobs.push(currentJob);
+          
+          const parts = trimmed.split('|').map(p => p.trim());
+          const company = this.stripDates(parts[0] || '');
+          
+          // Skip if company name looks like a section header
+          if (sectionHeaders.includes(company.toLowerCase())) {
+            currentJob = null;
+            continue;
+          }
+          
+          currentJob = {
+            company: company,
+            title: this.stripDates(parts[1] || ''),
+            dates: this.normalizeDates(parts[2] || ''),
+            bullets: []
+          };
+        } else if (currentJob && (trimmed.startsWith('•') || trimmed.startsWith('-') || trimmed.startsWith('*'))) {
+          const bullet = trimmed.replace(/^[•\-*]\s*/, '').trim();
+          if (bullet) {
+            currentJob.bullets.push(bullet);
+          }
+        }
+      }
+
+      if (currentJob && currentJob.company) jobs.push(currentJob);
+      return jobs;
+    },
+
+    // ============ EXTRACT DATES FROM TITLE ============
+    // Handles titles like "Software Engineer | 2023 - Present" or "Data Analyst – 2017 – 2021"
+    extractDatesFromTitle(title) {
+      if (!title) return { cleanTitle: '', dates: '' };
+      
+      // Patterns to match dates in title
+      const datePatterns = [
+        /\s*[\|–—-]\s*(\d{4}\s*[-–—]\s*(?:Present|\d{4}))\s*$/i,
+        /\s*[\|–—-]\s*(\d{4})\s*$/i,
+        /\s*\((\d{4}\s*[-–—]\s*(?:Present|\d{4}))\)\s*$/i,
+      ];
+      
+      for (const pattern of datePatterns) {
+        const match = title.match(pattern);
+        if (match) {
+          const cleanTitle = title.replace(pattern, '').trim();
+          const dates = this.normalizeDates(match[1]);
+          return { cleanTitle, dates };
+        }
+      }
+      
+      return { cleanTitle: title, dates: '' };
+    },
+
+    // ============ NORMALIZE EXPERIENCE (from structured data) ============
+    normalizeExperience(experience) {
+      if (!Array.isArray(experience)) return [];
+      
+      // Section headers and generic terms that should NOT be treated as job entries
+      const invalidEntryNames = [
+        'professional experience', 'work experience', 'experience', 
+        'employment history', 'career history', 'current role',
+        'previous role', 'positions held', 'work history',
+        'employment', 'career', 'roles'
+      ];
+      
+      // Also detect literal duplicated header strings like "WORK EXPERIENCE WORK EXPERIENCE" in raw fields
+      const collapseDuplicatedHeader = (value) => {
+        // Match repeated section headers (e.g. "WORK EXPERIENCE WORK EXPERIENCE")
+        const collapsed = value.replace(
+          /\b(WORK EXPERIENCE|PROFESSIONAL EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS)(\s+\1)+\b/gi,
+          '$1'
+        ).trim();
+        // If the entire string is just a section header (after collapsing), return empty
+        const dup = collapsed.match(/^(\s*(WORK EXPERIENCE|PROFESSIONAL EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS)\s*)+$/i);
+        if (dup) return '';
+        return collapsed;
+      };
+
+      return experience
+        .filter(job => {
+          // Collapse duplicated header values before evaluation
+          const rawCompany = collapseDuplicatedHeader(String(job.company || job.companyName || '').trim());
+          const rawTitle = collapseDuplicatedHeader(String(job.title || job.jobTitle || job.position || '').trim());
+
+          // Normalise aggressively to catch cases like "# WORK EXPERIENCE" or "WORK EXPERIENCE WORK EXPERIENCE"
+          const normaliseHeaderish = (value) => value
+            .toLowerCase()
+            .replace(/[#:*|]/g, ' ')
+            .replace(/[^a-z\s]/g, ' ')
+            .replace(/\s{2,}/g, ' ')
+            .trim();
+
+          const company = normaliseHeaderish(rawCompany);
+          const title = normaliseHeaderish(rawTitle);
+
+          const isDupHeader = (v) => {
+            // Check if value is just repeated section headers
+            for (const h of invalidEntryNames) {
+              if (v === (h + ' ' + h) || v === h) return true;
+            }
+            return false;
+          };
+
+          // Skip if company name looks like a section header
+          if (invalidEntryNames.includes(company) || isDupHeader(company)) {
+            console.log(`[ProfessionalPDFEngine] Skipping invalid company entry: "${rawCompany}"`);
+            return false;
+          }
+
+          // Skip if title looks like a section header (without a real company)
+          if ((invalidEntryNames.includes(title) || isDupHeader(title)) && !company) {
+            console.log(`[ProfessionalPDFEngine] Skipping invalid title entry: "${rawTitle}"`);
+            return false;
+          }
+
+          // Skip if company is empty or too short
+          if (!company || company.length < 2) {
+            return false;
+          }
+
+          return true;
+        })
+        .map(job => {
+          const rawTitle = job.title || job.jobTitle || job.position || '';
+          const { cleanTitle, dates: extractedDates } = this.extractDatesFromTitle(rawTitle);
+          
+          // Use explicit dates if available, otherwise use extracted dates
+          let dates = '';
+          if (job.dates) {
+            dates = this.normalizeDates(job.dates);
+          } else if (job.startDate || job.endDate) {
+            dates = this.normalizeDates(`${job.startDate || ''} – ${job.endDate || 'Present'}`);
+          } else if (extractedDates) {
+            dates = extractedDates;
+          }
+          
+          return {
+            company: job.company || job.companyName || '',
+            title: cleanTitle,
+            dates: dates,
+            bullets: this.normalizeBullets(job.bullets || job.achievements || job.responsibilities || job.description || [])
+          };
+        });
+    },
+
+    // ============ NORMALIZE BULLETS ============
+    // UPDATED: Applies ContentQualityEngine for UK spelling and anti-AI detection
+    normalizeBullets(bullets) {
+      if (!bullets) return [];
+      
+      let normalised = [];
+      
+      if (typeof bullets === 'string') {
+        normalised = bullets.split('\n').map(b => b.replace(/^[•\-*]\s*/, '').trim()).filter(Boolean);
+      } else if (Array.isArray(bullets)) {
+        normalised = bullets.map(b => String(b).replace(/^[•\-*]\s*/, '').trim()).filter(Boolean);
+      }
+      
+      // Apply ContentQualityEngine sanitisation if available
+      if (typeof ContentQualityEngine !== 'undefined' && normalised.length > 0) {
+        normalised = ContentQualityEngine.sanitiseBullets(normalised);
+        console.log('[ProfessionalPDFEngine] Applied ContentQualityEngine to bullets');
+      }
+      
+      return normalised;
+    },
+
+    // ============ STRIP DATES FROM FIELD ============
+    stripDates(value) {
+      if (!value) return '';
+      return value
+        .replace(/\d{4}[-\/]\d{1,2}\s*[-–—]\s*(Present|\d{4}[-\/]\d{1,2}|\d{4})/gi, '')
+        .replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\.?\s*\d{4}\s*[-–—]\s*(Present|\w+\.?\s*\d{4})/gi, '')
+        .replace(/\b\d{4}\s*[-–—]\s*(Present|\d{4})\b/gi, '')
+        .replace(/\s*\|\s*$/, '')
+        .replace(/^\s*\|\s*/, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+    },
+
+    // ============ NORMALIZE DATES (MM-YYYY format) ============
+    // Canonical form is "January 2023 - Present": full month name,
+    // four-digit year, plain ASCII hyphen.
+    //
+    // This used to emit MM-YYYY ("01-2023 - Present"). That is the one
+    // numeric form Jobscan's match report flags as non-compliant, and it
+    // is the reason the text pipeline standardised on "Month YYYY" --
+    // but the PDF renders from the STRUCTURED data, which never passes
+    // through that pipeline, so the fix never reached this format. The
+    // result was a CV whose dates read "January 2023 - Present" as a
+    // DOCX and "01-2023 - Present" as a PDF: the same application
+    // looking different depending on which file the portal accepted.
+    normalizeDates(dateStr) {
+      if (!dateStr) return '';
+      const hasPresent = /present|current|now/i.test(dateStr);
+      const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'];
+      const monthName = (mm) => MONTHS[Math.max(1, Math.min(12, parseInt(mm, 10))) - 1];
+
+      const toMonthYear = (token) => {
+        if (!token) return '';
+        if (/present|current|now/i.test(token)) return 'Present';
+        // Already "January 2023" / "Jan 2023" -> expand to the full name.
+        const named = token.match(/\b([A-Za-z]{3,9})\.?\s+((?:19|20)\d{2})\b/);
+        if (named) {
+          const hit = MONTHS.find((m) => m.toLowerCase().startsWith(named[1].toLowerCase().slice(0, 3)));
+          if (hit) return `${hit} ${named[2]}`;
+        }
+        // YYYY-MM
+        const isoMatch = token.match(/\b((?:19|20)\d{2})[-/](\d{1,2})\b/);
+        if (isoMatch) return `${monthName(isoMatch[2])} ${isoMatch[1]}`;
+        // MM/YYYY or MM-YYYY
+        const mmyyyyMatch = token.match(/\b(\d{1,2})[-/]((?:19|20)\d{2})\b/);
+        if (mmyyyyMatch) {
+          const n = parseInt(mmyyyyMatch[1], 10);
+          if (n >= 1 && n <= 12) return `${monthName(mmyyyyMatch[1])} ${mmyyyyMatch[2]}`;
+        }
+        // Year only stays a bare year -- inventing a month would be a
+        // fabricated date, and a bare year parses fine everywhere.
+        const yearMatch = token.match(/\b((?:19|20)\d{2})\b/);
+        if (yearMatch) return yearMatch[1];
+        return token;
+      };
+
+      // Try to split on range separators
+      const parts = dateStr.split(/\s+[-–—]\s+|\s*[–—]\s*/);
+      if (parts.length >= 2) {
+        const start = toMonthYear(parts[0]);
+        const end = hasPresent ? 'Present' : toMonthYear(parts[parts.length - 1]);
+        // Plain ASCII hyphen: one byte in every encoding an ATS might
+        // assume. An en dash is three bytes in UTF-8 and arrives as
+        // mojibake if the parser guesses wrong, leaving the range with no
+        // recognisable separator.
+        if (start && end) return `${start} - ${end}`;
+        if (start) return start;
+      }
+
+      // Single date
+      return toMonthYear(dateStr);
+    },
+
+    // ============ PARSE EDUCATION TEXT ============
+    parseEducationText(text) {
+      const education = [];
+      const lines = text.split('\n');
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+
+        const parts = trimmed.split('|').map(p => p.trim());
+        if (parts.length >= 2) {
+          education.push({
+            institution: parts[0] || '',
+            degree: parts[1] || '',
+            date: parts[2] || '',
+            gpa: this.extractGPA(parts.join(' '))
+          });
+        }
+      }
+
+      return education;
+    },
+
+    // ============ EXTRACT GPA ============
+    extractGPA(text) {
+      const match = text.match(/GPA[:\s]*(\d+\.?\d*)/i);
+      return match ? match[1] : '';
+    },
+
+    // ============ PARSE SKILLS ============
+    parseSkills(skills) {
+      if (!skills) return [];
+      
+      let skillList = [];
+      if (Array.isArray(skills)) {
+        skillList = skills.filter(Boolean);
+      } else {
+        skillList = skills
+          .replace(/[•\-*]/g, ',')
+          .split(/[,\n]/)
+          .map(s => s.trim())
+          .filter(s => s.length > 1 && s.length < 50);
+      }
+      
+      // Normalize casing: convert ALL CAPS to Title Case, preserve mixed case
+      return skillList.map(skill => {
+        const trimmed = String(skill).trim();
+        // If skill is all uppercase (and longer than 4 chars), convert to Title Case
+        // Keep short acronyms like AWS, SQL, GCP, CI/CD as-is
+        if (trimmed === trimmed.toUpperCase() && trimmed.length > 4 && !/^[A-Z]{2,5}$/.test(trimmed)) {
+          return trimmed
+            .toLowerCase()
+            .split(/[\s\-\/]+/)
+            .map(word => {
+              // Keep common acronyms uppercase
+              const acronyms = ['aws', 'sql', 'gcp', 'api', 'css', 'html', 'ci', 'cd', 'ml', 'ai', 'ui', 'ux', 'etl', 'llm', 'iac', 'sre', 'devops'];
+              if (acronyms.includes(word.toLowerCase())) return word.toUpperCase();
+              return word.charAt(0).toUpperCase() + word.slice(1);
+            })
+            .join(' ');
+        }
+        return trimmed;
+      });
+    },
+
+    // ============ PARSE CERTIFICATIONS ============
+    parseCertifications(certs) {
+      if (!certs) return [];
+      
+      let certList = [];
+      if (Array.isArray(certs)) {
+        certList = certs.map(c => typeof c === 'string' ? c : c.name || c.title || '').filter(Boolean);
+      } else {
+        certList = certs.split(/[,\n]/).map(s => s.trim()).filter(s => s.length > 3);
+      }
+      
+      // Normalize casing: convert ALL CAPS to Title Case for certifications
+      return certList.map(cert => {
+        const trimmed = String(cert).trim();
+        // If certification is all uppercase, convert to Title Case
+        if (trimmed === trimmed.toUpperCase() && trimmed.length > 5) {
+          return trimmed
+            .toLowerCase()
+            .split(/\s+/)
+            .map(word => {
+              // Keep acronyms uppercase
+              const acronyms = ['cbap', 'iiba', 'aws', 'gcp', 'pmp', 'cpa', 'cfa', 'prince2', 'axelos'];
+              if (acronyms.includes(word.toLowerCase())) return word.toUpperCase();
+              // Keep articles/prepositions lowercase unless first word
+              const lowercase = ['a', 'an', 'the', 'in', 'on', 'at', 'for', 'and', 'of', 'to'];
+              if (lowercase.includes(word.toLowerCase())) return word.toLowerCase();
+              return word.charAt(0).toUpperCase() + word.slice(1);
+            })
+            .join(' ')
+            .replace(/^(\w)/, m => m.toUpperCase()); // Ensure first char is uppercase
+        }
+        return trimmed;
+      });
+    },
+
+    // ============ RENDER HEADER ============
+    renderHeader(doc, contact, startY) {
+      const pageWidth = PDF_CONFIG.page.width;
+      const leftMargin = PDF_CONFIG.margins.left;
+      const rightMargin = PDF_CONFIG.margins.right;
+      const contentWidth = pageWidth - leftMargin - rightMargin;
+      let y = startY;
+
+      // Name (centered, bold, 16pt)
+      doc.setFont(PDF_CONFIG.fonts.heading, 'bold');
+      doc.setFontSize(PDF_CONFIG.fonts.sizes.name);
+      doc.setTextColor(...PDF_CONFIG.colors.black);
+      
+      const nameWidth = doc.getTextWidth(contact.name.toUpperCase());
+      const nameX = (pageWidth - nameWidth) / 2;
+      doc.text(contact.name.toUpperCase(), nameX, y);
+      y += PDF_CONFIG.fonts.sizes.name * 0.8 + PDF_CONFIG.spacing.afterName;
+
+      // Target title, on its own line under the name. It is the first
+      // thing a reviewer checks against the req they are filling.
+      if (contact.targetTitle) {
+        doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+        doc.setFontSize(PDF_CONFIG.fonts.sizes.contact + 1);
+        doc.setTextColor(...PDF_CONFIG.colors.black);
+        const tw = doc.getTextWidth(contact.targetTitle);
+        doc.text(contact.targetTitle, (pageWidth - tw) / 2, y);
+        y += PDF_CONFIG.fonts.sizes.contact + 3;
+      }
+
+      // Contact line (centered, regular, 10pt)
+      doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+      doc.setFontSize(PDF_CONFIG.fonts.sizes.contact);
+      doc.setTextColor(...PDF_CONFIG.colors.darkGray);
+
+      // Location | Phone | Email | [job location, when it differs]
+      //
+      // The first segment used to be the literal 'Dublin, IE'. The
+      // job-adaptive value the popup computes already arrives here as
+      // contact.location -- it was simply discarded, so the PDF header
+      // and the DOCX header disagreed about where the candidate is on
+      // every application outside Dublin. Nobody chose that; the value
+      // was plumbed through and then thrown away.
+      const candidateLocation = contact.location || 'Dublin, IE';
+      // The trailing job location exists to show both places at once.
+      // Its de-duplication was a second hard-coded literal
+      // (/^Dublin,? IE$/), so the repeat was only ever suppressed for
+      // one city. Compare against whatever the first segment actually
+      // is instead.
+      const sameLoc = (a, b) => String(a || '').replace(/[^a-z0-9]/gi, '').toLowerCase()
+        === String(b || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+      let cleanLoc = contact.extractedJobLocation
+        ? String(contact.extractedJobLocation).replace(/\bopen\s+to\s+relocation\b/gi, '').trim()
+        : '';
+      if (sameLoc(cleanLoc, candidateLocation)) cleanLoc = '';
+      const contactParts = [candidateLocation, contact.phone, contact.email, cleanLoc].filter(Boolean);
+      const contactLine = contactParts.join('  |  ');
+      const contactWidth = doc.getTextWidth(contactLine);
+      const contactX = (pageWidth - contactWidth) / 2;
+      doc.text(contactLine, contactX, y);
+      y += PDF_CONFIG.fonts.sizes.contact * PDF_CONFIG.lineHeight.normal;
+
+      // Links line (centered)
+      const linkParts = [contact.linkedin, contact.github].filter(Boolean);
+      if (linkParts.length > 0) {
+        const linksLine = linkParts.join('  |  ');
+        const linksWidth = doc.getTextWidth(linksLine);
+        const linksX = (pageWidth - linksWidth) / 2;
+        doc.text(linksLine, linksX, y);
+        y += PDF_CONFIG.fonts.sizes.contact * PDF_CONFIG.lineHeight.normal;
+      }
+
+      y += PDF_CONFIG.spacing.afterContact;
+      return y;
+    },
+
+    // ============ RENDER SUMMARY ============
+    renderSummary(doc, summary, startY) {
+      if (!summary) return startY;
+
+      let y = startY;
+      y = this.renderSectionTitle(doc, 'PROFESSIONAL SUMMARY', y);
+      y = this.renderParagraph(doc, summary, y);
+      
+      return y + PDF_CONFIG.spacing.beforeSection;
+    },
+
+    // ============ RENDER EXPERIENCE ============
+    renderExperience(doc, experience, startY) {
+      if (!experience || experience.length === 0) return startY;
+
+      // FINAL SAFETY: Filter out entries where company is a section header
+      const HEADER_BL = new Set([
+        'professional experience', 'work experience', 'experience',
+        'employment history', 'career history', 'employment',
+        'work history', 'positions held', 'career', 'roles'
+      ]);
+      const safeExp = experience.filter(job => {
+        const norm = String(job.company || '').toLowerCase().replace(/[^a-z\s]/g, ' ').replace(/\s{2,}/g, ' ').trim();
+        if (HEADER_BL.has(norm)) { console.warn('[PDFEngine] BLOCKED header-as-company:', job.company); return false; }
+        for (const h of HEADER_BL) {
+          if (norm === (h + ' ' + h) || (norm.startsWith(h + ' ') && norm.replace(new RegExp(h.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '').trim() === '')) return false;
+        }
+        return true;
+      });
+      if (safeExp.length === 0) return startY;
+
+      let y = startY;
+      y = this.renderSectionTitle(doc, 'WORK EXPERIENCE', y);
+
+      for (let i = 0; i < safeExp.length; i++) {
+        const job = safeExp[i];
+        
+        // Check page break
+        if (y > PDF_CONFIG.page.height - 120) {
+          doc.addPage();
+          y = PDF_CONFIG.margins.top;
+        }
+
+        // Company name (bold)
+        doc.setFont(PDF_CONFIG.fonts.heading, 'bold');
+        doc.setFontSize(PDF_CONFIG.fonts.sizes.companyName);
+        doc.setTextColor(...PDF_CONFIG.colors.black);
+        doc.text(job.company, PDF_CONFIG.margins.left, y);
+        y += PDF_CONFIG.fonts.sizes.companyName * PDF_CONFIG.lineHeight.tight;
+
+        // Job title and dates (normal title, regular dates aligned right)
+        doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+        doc.setFontSize(PDF_CONFIG.fonts.sizes.jobTitle);
+        doc.text(job.title, PDF_CONFIG.margins.left, y);
+
+        // Dates aligned right
+        if (job.dates) {
+          doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+          const datesWidth = doc.getTextWidth(job.dates);
+          const datesX = PDF_CONFIG.page.width - PDF_CONFIG.margins.right - datesWidth;
+          doc.text(job.dates, datesX, y);
+        }
+        y += PDF_CONFIG.fonts.sizes.jobTitle * PDF_CONFIG.lineHeight.tight + 4;
+
+        // Bullets
+        doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+        doc.setFontSize(PDF_CONFIG.fonts.sizes.bullets);
+        doc.setTextColor(...PDF_CONFIG.colors.black);
+
+        for (const bullet of job.bullets) {
+          // Check page break
+          if (y > PDF_CONFIG.page.height - 60) {
+            doc.addPage();
+            y = PDF_CONFIG.margins.top;
+          }
+
+          y = this.renderBullet(doc, bullet, y);
+        }
+
+        // Space between jobs
+        if (i < safeExp.length - 1) {
+          y += PDF_CONFIG.spacing.betweenJobs;
+        }
+      }
+
+      return y + PDF_CONFIG.spacing.beforeSection;
+    },
+
+    // ============ RENDER EDUCATION ============
+    // Education entries reach here unnormalised -- structureCVData passes
+    // tailoredContent.education or the candidate's own array through as it
+    // finds it -- so the graduation date arrives under whichever name that
+    // source used.
+    educationDates(edu) {
+      if (!edu) return '';
+      const one = edu.dates || edu.year || edu.graduationDate
+               || edu.graduation_date || edu.graduationYear || edu.date;
+      if (one) return this.sanitizeForPDF(String(one).trim());
+      const start = edu.startDate || edu.start_date || edu.startYear;
+      const end = edu.endDate || edu.end_date || edu.endYear;
+      if (start && end) return this.sanitizeForPDF(`${start} - ${end}`.trim());
+      return this.sanitizeForPDF(String(start || end || '').trim());
+    },
+
+    renderEducation(doc, education, startY) {
+      if (!education || education.length === 0) return startY;
+
+      let y = startY;
+      
+      // Check page break
+      if (y > PDF_CONFIG.page.height - 80) {
+        doc.addPage();
+        y = PDF_CONFIG.margins.top;
+      }
+
+      y = this.renderSectionTitle(doc, 'EDUCATION', y);
+
+      for (const edu of education) {
+        // Institution and degree on same line
+        doc.setFont(PDF_CONFIG.fonts.heading, 'bold');
+        doc.setFontSize(PDF_CONFIG.fonts.sizes.body);
+        doc.setTextColor(...PDF_CONFIG.colors.black);
+        
+        // Pipe, not an en dash: a delimiter resume parsers split on
+        // reliably, and pure ASCII so it cannot be corrupted.
+        const eduLine = [edu.degree, edu.institution].filter(Boolean).join(' | ');
+        doc.text(eduLine, PDF_CONFIG.margins.left, y);
+
+        // Graduation dates, right aligned -- the same shape as a job's
+        // dates. They used to be dropped: this renderer read only degree
+        // and institution, so whatever year the CV carried never reached
+        // the PDF and an ATS recorded a degree with no date against it.
+        // The field name varies by source, so accept the usual aliases.
+        const eduDates = this.educationDates(edu);
+
+        // GPA aligned right if present, otherwise the dates take that slot.
+        doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+        const rightText = edu.gpa ? `GPA: ${edu.gpa}` : eduDates;
+        let overflowed = false;
+        if (rightText) {
+          const rightWidth = doc.getTextWidth(rightText);
+          const rightX = PDF_CONFIG.page.width - PDF_CONFIG.margins.right - rightWidth;
+          // If the two would collide, the glyphs overlap on the page AND
+          // extract as one welded string. Drop to the next line instead.
+          if (rightX > PDF_CONFIG.margins.left + doc.getTextWidth(eduLine) + 12) {
+            doc.text(rightText, rightX, y);
+          } else {
+            y += PDF_CONFIG.fonts.sizes.body * PDF_CONFIG.lineHeight.tight;
+            doc.text(rightText, PDF_CONFIG.margins.left, y);
+            overflowed = true;
+          }
+        }
+        // A GPA took the right-hand slot, so the dates still need a home.
+        if (edu.gpa && eduDates) {
+          y += PDF_CONFIG.fonts.sizes.body * PDF_CONFIG.lineHeight.tight;
+          doc.text(eduDates, PDF_CONFIG.margins.left, y);
+          overflowed = true;
+        }
+
+        y += PDF_CONFIG.fonts.sizes.body
+           * (overflowed ? PDF_CONFIG.lineHeight.normal : PDF_CONFIG.lineHeight.relaxed);
+      }
+
+      return y + PDF_CONFIG.spacing.beforeSection;
+    },
+
+    // ============ RENDER CORE COMPETENCIES GRID ============
+    renderCoreCompetencies(doc, competencies, startY, data) {
+      if (!competencies || competencies.length === 0) return startY;
+
+      // Filter out soft-skill phrases containing "skills" — move them to Skills section
+      const softSkillPattern = /\bskills?\b/i;
+      const filtered = competencies.filter(c => !softSkillPattern.test(c));
+      const displaced = competencies.filter(c => softSkillPattern.test(c));
+      if (displaced.length > 0 && data && Array.isArray(data.skills)) {
+        // A plain Set compares exact strings, so "Communication Skills"
+        // displaced into a list already holding "communication skills"
+        // would print both. Match on shape, as the dedupe above does.
+        const seen = new Set(data.skills.map((s) => this.skillKey(s)));
+        for (const d of displaced) {
+          const k = this.skillKey(d);
+          if (k && !seen.has(k)) { seen.add(k); data.skills.push(d); }
+        }
+      }
+      competencies = filtered;
+      if (competencies.length === 0) return startY;
+
+      let y = startY;
+
+      if (y > PDF_CONFIG.page.height - 80) {
+        doc.addPage();
+        y = PDF_CONFIG.margins.top;
+      }
+
+      y = this.renderSectionTitle(doc, 'CORE COMPETENCIES', y);
+
+      // ONE COLUMN, ONE ITEM PER LINE.
+      //
+      // This was a three-column grid drawn with doc.text() at fixed x
+      // offsets, and it failed twice over.
+      //
+      //   UNREADABLE. Nothing constrained an item to its column width, so
+      //   any competency longer than a third of the page simply overprinted
+      //   the one beside it. On a phone, where the page is scaled down to
+      //   fit, that overlap is what the whole section looks like.
+      //
+      //   UNPARSEABLE. A PDF has no columns -- only glyphs at coordinates.
+      //   Extractors reconstruct lines by vertical position, so a three-up
+      //   grid comes out as each ROW run together: "Stakeholder management
+      //   Azure DevOps Agile delivery". An ATS reading that gets one long
+      //   nonsense skill instead of three real ones.
+      //
+      // One item per line is unambiguous to every parser -- the line break
+      // IS the delimiter -- and it reflows to any screen width.
+      const pageWidth = PDF_CONFIG.page.width - PDF_CONFIG.margins.left - PDF_CONFIG.margins.right;
+      const fontSize = PDF_CONFIG.fonts.sizes.body;
+      const lineHeight = fontSize * PDF_CONFIG.lineHeight.normal;
+      const BULLET = '- ';
+      const indent = doc.getStringUnitWidth(BULLET) * fontSize;
+
+      doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+      doc.setFontSize(fontSize);
+
+      for (const competency of competencies) {
+        const text = this.sanitizeForPDF(String(competency || '').trim());
+        if (!text) continue;
+        // Wrap rather than overflow. A long item now runs onto a second
+        // line, indented under the first, instead of over its neighbour.
+        const wrapped = doc.splitTextToSize(text, pageWidth - indent);
+        for (let n = 0; n < wrapped.length; n++) {
+          if (y > PDF_CONFIG.page.height - PDF_CONFIG.margins.bottom - lineHeight) {
+            doc.addPage();
+            y = PDF_CONFIG.margins.top;
+            doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+            doc.setFontSize(fontSize);
+          }
+          if (n === 0) {
+            doc.text(BULLET + wrapped[0], PDF_CONFIG.margins.left, y);
+          } else {
+            doc.text(wrapped[n], PDF_CONFIG.margins.left + indent, y);
+          }
+          y += lineHeight;
+        }
+      }
+
+      return y + PDF_CONFIG.spacing.beforeSection;
+    },
+
+    // ============ RENDER SKILLS ============
+    renderSkills(doc, skills, startY) {
+      if (!skills || skills.length === 0) return startY;
+
+      let y = startY;
+      
+      // Check page break
+      if (y > PDF_CONFIG.page.height - 60) {
+        doc.addPage();
+        y = PDF_CONFIG.margins.top;
+      }
+
+      y = this.renderSectionTitle(doc, 'TECHNICAL SKILLS', y);
+
+      // One comma-separated list. The cap was 25, set when this section
+      // held only the technical list; it now holds the competencies too,
+      // so the same cap would silently drop the tail of a list that
+      // printed in full yesterday. Raised by the nine competencies that
+      // moved into it -- a cap is still worth having, since a runaway
+      // list is a page of keywords rather than a CV.
+      const skillsText = skills.slice(0, 34).join(', ');
+      y = this.renderParagraph(doc, skillsText, y);
+
+      return y + PDF_CONFIG.spacing.beforeSection;
+    },
+
+    // ============ RENDER CERTIFICATIONS ============
+    renderCertifications(doc, certs, startY) {
+      if (!certs || certs.length === 0) return startY;
+
+      let y = startY;
+      
+      // Check page break
+      if (y > PDF_CONFIG.page.height - 60) {
+        doc.addPage();
+        y = PDF_CONFIG.margins.top;
+      }
+
+      y = this.renderSectionTitle(doc, 'CERTIFICATIONS', y);
+
+      const certsText = certs.join(', ');
+      y = this.renderParagraph(doc, certsText, y);
+
+      return y;
+    },
+
+    // ============ RENDER SECTION TITLE ============
+    renderSectionTitle(doc, title, y) {
+      // ██ DUPLICATE SECTION GUARD ██
+      if (!this._renderedSections) this._renderedSections = new Set();
+      const normalised = title.toUpperCase().trim();
+      if (this._renderedSections.has(normalised)) {
+        console.warn(`[PDFEngine] BLOCKED duplicate section header: "${title}"`);
+        return y; // Return unchanged y — skip this section
+      }
+      this._renderedSections.add(normalised);
+
+      doc.setFont(PDF_CONFIG.fonts.heading, 'bold');
+      doc.setFontSize(PDF_CONFIG.fonts.sizes.sectionTitle);
+      doc.setTextColor(...PDF_CONFIG.colors.black);
+      doc.text(title, PDF_CONFIG.margins.left, y);
+      
+      // Underline
+      const lineY = y + 2;
+      doc.setDrawColor(...PDF_CONFIG.colors.black);
+      doc.setLineWidth(0.5);
+      doc.line(
+        PDF_CONFIG.margins.left, 
+        lineY, 
+        PDF_CONFIG.page.width - PDF_CONFIG.margins.right, 
+        lineY
+      );
+
+      return y + PDF_CONFIG.fonts.sizes.sectionTitle + PDF_CONFIG.spacing.afterSectionTitle;
+    },
+
+    // ============ RENDER BULLET ============
+    renderBullet(doc, text, y) {
+      // Fold dashes and smart quotes here rather than trusting every caller.
+      text = this.sanitizeForPDF(text);
+      const leftMargin = PDF_CONFIG.margins.left;
+      const bulletIndent = PDF_CONFIG.bulletIndent;
+      const contentWidth = PDF_CONFIG.page.width - leftMargin - PDF_CONFIG.margins.right - bulletIndent - 10;
+      
+      // Render bullet character
+      doc.text(PDF_CONFIG.bullet, leftMargin, y);
+      
+      // Wrap text
+      const lines = doc.splitTextToSize(text, contentWidth);
+      doc.text(lines, leftMargin + bulletIndent + 4, y);
+      
+      return y + (lines.length * PDF_CONFIG.fonts.sizes.bullets * PDF_CONFIG.lineHeight.normal) + PDF_CONFIG.spacing.betweenBullets;
+    },
+
+    // ============ RENDER PARAGRAPH ============
+    renderParagraph(doc, text, y) {
+      text = this.sanitizeForPDF(text);
+      const leftMargin = PDF_CONFIG.margins.left;
+      const contentWidth = PDF_CONFIG.page.width - leftMargin - PDF_CONFIG.margins.right;
+      
+      doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+      doc.setFontSize(PDF_CONFIG.fonts.sizes.body);
+      doc.setTextColor(...PDF_CONFIG.colors.black);
+      
+      const lines = doc.splitTextToSize(text, contentWidth);
+      doc.text(lines, leftMargin, y);
+      
+      return y + (lines.length * PDF_CONFIG.fonts.sizes.body * PDF_CONFIG.lineHeight.normal) + PDF_CONFIG.spacing.paragraphGap;
+    },
+
+    // ============ COVER LETTER RENDERING ============
+    renderCoverHeader(doc, candidateData, startY, jobData = null) {
+      const pageWidth = PDF_CONFIG.page.width;
+      let y = startY;
+
+      const contact = this.extractContact(candidateData, jobData);
+
+      // Name
+      doc.setFont(PDF_CONFIG.fonts.heading, 'bold');
+      doc.setFontSize(PDF_CONFIG.fonts.sizes.name);
+      doc.setTextColor(...PDF_CONFIG.colors.black);
+      doc.text(contact.name, PDF_CONFIG.margins.left, y);
+      y += PDF_CONFIG.fonts.sizes.name * 0.8 + 4;
+
+      // Contact info - REORDERED: Dublin, IE | Phone | Email | [Extracted Job Location]
+      doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+      doc.setFontSize(PDF_CONFIG.fonts.sizes.contact);
+      doc.setTextColor(...PDF_CONFIG.colors.darkGray);
+
+      // Same header as the CV, for the same reasons. This carried the
+      // /^Dublin,? IE$/ literal too, so a Dublin job had its location
+      // silently dropped while every other city kept it -- and the
+      // candidate's own location was missing entirely, though the DOCX
+      // cover letter has always printed it. A recruiter reads both
+      // documents; they should not disagree about where the applicant
+      // is.
+      const candidateLocationCL = contact.location || 'Dublin, IE';
+      const sameLocCL = (a, b) => String(a || '').replace(/[^a-z0-9]/gi, '').toLowerCase()
+        === String(b || '').replace(/[^a-z0-9]/gi, '').toLowerCase();
+      let cleanLocCL = contact.extractedJobLocation
+        ? String(contact.extractedJobLocation).replace(/\bopen\s+to\s+relocation\b/gi, '').trim()
+        : '';
+      if (sameLocCL(cleanLocCL, candidateLocationCL)) cleanLocCL = '';
+      const contactParts2 = [candidateLocationCL, contact.phone, contact.email, cleanLocCL].filter(Boolean);
+      doc.text(contactParts2.join('  |  '), PDF_CONFIG.margins.left, y);
+      y += PDF_CONFIG.fonts.sizes.contact * PDF_CONFIG.lineHeight.normal + 2;
+
+      // Portfolio link line (prominent placement for cover letter header) - WITH HYPERLINK
+      if (contact.portfolio) {
+        doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+        doc.setFontSize(PDF_CONFIG.fonts.sizes.contact);
+        doc.setTextColor(0, 0, 180);
+        const portfolioUrl = contact.portfolio.startsWith('http') ? contact.portfolio : 'https://' + contact.portfolio;
+        const portfolioText = contact.portfolio;
+        doc.text(portfolioText, PDF_CONFIG.margins.left, y);
+        const textWidth = doc.getTextWidth(portfolioText);
+        const fontSize = PDF_CONFIG.fonts.sizes.contact;
+        doc.link(PDF_CONFIG.margins.left, y - fontSize * 0.8, textWidth, fontSize, { url: portfolioUrl });
+        doc.setDrawColor(0, 0, 180);
+        doc.setLineWidth(0.3);
+        doc.line(PDF_CONFIG.margins.left, y + 0.5, PDF_CONFIG.margins.left + textWidth, y + 0.5);
+        doc.setTextColor(...PDF_CONFIG.colors.darkGray);
+        y += PDF_CONFIG.fonts.sizes.contact * PDF_CONFIG.lineHeight.normal + 2;
+      } else {
+        y += 2;
+      }
+
+      // Date
+      doc.setTextColor(...PDF_CONFIG.colors.black);
+      const today = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+      doc.text(today, PDF_CONFIG.margins.left, y);
+      y += PDF_CONFIG.fonts.sizes.contact * PDF_CONFIG.lineHeight.normal + 34;
+
+      return y;
+    },
+
+    // FIX 02-02-26: ROBUST Company Name Extraction with 100% ACCURACY GUARANTEE
+    // CRITICAL: This function MUST return a valid company name, NEVER "Company" or empty for cover letters
+    extractCompanyName(jobData) {
+      if (!jobData) return 'the hiring organization';
+      
+      let company = jobData.company || '';
+      
+      // Extended list of invalid placeholder values
+      const invalidNames = [
+        'company', 'the company', 'your company', 'hiring team', 'organization', 
+        'organisation', 'employer', 'n/a', 'unknown', 'hiring company', 'the hiring company',
+        '[company]', '{company}', '{{company}}', 'company name', '[company name]'
+      ];
+      
+      const isInvalid = (val) => {
+        if (!val || typeof val !== 'string') return true;
+        const lower = val.toLowerCase().trim();
+        return invalidNames.includes(lower) || lower.length < 2;
+      };
+      
+      // STRATEGY 1: Check companyName / employer alternate fields
+      if (isInvalid(company)) {
+        company = jobData.companyName || jobData.employer || '';
+      }
+      
+      // STRATEGY 2: Check recipientCompany field from AI response
+      if (isInvalid(company) && jobData.recipientCompany) {
+        company = jobData.recipientCompany;
+      }
+      
+      // STRATEGY 3: Extract from job title (e.g., "Software Engineer at Finyard")
+      if (isInvalid(company)) {
+        const titleMatch = (jobData.title || '').match(/\bat\s+([A-Z][A-Za-z0-9\s&.\-]+?)(?:\s*[-|–—]|\s*$)/i);
+        if (titleMatch) company = titleMatch[1].trim();
+      }
+      
+      // STRATEGY 4: Extract from URL subdomain (e.g., okx.greenhouse.io → OKX)
+      if (isInvalid(company)) {
+        const url = jobData.url || '';
+        const hostMatch = url.match(/https?:\/\/([^.\/]+)\./i);
+        if (hostMatch && hostMatch[1]) {
+          const subdomain = hostMatch[1].toLowerCase();
+          const blacklist = ['www', 'apply', 'jobs', 'careers', 'boards', 'job-boards', 'hire', 
+                            'greenhouse', 'lever', 'workday', 'smartrecruiters', 'icims', 'taleo',
+                            'myworkdayjobs', 'recruiting', 'career', 'employment'];
+          if (!blacklist.includes(subdomain) && subdomain.length > 2 && subdomain.length < 30) {
+            // Use uppercase for short company names (OKX, IBM, etc.)
+            company = subdomain.toUpperCase().length <= 4 ? subdomain.toUpperCase() : subdomain.charAt(0).toUpperCase() + subdomain.slice(1);
+          }
+        }
+      }
+      
+      // STRATEGY 5: Extract from URL path (e.g., /finyard/jobs/...)
+      if (isInvalid(company)) {
+        const url = jobData.url || '';
+        const pathMatch = url.match(/\/([a-zA-Z][a-zA-Z0-9\-]{2,30})\/(?:jobs?|careers?|apply|positions?)/i);
+        if (pathMatch && pathMatch[1]) {
+          const pathSegment = pathMatch[1].toLowerCase();
+          const blacklist = ['www', 'apply', 'jobs', 'careers', 'boards'];
+          if (!blacklist.includes(pathSegment)) {
+            company = pathSegment.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+          }
+        }
+      }
+      
+      // STRATEGY 6: Use siteName from stored metadata
+      if (isInvalid(company) && jobData.siteName && !isInvalid(jobData.siteName)) {
+        company = jobData.siteName;
+      }
+      
+      // Clean up company name
+      if (company && typeof company === 'string') {
+        company = company
+          .replace(/\s*(careers|jobs|hiring|apply|work|join|inc\.?|ltd\.?|llc\.?)\s*$/i, '')
+          .replace(/\(formerly[^)]*\)/gi, '') // Remove "(formerly X)" suffixes
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+      
+      // CRITICAL: NEVER return empty or invalid - use intelligent fallback
+      if (isInvalid(company)) {
+        console.warn('[ProfessionalPDFEngine] ⚠️ Could not extract company name, using fallback');
+        return 'the hiring organization';
+      }
+      
+      console.log(`[ProfessionalPDFEngine] ✅ Extracted company name: "${company}"`);
+      return company;
+    },
+
+    renderRecipientInfo(doc, jobData, candidateData, y) {
+      doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+      doc.setFontSize(PDF_CONFIG.fonts.sizes.body);
+      doc.setTextColor(...PDF_CONFIG.colors.black);
+
+      // Portfolio URL replaces company name line
+      const portfolio = candidateData?.portfolio || '';
+      if (portfolio) {
+        const displayUrl = portfolio.replace(/^https?:\/\//i, '').replace(/\/$/, '');
+        doc.text(displayUrl, PDF_CONFIG.margins.left, y);
+        y += PDF_CONFIG.fonts.sizes.body * PDF_CONFIG.lineHeight.normal + 6;
+      }
+
+      // Re: Job Title
+      const jobTitle = jobData?.title || 'the open position';
+      doc.setFont(PDF_CONFIG.fonts.body, 'bold');
+      doc.text(`Re: ${jobTitle}`, PDF_CONFIG.margins.left, y);
+      doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+      y += PDF_CONFIG.fonts.sizes.body * PDF_CONFIG.lineHeight.normal + 12;
+
+      return y;
+    },
+
+    // FIX 02-02-26: Sanitize cover letter content to remove any standalone "Company" placeholder
+    sanitizeCoverLetterContent(content) {
+      if (!content || typeof content !== 'string') return content;
+      
+      // Remove standalone "Company" lines (case insensitive)
+      let sanitized = content
+        .replace(/^Company$/gm, '')           // Exact "Company" on its own line
+        .replace(/^\s*Company\s*$/gm, '')     // "Company" with whitespace
+        .replace(/\nCompany\n/gi, '\n')       // "Company" between newlines
+        .replace(/\n\s*Company\s*\n/gi, '\n') // "Company" with whitespace between newlines
+        .replace(/^Company\s*\n/gi, '')       // "Company" at start
+        .replace(/\n\s*Company\s*$/gi, '')    // "Company" at end
+        .replace(/\n\n\n+/g, '\n\n');         // Collapse multiple empty lines
+      
+      // Also replace placeholder patterns like [Company], {Company}, etc.
+      sanitized = sanitized
+        .replace(/\[Company\]/gi, 'the hiring organization')
+        .replace(/\{Company\}/gi, 'the hiring organization')
+        .replace(/\{\{Company\}\}/gi, 'the hiring organization');
+      
+      return sanitized.trim();
+    },
+
+    renderCoverBody(doc, content, y) {
+      doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+      doc.setFontSize(PDF_CONFIG.fonts.sizes.body);
+      doc.setTextColor(...PDF_CONFIG.colors.black);
+
+      const contentWidth = PDF_CONFIG.page.width - PDF_CONFIG.margins.left - PDF_CONFIG.margins.right;
+      
+      // FIX 02-02-26: Sanitize content to remove any "Company" placeholder lines
+      const sanitizedContent = this.sanitizeCoverLetterContent(content);
+      
+      // Split into paragraphs
+      const paragraphs = sanitizedContent.split(/\n\n+/).filter(Boolean);
+      
+      for (const para of paragraphs) {
+        // Skip any paragraph that is just "Company" (final safety check)
+        if (para.trim().toLowerCase() === 'company') continue;
+        
+        const lines = doc.splitTextToSize(para.trim(), contentWidth);
+        
+        // Check page break
+        if (y + (lines.length * PDF_CONFIG.fonts.sizes.body * PDF_CONFIG.lineHeight.normal) > PDF_CONFIG.page.height - 80) {
+          doc.addPage();
+          y = PDF_CONFIG.margins.top;
+        }
+        
+        doc.text(lines, PDF_CONFIG.margins.left, y);
+        y += (lines.length * PDF_CONFIG.fonts.sizes.body * PDF_CONFIG.lineHeight.relaxed) + 10;
+      }
+
+      return y;
+    },
+
+    renderSignature(doc, candidateData, y) {
+      y += 20;
+      
+      doc.setFont(PDF_CONFIG.fonts.body, 'normal');
+      doc.setFontSize(PDF_CONFIG.fonts.sizes.body);
+      doc.setTextColor(...PDF_CONFIG.colors.black);
+
+      doc.text('Yours sincerely,', PDF_CONFIG.margins.left, y);
+      y += PDF_CONFIG.fonts.sizes.body * PDF_CONFIG.lineHeight.normal + 20;
+
+      const firstName = candidateData?.firstName || candidateData?.first_name || '';
+      const lastName = candidateData?.lastName || candidateData?.last_name || '';
+      const name = `${firstName} ${lastName}`.trim() || 'Applicant';
+      
+      doc.setFont(PDF_CONFIG.fonts.heading, 'bold');
+      doc.text(name, PDF_CONFIG.margins.left, y);
+
+      return y;
+    },
+
+    // ============ UTILITY METHODS ============
+    sanitizeFilename(name) {
+      return name.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '') || 'Applicant';
+    },
+
+    // ============ SANITISE TEXT FOR THE PDF ============
+    // Two call sites referenced this and it was never defined, so every
+    // CV carrying a CORE COMPETENCIES section threw TypeError and
+    // generateCV returned success:false -- the whole document, not just
+    // the section.
+    //
+    // It earns its place beyond fixing the crash. jsPDF's built-in fonts
+    // are WinAnsi, so a smart quote or an em dash pasted in from a job
+    // description is written as a byte the font has no glyph for: it
+    // renders as garbage on the page and extracts as garbage into an ATS.
+    // Folding those to ASCII is what keeps the text clean.
+    sanitizeForPDF(text) {
+      if (text === null || text === undefined) return '';
+      return String(text)
+        .replace(/[\u2018\u2019\u201A\u201B]/g, "'")        // curly single quotes
+        .replace(/[\u201C\u201D\u201E\u201F]/g, '"')        // curly double quotes
+        .replace(/[\u2010-\u2015\u2212]/g, '-')              // hyphens, en/em dashes, minus
+        .replace(/[\u2022\u2023\u25E6\u2043]/g, '-')        // stray bullet glyphs
+        .replace(/\u2026/g, '...')                            // ellipsis
+        .replace(/[\u00A0\u2007\u202F]/g, ' ')               // non-breaking spaces
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')               // zero-width joiners
+        .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '')   // control characters
+        .replace(/\t/g, ' ')                                  // a tab has no meaning here
+        .replace(/[ ]{2,}/g, ' ')
+        .trim();
+    },
+
+    // ============ CHECK PAGE OVERFLOW ============
+    checkPageBreak(doc, y, requiredHeight = 60) {
+      if (y + requiredHeight > PDF_CONFIG.page.height - PDF_CONFIG.margins.bottom) {
+        doc.addPage();
+        return PDF_CONFIG.margins.top;
+      }
+      return y;
+    }
+  };
+
+  // Export
+  global.ProfessionalPDFEngine = ProfessionalPDFEngine;
+  
+  console.log('[ProfessionalPDFEngine] v3.0 loaded');
+
+})(typeof window !== 'undefined' ? window : this);

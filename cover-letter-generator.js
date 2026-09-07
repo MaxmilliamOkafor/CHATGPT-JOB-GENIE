@@ -1,0 +1,1053 @@
+// cover-letter-generator.js - Professional Cover Letter Generator v3.0
+// Creates tailored cover letters with proper business letter formatting
+// Features: Template system, NATURAL keyword integration (lighter than CV - not for ATS), tone matching
+// Based on PERFECT WORKS cover letter logic
+
+(function(global) {
+  'use strict';
+
+  // ============ COVER LETTER TEMPLATES (v3.0. rewritten for AI-detection resistance) ============
+  // Each template uses varied sentence structures, avoids formulaic openers,
+  // mixes sentence lengths, and sounds like a real person wrote it.
+  const TEMPLATES = {
+    professional: {
+      name: 'Professional',
+      opening: [
+        'Your {jobTitle} listing caught my attention because the day-to-day work maps closely to what I have been doing for the past few years in {domain}. Rather than list qualifications, I would rather explain why I think this is a good match.',
+        'I spotted the {jobTitle} role at {company} and wanted to apply straight away. The requirements read like a summary of the work I do best, and I think there is a real fit here.',
+        'The {jobTitle} position at {company} stood out to me. I have spent my career solving the kinds of problems described in the listing, and I would like the chance to do the same for your team.',
+        'I am writing about the {jobTitle} opening at {company}. Having worked in {domain} for a while now, the brief felt like something written with my background in mind.',
+        'When I read through the {jobTitle} brief at {company}, two things were clear: the work is technically interesting and the requirements overlap with what I already do well. That is why I am applying.',
+        'I would like to apply for the {jobTitle} role at {company}. The scope of the position fits squarely with the type of {domain} work I have been doing, and I think I can bring something useful to the team.',
+        'I came across the {jobTitle} position at {company} and it caught my eye. The problems you are trying to solve are the same ones I have been working on, and I think I could add real value.'
+      ],
+      bridge: [
+        'I have spent roughly {yearsExp} years working in {domain}. During that time I have picked up the technical skills the role asks for, but more importantly I have learned how to get things shipped on time and to a standard I am proud of.',
+        'My background is {yearsExp} years in {domain}, mostly spent building things, fixing things, and figuring out how to do both faster. I have worked with senior stakeholders and know how to turn their priorities into actual delivered work.',
+        'Over the past {yearsExp} years I have worked across several {domain} roles. Each one taught me something different, but the common thread has been taking on hard problems and delivering outcomes people could point to.',
+        'I have {yearsExp} years of {domain} experience. What that really means is I have had enough time to learn what works, what does not, and how to tell the difference quickly.',
+        'Across {yearsExp} years in {domain}, I have gone from writing code to running projects to mentoring others who now do both. The technical and people sides of the work come naturally to me at this point.',
+        'My {yearsExp} years in {domain} have given me a good mix of hands-on technical ability and the softer skills you need when working with clients, leadership, or teams under pressure.'
+      ],
+      closing: [
+        'I would be happy to chat about how my background fits the role. Thank you for reading this far.',
+        'If the above sounds like a fit, I am free to talk whenever works for you. Thanks for considering me.',
+        'I hope this gives a good sense of what I can bring. I am available to discuss the role at your convenience. Thank you.',
+        'Happy to go into more detail on any of the above. Thanks for your time, and I hope to hear from you.',
+        'I think there is a strong match here and I would enjoy the chance to prove it. Thank you for your time.',
+        'Thanks for taking the time to read this. I am around whenever suits for a conversation about the role.'
+      ]
+    },
+    enthusiastic: {
+      name: 'Enthusiastic',
+      opening: [
+        'I got genuinely excited when I saw the {jobTitle} position at {company}. Not in a vague way. The specific problems listed in the brief are exactly what I spend my days thinking about.',
+        'The {jobTitle} role at {company} is the kind of thing I have been looking for. The technical scope is interesting, the team looks strong, and the work itself matters. I wanted to apply before someone else snapped it up.',
+        'I have been following {company} for a while, so when the {jobTitle} opening came up it felt like the right moment to put my hand up. The role matches what I do well and what I want to do next.',
+        'I want to apply for the {jobTitle} at {company}. Honestly, it is not often that a job description makes me stop scrolling, but this one did. The work is exactly the kind of challenge I enjoy.',
+        'The {jobTitle} listing at {company} immediately grabbed me. I have spent {yearsExp} years doing similar work in {domain}, and the idea of doing it at {company} is very appealing.',
+        'I read the {jobTitle} brief at {company} twice because I wanted to make sure it was as good a fit as it seemed on first read. It is. I would love to be considered.'
+      ],
+      bridge: [
+        'I have {yearsExp} years in {domain} and still genuinely enjoy the work. I like the process of taking a messy problem, working out the moving parts, and building something that actually solves it.',
+        'Over {yearsExp} years in {domain}, I have picked up a lot of the technical skills this role needs. But what I think sets me apart is how much I care about getting the details right while still moving quickly.',
+        'My {yearsExp} years in {domain} have been busy ones. I have built systems, led teams, shipped products, and made plenty of mistakes I have since learned from. That mix of experience is what I am bringing here.',
+        'I have been working in {domain} for {yearsExp} years now. In that time I have learned that the best outcomes come from a mix of technical skill, clear communication, and genuine curiosity about the problem.',
+        'What I have learned across {yearsExp} years in {domain} is that good work comes from understanding both the technology and the people it serves. I bring that perspective to everything I do.',
+        'After {yearsExp} years in {domain}, I still get energised by the work. I like building things that matter, fixing things that are broken, and helping teams do both faster.'
+      ],
+      closing: [
+        'I would really like the chance to talk about this role. Even a short conversation would let me show you what I can bring. Thank you for your time.',
+        'If any of this sounds like it could be a fit, I am keen to chat. Thanks for reading, and I hope to speak with you soon.',
+        'I think I could do great things at {company} and I would jump at the chance to prove it. Thanks for considering me.',
+        'I appreciate you taking the time to read this. If there is a fit, I am ready to move quickly. I hope to hear from you.',
+        'I am genuinely interested in this opportunity. Happy to discuss further whenever works for your team. Thank you.',
+        'Thank you for considering me. I would love to chat about how I can contribute to what {company} is building.'
+      ]
+    },
+    concise: {
+      name: 'Concise',
+      opening: [
+        'I am applying for the {jobTitle} role at {company}. The requirements map to my {domain} background and I think I can do this job well.',
+        'Writing to apply for the {jobTitle} at {company}. My {domain} experience covers what the role needs.',
+        'I would like to be considered for the {jobTitle} position at {company}. My background fits the brief.',
+        'Applying for the {jobTitle} at {company}. I have the right experience and want to put it to use here.',
+        'I am interested in the {jobTitle} at {company}. The role suits my {domain} skills and the work sounds interesting.',
+        'Please consider me for the {jobTitle} at {company}. I have done this type of work before and done it well.'
+      ],
+      bridge: [
+        '{yearsExp} years in {domain}. I have built things, shipped things, and know how to deliver under pressure.',
+        'My background: {yearsExp} years in {domain}, with a clear record of getting work done well and on time.',
+        'I bring {yearsExp} years of {domain} work. Technical skills, delivery experience, and the ability to work with anyone.',
+        '{yearsExp} years in {domain}. I know the tools, I know the patterns, and I know how to deliver.',
+        'Quick summary: {yearsExp} years in {domain}. Strong technically, good with people, and I get things finished.',
+        'I have {yearsExp} years in {domain}. Enough to know what good looks like and how to get there quickly.'
+      ],
+      closing: [
+        'Happy to discuss. Thank you for your time.',
+        'Available to talk whenever works for you. Thanks.',
+        'I would appreciate a conversation about the role. Thank you.',
+        'Thanks for considering me. I am free to chat at your convenience.',
+        'Looking forward to hearing from you. Thank you.',
+        'Let me know if you would like to talk further. Thanks for your time.'
+      ]
+    }
+  };
+
+  // ============ ACHIEVEMENT PHRASES (UK English, no banned words) ============
+  const ACHIEVEMENT_VERBS = [
+    'Led', 'Developed', 'Implemented', 'Architected', 'Delivered',
+    'Directed', 'Drove', 'Increased', 'Reduced', 'Optimised',
+    'Built', 'Launched', 'Set up', 'Designed', 'Shipped'
+  ];
+
+  // v3.0: Natural keyword connectors. sound like a person mentioning their skills
+  const KEYWORD_PHRASES = [
+    'especially around',
+    'mainly in',
+    'including',
+    'particularly',
+    'a lot of it involving',
+    'with a focus on',
+    'hands-on with',
+    'working directly with',
+    'day-to-day with',
+    'most recently in',
+    'covering',
+    'across areas like'
+  ];
+
+  // ============ COVER LETTER GENERATOR ============
+  // ============ A SCRAPED COMPANY NAME IS NOT A COMPANY NAME ============
+  //
+  // A generated cover letter went out addressed to "Career2": "I am
+  // writing to express my interest in the Integration Engineer position
+  // at Career2." That is site chrome -- a careers-portal label with a
+  // digit on it -- scraped and used as the employer.
+  //
+  // The existing checks are exact matches against a list of generic
+  // words, so "company" and "employer" are caught and "Career2",
+  // "Careers", "Jobs2", "Apply" and "Workday" all pass. The shape is
+  // what gives them away, not the exact string, so this matches the
+  // shape:
+  //
+  //   * portal and navigation words, with or without a trailing digit
+  //     or punctuation: Career2, Careers, Jobs, Apply, Portal, Home
+  //   * the ATS VENDOR rather than the employer. Workday and Greenhouse
+  //     host the page; they are not who you would be working for, and
+  //     addressing a letter to them is worse than addressing nobody.
+  //   * anything with no letters in it at all
+  //
+  // Getting this wrong in the other direction matters too, so real
+  // employers whose names contain these words are protected by requiring
+  // the junk word to be the WHOLE name: "Career Group Companies" and
+  // "Jobs Ireland" are left alone.
+  const _JUNK_COMPANY = new RegExp(
+    '^(?:'
+    + 'careers?|jobs?|vacancy|vacancies|opportunit(?:y|ies)|openings?|'
+    + 'apply|application|applications|recruit(?:ing|ment)?|hiring|'
+    + 'portal|home|search|login|signin|sign-in|register|welcome|'
+    + 'workday|myworkdayjobs|taleo|greenhouse|lever|icims|successfactors|'
+    + 'brassring|smartrecruiters|jobvite|bamboohr|ashby|workable'
+    + ')[\\s._-]*\\d*$', 'i');
+
+  function _isJunkCompany(name) {
+    const v = String(name == null ? '' : name).trim();
+    if (!v) return true;
+    if (!/[a-z]/i.test(v)) return true;          // digits or symbols only
+    return _JUNK_COMPANY.test(v);
+  }
+
+  const CoverLetterGenerator = {
+
+    // ============ MAIN GENERATE FUNCTION ============
+    generate(candidateData, jobData, keywords, options = {}) {
+      const startTime = performance.now();
+      console.log('[CoverLetterGenerator] v3.0 Generating cover letter with natural keyword injection...');
+
+      const {
+        template = 'professional',
+        maxWords = 400,
+        includeMetrics = true,
+        topKeywordsCount = 10 // Increased for cover letter natural flow
+      } = options;
+
+      // v3.3: Smart auto-tone selection based on job title/company signals
+      // If user passes 'auto' or no template, pick the best tone for the role
+      if (!template || template === 'auto') {
+        template = this.autoSelectTone(jobData);
+        console.log(`[CoverLetterGenerator] Auto-selected tone: ${template}`);
+      }
+
+      // Get template
+      const templateConfig = TEMPLATES[template] || TEMPLATES.professional;
+
+      // Extract data
+      const firstName = candidateData?.firstName || candidateData?.first_name || 'Applicant';
+      const lastName = candidateData?.lastName || candidateData?.last_name || '';
+      const fullName = `${firstName} ${lastName}`.trim();
+      
+      const jobTitle = jobData?.title || 'the position';
+      // FIX 02-02-26: CRITICAL - Never use generic "Company" placeholder
+      // Use extractCompanyName with aggressive validation
+      let company = this.extractCompanyName(jobData);
+      
+      // Extended validation - NEVER allow these placeholder values
+      const invalidCompanyNames = [
+        'company', 'your company', 'the company', 'hiring team', 'the hiring team',
+        'organization', 'the organization', 'n/a', 'unknown', '', 'employer'
+      ];
+      
+      if (!company || invalidCompanyNames.includes(company.toLowerCase().trim())
+          || _isJunkCompany(company)) {
+        console.warn(`[CoverLetterGenerator] ⚠️ Invalid company "${company}", using fallback`);
+        company = 'the hiring organization';
+      }
+      
+      console.log(`[CoverLetterGenerator] Using company name: "${company}" for cover letter`);
+      const domain = this.extractDomain(candidateData);
+      const yearsExp = this.calculateYearsExperience(candidateData);
+
+      // Get top keywords - ROBUST handling
+      const topKeywords = this.getTopKeywords(keywords, topKeywordsCount);
+      console.log(`[CoverLetterGenerator] Using ${topKeywords.length} keywords for natural injection`);
+
+      // Build cover letter sections WITH keyword injection
+      // Every token this template family uses, not just the two the
+      // opening was assumed to need. Seven of the opening variants also
+      // reference {yearsExp} and {domain}, and replacePlaceholders only
+      // substitutes the keys it is handed -- so those openings shipped
+      // the literal text "I have spent {yearsExp} years doing similar
+      // work in {domain}" to recruiters. Half of all generated letters
+      // carried a raw token.
+      // ...and where a value is genuinely unknown, drop the variants
+      // that need it rather than rendering a gap.
+      let openings = templateConfig.opening;
+      if (!(yearsExp && String(yearsExp).trim())) {
+        const noYears = openings.filter((s) => !/\{yearsExp\}/.test(s));
+        if (noYears.length) openings = noYears;
+      }
+      // Prefer an opening that names the employer. Several variants use
+      // only {jobTitle} and {domain}, and when one of those was drawn the
+      // company appeared exactly once in the whole letter -- in the merge
+      // field at the close -- which reads like precisely what it is.
+      if (company) {
+        const named = openings.filter((s) => /\{company\}/.test(s));
+        if (named.length) openings = named;
+      }
+      let opening = this.selectRandom(openings, { jobTitle, company, yearsExp, domain });
+      let bridge = this.buildBridgeWithKeywords(templateConfig.bridge, { yearsExp, domain }, topKeywords);
+      let body = this.buildBodyWithKeywords(candidateData, jobData, topKeywords, includeMetrics);
+      let closing = this.buildClosingWithKeywords(templateConfig.closing, { company }, topKeywords);
+
+      // === Career Boost (cover letter only): blend a JD-specific hook into
+      // the opener, and merge ONE gap-bridge sentence into the body when
+      // the candidate's CV shows clear adjacent experience.  Skipped
+      // silently if the engine is missing, the JD is too short, or the
+      // caller passes `useCareerBoost: false`.  Pure text ops, <10ms. ===
+      const useCareerBoost = options.useCareerBoost !== false;
+      let gapBridgeLine = '';
+      if (useCareerBoost && typeof CareerBoostEngine !== 'undefined') {
+        try {
+          const jdText = jobData?.description || jobData?.jdText || jobData?.text || '';
+          if (jdText && jdText.length > 80) {
+            const hook = CareerBoostEngine.extractJdHook(jdText, company);
+            // Only insert hooks when we have a high-signal one (named team,
+            // product, mission, or stated challenge). Stack/fallback hooks
+            // tend to read as filler so we drop them.
+            if (hook && ['team', 'team-prefix', 'product', 'mission', 'challenge', 'milestone'].includes(hook.kind)) {
+              opening = `${opening.replace(/[.\s]+$/, '')}. ${hook.hook.charAt(0).toUpperCase() + hook.hook.slice(1)} is what made me want to apply rather than scroll past.`;
+            }
+
+            const cvText = candidateData?.cvText || candidateData?.rawCV || candidateData?.resumeText || '';
+            // Only add a gap bridge when we found a STRONG adjacency. We
+            // skip the defensive "if X is a hard requirement..." fallback
+            // because it weakens the letter.
+            if (cvText && cvText.length > 60) {
+              const { gaps } = CareerBoostEngine.analyzeGaps(jdText, cvText, { maxGaps: 1 });
+              if (gaps.length && gaps[0].hasAdjacent) {
+                gapBridgeLine = gaps[0].bridge;
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[CoverLetterGenerator] Career boost augmentation skipped:', e.message);
+        }
+      }
+      if (gapBridgeLine) {
+        // Merge the bridge into the body as a continuation, not a new
+        // paragraph -- avoids the "bolted-on" feel.
+        //
+        // This read `Body` (capital B) and nothing declares it. Under the
+        // 'use strict' at the top of this file that is a ReferenceError,
+        // not a silent global -- so every letter where CareerBoost found a
+        // strong adjacency threw out of generate() instead of returning.
+        // The gap bridge is the sentence that connects what the candidate
+        // has done to what the posting asks for, so the one case it was
+        // written for was the one case that crashed.
+        body = `${body.replace(/\s+$/, '')} ${gapBridgeLine}`;
+      }
+
+      // Spelling follows the posting's country for the same reason the CV's
+      // does: literal ATS keyword matching does not know that "optimise"
+      // and "optimization" are one word. Falls back to UK, which is what
+      // this always did. Declared out here because the final whole-letter
+      // pass further down is a separate block and needs it too.
+      const _spelling = (typeof RegionalFormat !== 'undefined')
+        ? RegionalFormat.resolveRegion(
+            jobData?.location || jobData?.jobLocation || '',
+            candidateData?.location || ''
+          ).spelling
+        : 'UK';
+
+      // CRITICAL: Apply ContentQualityEngine sanitisation for spelling and anti-AI detection
+      if (typeof ContentQualityEngine !== 'undefined') {
+        // removePronouns MUST be off here. It defaults to true -- a CV
+        // bullet convention, where "I" is implied -- and these four calls
+        // omitted it, so every paragraph was stripped before the final
+        // pass on line 263 correctly turned it off. A cover letter is
+        // first-person by nature, and the result was sentences like
+        // "At Meta was Software Engineer" and "One thing am particularly
+        // proud of" going out to recruiters.
+        const letterOpts = { removePronouns: false, spelling: _spelling };
+        opening = ContentQualityEngine.sanitiseContent(opening, letterOpts);
+        bridge = ContentQualityEngine.sanitiseContent(bridge, letterOpts);
+        body = ContentQualityEngine.sanitiseContent(body, letterOpts);
+        closing = ContentQualityEngine.sanitiseContent(closing, letterOpts);
+        console.log('[CoverLetterGenerator] Applied ContentQualityEngine sanitisation');
+      }
+
+      // Assemble full cover letter
+      const paragraphs = [
+        `Dear Hiring Manager,`,
+        '',
+        opening,
+        '',
+        bridge,
+        '',
+        body,
+        '',
+        closing,
+        '',
+        'Yours sincerely,',
+        fullName
+      ];
+
+      let coverLetter = paragraphs.join('\n');
+
+      // Final sanitisation pass on complete letter
+      if (typeof ContentQualityEngine !== 'undefined') {
+        coverLetter = ContentQualityEngine.sanitiseContent(coverLetter, { removePronouns: false, spelling: _spelling });
+      }
+
+      // === Recruiter Audit: post-process pass.  Strips empty buzzword
+      // phrases, mirrors JD vocabulary, ensures the JD job title appears
+      // in the opener.  Skipped silently if the audit module is missing.
+      // Pure text ops, ~5ms. ===
+      let auditReport = null;
+      if (options.recruiterAudit !== false && typeof RecruiterAudit !== 'undefined') {
+        try {
+          const audited = RecruiterAudit.runRecruiterAudit({
+            cvText: '',
+            coverLetterText: coverLetter,
+            jdText: jobData?.description || jobData?.jdText || jobData?.text || '',
+            jdTitle: jobTitle,
+            candidateName: fullName,
+            flags: { firstSixSeconds: false, quantification: false }, // CV-only checks; skip for letter
+          });
+          coverLetter = audited.coverLetterText;
+          auditReport = audited.report;
+        } catch (e) {
+          console.warn('[CoverLetterGenerator] Recruiter audit skipped:', e.message);
+        }
+      }
+
+      // Last line of defence. Whatever template is added later, and
+      // whatever tokens it references, nothing shaped like {token} is
+      // allowed out of here -- it is addressed to a person, and a raw
+      // placeholder is the single most damaging thing a generated letter
+      // can contain. The tidy-up afterwards keeps the sentence readable
+      // rather than leaving a double space or a stranded comma.
+      if (/\{[A-Za-z][A-Za-z0-9_]*\}/.test(coverLetter)) {
+        console.warn('[CoverLetterGenerator] Unresolved template token(s) removed:',
+          [...new Set(coverLetter.match(/\{[A-Za-z][A-Za-z0-9_]*\}/g))].join(', '));
+        coverLetter = coverLetter
+          .replace(/\s*\{[A-Za-z][A-Za-z0-9_]*\}/g, '')
+          .replace(/ {2,}/g, ' ')
+          .replace(/ ([,.;:])/g, '$1')
+          .replace(/,\s*\./g, '.');
+      }
+
+      const timing = performance.now() - startTime;
+      console.log(`[CoverLetterGenerator] Generated in ${timing.toFixed(0)}ms with ${topKeywords.length} keywords naturally woven in`,
+        auditReport ? `| audit: ${auditReport.fixes.length} fixes, ${auditReport.warnings.length} warnings` : '');
+
+      return {
+        text: coverLetter,
+        paragraphs,
+        wordCount: coverLetter.split(/\s+/).length,
+        keywordsUsed: topKeywords,
+        timing,
+        recruiterAudit: auditReport,
+      };
+    },
+
+    // ============ GENERATE WITH AI ENHANCEMENT ============
+    async generateWithAI(candidateData, jobData, keywords, aiProvider, options = {}) {
+      // First generate base cover letter
+      const base = this.generate(candidateData, jobData, keywords, options);
+      
+      // If no AI provider, return base
+      if (!aiProvider) {
+        return base;
+      }
+
+      // AI enhancement would go here - for now return base
+      return base;
+    },
+
+    // ============ SELECT RANDOM TEMPLATE ============
+    selectRandom(templates, replacements) {
+      const template = templates[Math.floor(Math.random() * templates.length)];
+      return this.replacePlaceholders(template, replacements);
+    },
+
+    // ============ REPLACE PLACEHOLDERS ============
+    replacePlaceholders(text, replacements) {
+      let result = text;
+      for (const [key, value] of Object.entries(replacements)) {
+        result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+      }
+      return result;
+    },
+
+    // ============ BUILD BRIDGE WITH KEYWORDS (v3.0. Natural, human tone) ============
+    // Sentences that carry no years figure, for when the history cannot
+    // be totalled. Previously the generator invented "5+" so the token
+    // always had something to render, which put a number in the letter
+    // that the CV did not support.
+    YEARS_FREE_BRIDGE: [
+      'My background is in {domain}, mostly spent building things, fixing things, and working out how to do both faster. I have worked with senior stakeholders and know how to turn their priorities into delivered work.',
+      'I have worked across several {domain} roles, and the common thread has been taking on hard problems and delivering outcomes people could point to.',
+      'My work in {domain} has given me a mix of hands-on technical ability and the softer skills you need with clients, leadership, or teams under pressure.',
+      'I have spent my career in {domain}, long enough to learn what works, what does not, and how to tell the difference quickly.',
+    ],
+
+    buildBridgeWithKeywords(bridgeTemplates, replacements, keywords) {
+      // No credible figure -> use a sentence that does not mention one.
+      // Leaving the token to render empty produced "I have spent roughly
+      // years working in...", and filling it with a guess contradicted
+      // the CV, which states the real total.
+      const years = replacements && replacements.yearsExp;
+      if (!years || !String(years).trim()) {
+        const clean = (bridgeTemplates || []).filter((s) => !/\{yearsExp\}/.test(s));
+        bridgeTemplates = clean.length ? clean : this.YEARS_FREE_BRIDGE;
+      }
+      let bridge = this.selectRandom(bridgeTemplates, replacements);
+
+      if (keywords.length >= 3) {
+        const kw1 = keywords[0];
+        const kw2 = keywords[1];
+        const kw3 = keywords[2];
+        const phrases = [
+          `Most of that time has been spent on ${kw1}, ${kw2}, and ${kw3}.`,
+          `A big chunk of that involved ${kw1} and ${kw2}, with ${kw3} coming in more recently.`,
+          `${kw1}, ${kw2}, and ${kw3} have been the common thread across those roles.`,
+          `The day-to-day has centred on ${kw1}, ${kw2}, and ${kw3}. All areas I know well.`
+        ];
+        bridge += ' ' + phrases[Math.floor(Math.random() * phrases.length)];
+      } else if (keywords.length >= 2) {
+        const phrase = KEYWORD_PHRASES[Math.floor(Math.random() * KEYWORD_PHRASES.length)];
+        if (bridge.endsWith('.')) {
+          bridge = bridge.slice(0, -1) + `, ${phrase} ${keywords[0]} and ${keywords[1]}.`;
+        }
+      }
+
+      return bridge;
+    },
+
+    // ============ BUILD CLOSING WITH KEYWORDS ============
+    // A closing paragraph makes ONE offer of a conversation. Two passes
+    // used to add one each, on top of a template that already made it.
+    _OFFER_RE: /\b(chat|talk|speak|discuss|conversation|hear from you|more detail|go deeper|available)\b/i,
+    buildClosingWithKeywords(closingTemplates, replacements, keywords) {
+      const OFFER_RE = this._OFFER_RE;
+      let closing = this.selectRandom(closingTemplates, replacements);
+
+      // Name the employer once more at the close. A letter that mentions
+      // the company a single time, in the opening line where the merge
+      // field sits, reads exactly like what it is -- and the guidance
+      // asks the final paragraph to say why this company specifically.
+      const co = replacements && replacements.company;
+      if (co && !new RegExp('\\b' + String(co).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b').test(closing)) {
+        // NAME THE COMPANY IN THE OFFER THAT IS ALREADY THERE.
+        //
+        // Every closing template already offers a conversation, so
+        // appending another one produced a paragraph that said the same
+        // thing twice: "I would be happy to chat about how my background
+        // fits the role. Thank you for reading this far. I appreciate
+        // your time. I am happy to talk through how I could help at
+        // Stripe." Four sentences, three of them the same gesture, at
+        // the end of a letter arguing the candidate is a clear thinker.
+        //
+        // Putting the company into the existing offer names it once and
+        // costs nothing.
+        // The slots the templates actually give it, in order. First
+        // match wins, and each produces one grammatical sentence rather
+        // than a new one.
+        const GRAFTS = [
+          [/\b(?:the|this)\s+(?:role|position|opportunity)\b/i, (m) => m + ' at ' + co],
+          [/\b(?:Thanks|Thank you) for considering me\b/i, (m) => m + ' for the role at ' + co],
+          [/\bhope to (?:hear|speak) (?:from|with) you(?: soon)?\b/i, (m) => m + ' about the role at ' + co],
+          [/\b(?:Looking forward to )?hearing from you\b/i, (m) => m + ' about the role at ' + co],
+          [/\b(Thanks|Thank you) for your time\b/i,
+            (m, word) => word + ' for your time and for considering me for the role at ' + co],
+        ];
+        let named = closing;
+        for (const [re, fn] of GRAFTS) {
+          const next = closing.replace(re, fn);
+          if (next !== closing) { named = next; break; }
+        }
+        if (named !== closing) {
+          closing = named;
+        } else if (!OFFER_RE.test(closing)) {
+          // Nothing to graft onto and no offer already made, so a
+          // sentence is genuinely needed. Wording chosen to avoid the
+          // sanitiser's banned-phrase list: "welcome the chance" is
+          // deleted outright there, which turned "I would welcome the
+          // chance to talk" into "I would to talk".
+          const tails = [
+            ` I would be glad to discuss what I could bring to ${co}.`,
+            ` I am happy to talk through how I could help at ${co}.`,
+            ` I would like to discuss the role and ${co} further.`,
+          ];
+          closing = closing.replace(/\s*$/, '') + tails[Math.floor(Math.random() * tails.length)];
+        }
+        // Otherwise the closing already offers a conversation and has no
+        // natural slot for the name. The opening line names the company;
+        // saying it again at the cost of a third "happy to talk" is not
+        // a trade worth making.
+      }
+
+      if (keywords.length >= 5) {
+        const kw = keywords[4] || keywords[0];
+        const hasKeyword = keywords.some(k => closing.toLowerCase().includes(k.toLowerCase()));
+        // NOT ON TOP OF AN OFFER THAT IS ALREADY THERE.
+        //
+        // This prepended a sentence whenever the closing said "Thank",
+        // which every template does, so a paragraph could open "I am
+        // also happy to discuss my APIs experience in more detail."
+        // above "Happy to go into more detail on any of the above." --
+        // the same offer, twice, in consecutive sentences. And "my APIs
+        // experience" is not how anyone writes it.
+        if (!hasKeyword && closing.includes('Thank') && !OFFER_RE.test(closing)) {
+          const injections = [
+            `I am happy to go into my experience with ${kw} in more detail. `,
+            // Phrased without a verb that has to agree with the keyword:
+            // "If APIs matters for this role" was what the old wording
+            // produced, and a plural skill name is common.
+            `If the role leans on ${kw}, I have plenty to share on that front. `,
+          ];
+          closing = injections[Math.floor(Math.random() * injections.length)] + closing;
+        }
+      }
+
+      return closing;
+    },
+
+    // ============ EXTRACT DOMAIN ============
+    extractDomain(candidateData) {
+      const experience = candidateData?.professional_experience || 
+                        candidateData?.professionalExperience || 
+                        candidateData?.workExperience || [];
+      
+      if (experience.length > 0) {
+        const recentTitle = (experience[0]?.title || '').toLowerCase();
+        
+        if (/data|analytics|scientist|ml|ai/i.test(recentTitle)) {
+          return 'data science and analytics';
+        }
+        if (/engineer|developer|software/i.test(recentTitle)) {
+          return 'software engineering';
+        }
+        if (/product|pm/i.test(recentTitle)) {
+          return 'product management';
+        }
+        if (/design|ux|ui/i.test(recentTitle)) {
+          return 'design and user experience';
+        }
+        if (/manager|director|lead/i.test(recentTitle)) {
+          return 'technical leadership';
+        }
+        if (/account|client|relationship|partner/i.test(recentTitle)) {
+          return 'account management and client relations';
+        }
+        if (/market|growth|digital/i.test(recentTitle)) {
+          return 'digital marketing and growth';
+        }
+      }
+      
+      return 'technology';
+    },
+
+    // ============ CALCULATE YEARS OF EXPERIENCE ============
+    // The CV, the cover letter and the application form must all state
+    // the same length of career. They did not.
+    //
+    // This read only `job.dates`, but the popup passes the structured
+    // shape with startDate/endDate, so in the real pipeline it found
+    // nothing and fell through to a hard-coded '5+'. The CV summary
+    // stated the true total while the letter said "5+ years" in its
+    // second sentence -- a contradiction between two documents in the
+    // same application, which is one of the first things a reviewer
+    // notices.
+    //
+    // Returns '' when it cannot be computed. Callers pick an opening
+    // that does not mention years at all rather than inventing one.
+    calculateYearsExperience(candidateData) {
+      // Explicit value from profile wins over date arithmetic.
+      const explicit = candidateData?.yearsExperience ?? candidateData?.years_experience ?? candidateData?.yearsExp;
+      if (explicit != null && String(explicit).trim() !== '') {
+        const n = parseInt(explicit, 10);
+        if (!isNaN(n) && n > 0) return n >= 10 ? '10+' : `${n}+`;
+      }
+
+      const experience = candidateData?.professional_experience ||
+                        candidateData?.professionalExperience ||
+                        candidateData?.workExperience || [];
+
+      if (!Array.isArray(experience) || experience.length === 0) return '';
+
+      const currentYear = new Date().getFullYear();
+      const spans = [];
+      for (const job of experience) {
+        // Every shape the profile is stored in, not just `dates`.
+        const text = [job.dates, job.startDate, job.start_date,
+          job.endDate, job.end_date].filter(Boolean).join(' ');
+        if (!text) continue;
+        const years = String(text).match(/\b(?:19|20)\d{2}\b/g);
+        if (!years || !years.length) continue;
+        const startYear = parseInt(years[0], 10);
+        // A role recorded with a single year is one year, not "everything
+        // since then" -- that turned a one-year role in 2019 into seven.
+        const endYear = /present|current|now|ongoing/i.test(text)
+          ? currentYear
+          : parseInt(years[years.length - 1], 10);
+        if (isNaN(startYear) || isNaN(endYear) || endYear < startYear) continue;
+        spans.push([startYear, endYear]);
+      }
+      if (!spans.length) return '';
+
+      // Merge overlaps instead of summing. A contract held alongside a
+      // full-time role is not two separate careers.
+      spans.sort((a, b) => a[0] - b[0]);
+      let totalYears = 0, cursor = -Infinity;
+      for (const [s, e] of spans) {
+        const from = Math.max(s, cursor);
+        if (e > from) { totalYears += e - from; cursor = e; }
+        else if (e > cursor) cursor = e;
+      }
+
+      if (totalYears <= 0) return '';
+      if (totalYears >= 10) return '10+';
+      return `${totalYears}+`;
+    },
+
+    // ============ GET TOP KEYWORDS (ROBUST) ============
+    getTopKeywords(keywords, count) {
+      if (!keywords) return [];
+      
+      // ROBUST: Handle array or object with priority buckets
+      if (Array.isArray(keywords)) {
+        return keywords.slice(0, count);
+      }
+      
+      // Priority: highPriority > all > mediumPriority
+      const highPriority = keywords.highPriority || [];
+      const all = keywords.all || [];
+      const medium = keywords.mediumPriority || [];
+      
+      // Combine and dedupe case-insensitively but PRESERVE original casing,
+      // so acronyms like "AI/ML", "AWS", "SQL" don't end up lowercase
+      // mid-sentence ("my ai/ml experience" reads like a bot wrote it).
+      const combined = [...highPriority, ...all, ...medium];
+      const seen = new Set();
+      const unique = [];
+      for (const k of combined) {
+        const key = String(k || '').toLowerCase().trim();
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        unique.push(String(k).trim());
+      }
+
+      return unique.slice(0, count);
+    },
+
+    // ============ BUILD BODY PARAGRAPHS (v3.0. Human-sounding, anti-AI-detection) ============
+    buildBodyWithKeywords(candidateData, jobData, topKeywords, includeMetrics) {
+      const paragraphs = [];
+
+      const experience = candidateData?.professional_experience ||
+                        candidateData?.professionalExperience ||
+                        candidateData?.workExperience || [];
+
+      if (experience.length > 0) {
+        const recentJob = experience[0];
+        const company = recentJob.company || 'my current organisation';
+        const title = recentJob.title || 'my role';
+
+        const bullets = recentJob.bullets || recentJob.achievements || [];
+        const metricsPattern = /\d+%|\$[\d,]+|\d+x|[0-9]+\+?\s*(users|customers|clients|projects|teams)/i;
+        const withMetrics = bullets.filter(b => metricsPattern.test(b));
+        const topBullet = withMetrics[0] || bullets[0] || '';
+        const secondBullet = withMetrics[1] || bullets[1] || '';
+
+        const kw1 = topKeywords[0] || '';
+        const kw2 = topKeywords[1] || '';
+        const kw3 = topKeywords[2] || '';
+
+        const para1Starts = [
+          `Most recently I worked as ${title} at ${company}.`,
+          `At ${company} I was ${title}.`,
+          `My last role was ${title} at ${company}.`
+        ];
+        let para1 = para1Starts[Math.floor(Math.random() * para1Starts.length)];
+
+        if (topBullet) {
+          const cleaned = topBullet.replace(/^[•\-*▪]\s*/, '').trim();
+          const lc = cleaned.charAt(0).toLowerCase() + cleaned.slice(1);
+          para1 += ` One thing I am particularly proud of: I ${lc}`;
+          if (!para1.endsWith('.')) para1 += '.';
+        }
+        if (secondBullet) {
+          const cleaned2 = secondBullet.replace(/^[•\-*▪]\s*/, '').trim();
+          const lc2 = cleaned2.charAt(0).toLowerCase() + cleaned2.slice(1);
+          const bridges = ['On top of that, I ', 'I also ', 'Separately, I '];
+          para1 += ` ${bridges[Math.floor(Math.random() * bridges.length)]}${lc2}`;
+          if (!para1.endsWith('.')) para1 += '.';
+        }
+        if (kw1 && kw2 && kw3) {
+          // ONE SENTENCE. "All of which show up in your job description
+          // too." has no main clause -- it is a fragment, and it went out
+          // in every letter that had three overlapping keywords, which is
+          // most of them. A comma joins it to the clause it belongs to.
+          para1 += ` A lot of that work involved ${kw1}, ${kw2} and ${kw3}, all of which show up in your job description too.`;
+        } else if (kw1 && kw2) {
+          para1 += ` Both ${kw1} and ${kw2} were central to that work.`;
+        }
+
+        paragraphs.push(para1);
+
+        // A SECOND capability, evidenced by a second role.
+        //
+        // The letter used to draw on experience[0] only, so it made one
+        // claim and stopped -- around 110 words against the one-page,
+        // 250-400 word letter the guidance describes, and a reviewer got
+        // a single piece of proof. The second role is already on the CV;
+        // this puts one line of it in front of them.
+        const prior = experience.find((j, i) => i > 0 && (j.bullets || j.achievements || []).length);
+        if (prior) {
+          const pBullets = prior.bullets || prior.achievements || [];
+          const metricFirst = pBullets.find((b) => /\d/.test(b)) || pBullets[0] || '';
+          const pc = (metricFirst || '').replace(/^[•\-*▪]\s*/, '').trim();
+          if (pc) {
+            const lc = pc.charAt(0).toLowerCase() + pc.slice(1);
+            const openers = [
+              `Before that, at ${prior.company || 'a previous employer'}, I ${lc}`,
+              `Earlier, as ${prior.title || 'an engineer'} at ${prior.company || 'a previous employer'}, I ${lc}`,
+              `That built on my time at ${prior.company || 'a previous employer'}, where I ${lc}`,
+            ];
+            let para = openers[Math.floor(Math.random() * openers.length)];
+            if (!para.endsWith('.')) para += '.';
+            // Appended to the same paragraph rather than pushed as its
+            // own. Two roles are one argument -- "here is my evidence" --
+            // and splitting every sentence out gave seven one-line
+            // paragraphs where the guidance asks for about four.
+            paragraphs[paragraphs.length - 1] += ' ' + para;
+          }
+        }
+      }
+
+      // Name a requirement from the posting and answer it directly. The
+      // guidance is explicit that a letter should tie itself to a stated
+      // requirement rather than describe a career in general.
+      if (topKeywords.length) {
+        const req = topKeywords[0];
+        const reqLines = [
+          `Your listing puts weight on ${req}, which is the part of the work I have spent most of my time on.`,
+          `You single out ${req} in the requirements; that is where most of my recent work has sat.`,
+          `On ${req} specifically, which the posting calls out, that is core to what I do day to day.`,
+        ];
+        const reqLine = reqLines[Math.floor(Math.random() * reqLines.length)];
+        if (paragraphs.length) paragraphs[paragraphs.length - 1] += ' ' + reqLine;
+        else paragraphs.push(reqLine);
+      }
+
+      if (topKeywords.length > 3) {
+        const skills = [topKeywords[3], topKeywords[4], topKeywords[5], topKeywords[6]].filter(Boolean);
+        let skillsList = '';
+        if (skills.length >= 3) {
+          skillsList = `${skills.slice(0, -1).join(', ')}, and ${skills[skills.length - 1]}`;
+        } else if (skills.length === 2) {
+          skillsList = `${skills[0]} and ${skills[1]}`;
+        } else if (skills.length === 1) {
+          skillsList = skills[0];
+        }
+
+        const para2Variants = [
+          `Outside of the main deliverables, I have also spent a fair amount of time with ${skillsList}. I find that this broader exposure helps me make better decisions on the core work. Knowing how the pieces connect matters.`,
+          `I have worked with ${skillsList} as well, and I think that breadth is part of what makes me useful. When you understand the wider picture, you can spot issues earlier and move faster on the things that matter.`,
+          `I should also mention my experience with ${skillsList}. These are not just lines on a CV. They are tools I have actually used to ship work and solve real problems.`
+        ];
+        paragraphs.push(para2Variants[Math.floor(Math.random() * para2Variants.length)]);
+      }
+
+      if (topKeywords.length > 7) {
+        const extraSkills = [topKeywords[7], topKeywords[8], topKeywords[9]].filter(Boolean);
+        if (extraSkills.length > 0) {
+          // `ExtraSkills` (capital E) is declared nowhere, and this file
+          // is in strict mode, so reading it is a ReferenceError rather
+          // than an undefined. Any posting yielding nine or more keywords
+          // reaches this branch -- which is most real postings -- and the
+          // whole of generate() threw.
+          const skillsStr = extraSkills.length > 1
+            ? extraSkills.slice(0, -1).join(', ') + ' and ' + extraSkills[extraSkills.length - 1]
+            : extraSkills[0];
+          const para3Variants = [
+            `I also have hands-on experience with ${skillsStr}. I have used these in production settings and I am comfortable picking them up again wherever they fit into your stack.`,
+            `Worth mentioning: I have worked with ${skillsStr} in live environments. Not just theory. Real projects with real deadlines.`
+          ];
+          paragraphs.push(para3Variants[Math.floor(Math.random() * para3Variants.length)]);
+        }
+      }
+
+      return paragraphs.join('\n\n');
+    },
+
+    // ============ EXTRACT COMPANY NAME (ROBUST - 100% ACCURACY GUARANTEED) ============
+    // CRITICAL: This function MUST return a valid company name, NEVER "Company" or empty
+    extractCompanyName(jobData) {
+      if (!jobData) return 'the hiring organization';
+      
+      let company = jobData.company || '';
+      
+      // Extended list of invalid placeholder values (v3.2: significantly expanded)
+      const invalidNames = [
+        'company', 'the company', 'your company', 'hiring team', 'organization',
+        'organisation', 'employer', 'n/a', 'unknown', 'hiring company', 'the hiring company',
+        '[company]', '{company}', '{{company}}', 'company name', '[company name]',
+        // v3.2 additions. AI-generated placeholder patterns
+        'the organization', 'the organisation', 'this company', 'this organization',
+        'your organization', 'your organisation', 'the firm', 'your firm',
+        'the team', 'your team', 'hiring organization', 'hiring organisation',
+        'prospective employer', 'potential employer', 'the employer',
+        'abc company', 'xyz company', 'acme', 'sample company',
+        'company x', 'company y', 'company z',
+        'test', 'test company', 'example', 'example company',
+        'tbd', 'to be determined', 'not specified', 'unspecified',
+        'confidential', 'confidential company', 'undisclosed',
+        'recipient', 'dear hiring manager', 'hiring manager'
+      ];
+
+      const isInvalid = (val) => {
+        if (!val || typeof val !== 'string') return true;
+        const lower = val.toLowerCase().trim();
+        if (invalidNames.includes(lower) || lower.length < 2) return true;
+        // v3.2: Reject values that are just template placeholders
+        if (/^\[.*\]$/.test(lower) || /^\{.*\}$/.test(lower) || /^<.*>$/.test(lower)) return true;
+        // v3.2: Reject single generic words
+        const genericSingleWords = ['company', 'employer', 'organization', 'organisation', 'firm', 'team', 'business', 'corporation', 'enterprise'];
+        if (genericSingleWords.includes(lower)) return true;
+        // v3.2: Reject if it looks like a URL fragment or path
+        if (/^https?:\/\//.test(lower) || /^www\./.test(lower)) return true;
+        // Portal chrome and ATS vendor names, which the exact-match lists
+        // above cannot see: "Career2", "Careers", "Apply", "Workday".
+        if (_isJunkCompany(val)) return true;
+        return false;
+      };
+      
+      // STRATEGY 1: Check recipientCompany field from AI response
+      if (isInvalid(company) && jobData.recipientCompany) {
+        company = jobData.recipientCompany;
+      }
+      
+      // STRATEGY 2: Check companyName alternate field
+      if (isInvalid(company) && jobData.companyName) {
+        company = jobData.companyName;
+      }
+      
+      // STRATEGY 3: Extract from job title like "Senior Engineer at Bugcrowd"
+      if (isInvalid(company)) {
+        const titleMatch = (jobData.title || '').match(/\bat\s+([A-Z][A-Za-z0-9\s&.\-]+?)(?:\s*[-|–,]|\s*$)/i);
+        if (titleMatch) {
+          company = titleMatch[1].trim();
+        }
+      }
+      
+      // STRATEGY 4: Extract from URL path like /company-name/jobs/
+      if (isInvalid(company)) {
+        const url = jobData.url || '';
+        const pathMatch = url.match(/\/([a-zA-Z][a-zA-Z0-9\-]{2,30})\/(?:jobs?|careers?|apply|positions?)/i);
+        if (pathMatch && pathMatch[1]) {
+          const pathSegment = pathMatch[1].toLowerCase();
+          const blacklist = ['www', 'apply', 'jobs', 'careers', 'boards', 'job-boards', 'hire', 'greenhouse', 'workday', 'lever', 'smartrecruiters', 'icims', 'taleo', 'myworkdayjobs'];
+          if (!blacklist.includes(pathSegment)) {
+            company = pathSegment.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+          }
+        }
+      }
+      
+      // STRATEGY 5: Extract from URL subdomain
+      if (isInvalid(company)) {
+        const url = jobData.url || '';
+        const hostMatch = url.match(/https?:\/\/([^.\/]+)\./i);
+        if (hostMatch && hostMatch[1]) {
+          const subdomain = hostMatch[1].toLowerCase();
+          const blacklist = ['www', 'apply', 'jobs', 'careers', 'boards', 'job-boards', 'hire', 'greenhouse', 'lever', 'workday', 'smartrecruiters', 'icims', 'taleo', 'myworkdayjobs', 'recruiting', 'career', 'employment'];
+          if (!blacklist.includes(subdomain) && subdomain.length > 2 && subdomain.length < 30) {
+            company = subdomain.charAt(0).toUpperCase() + subdomain.slice(1);
+          }
+        }
+      }
+      
+      // STRATEGY 6: Use siteName from metadata
+      if (isInvalid(company)) {
+        if (jobData.siteName && !isInvalid(jobData.siteName)) {
+          company = jobData.siteName;
+        }
+      }
+      
+      // Final cleanup
+      if (company && typeof company === 'string') {
+        company = company
+          .replace(/\s*(careers|jobs|hiring|apply|work|join|inc\.?|ltd\.?|llc\.?)\s*$/i, '')
+          .replace(/\(formerly[^)]*\)/gi, '') // Remove "(formerly X)" suffixes
+          .replace(/\s+/g, ' ')
+          .trim();
+      }
+      
+      // CRITICAL: NEVER return empty or invalid - use intelligent fallback
+      if (isInvalid(company)) {
+        console.warn('[CoverLetterGenerator] ⚠️ Could not extract company name, using fallback');
+        return 'the hiring organization';
+      }
+      
+      console.log(`[CoverLetterGenerator] ✅ Extracted company name: "${company}"`);
+      return company;
+    },
+
+    // ============ SMART TONE AUTO-SELECTION (v3.3) ============
+    // Picks the optimal cover letter tone based on job title seniority and company signals
+    // - Senior/Leadership roles → professional
+    // - Startup/Scale-up/Early career → enthusiastic
+    // - Technical/IC/Contract roles → concise
+    autoSelectTone(jobData) {
+      const title = (jobData?.title || '').toLowerCase();
+      const company = (jobData?.company || '').toLowerCase();
+      const description = (jobData?.description || '').toLowerCase();
+
+      // SENIORITY SIGNALS → professional tone (formal, measured)
+      const seniorPatterns = /\b(senior|staff|principal|lead|director|head of|vp|vice president|chief|c-suite|cto|ceo|cfo|coo|cio|ciso|cmo|president|executive|partner|manager|management)\b/i;
+      if (seniorPatterns.test(title)) return 'professional';
+
+      // LEADERSHIP/MANAGEMENT KEYWORDS → professional
+      const leadershipSignals = /\b(leadership|executive|strategic|governance|board|stakeholder|p&l|profit and loss|transformation|restructuring)\b/i;
+      if (leadershipSignals.test(title) || leadershipSignals.test(description.substring(0, 500))) {
+        return 'professional';
+      }
+
+      // STARTUP/SCALE-UP SIGNALS → enthusiastic tone (energy, passion)
+      const startupPatterns = /\b(startup|scale-up|scaleup|series [abcde]|seed stage|early stage|fast-growing|high-growth|growth-stage|founding|founder|zero to one|0 to 1)\b/i;
+      if (startupPatterns.test(description) || startupPatterns.test(company)) {
+        return 'enthusiastic';
+      }
+
+      // JUNIOR/ENTRY ROLES → enthusiastic
+      const juniorPatterns = /\b(junior|entry level|entry-level|graduate|intern|associate|trainee|apprentice)\b/i;
+      if (juniorPatterns.test(title)) return 'enthusiastic';
+
+      // CONTRACT/FREELANCE/CONCISE ROLES → concise tone
+      const conciseSignals = /\b(contract|contractor|freelance|consultant|temporary|interim|short-term|project-based)\b/i;
+      if (conciseSignals.test(title) || conciseSignals.test(description.substring(0, 300))) {
+        return 'concise';
+      }
+
+      // PURE TECHNICAL IC ROLES → concise
+      const technicalICSignals = /\b(engineer|developer|sre|devops|platform|data scientist|ml engineer|ai engineer|backend|frontend|fullstack|full-stack|ios|android|mobile)\b/i;
+      if (technicalICSignals.test(title) && !seniorPatterns.test(title)) {
+        // Mid-level technical IC. Concise works well
+        return 'concise';
+      }
+
+      // DEFAULT → professional (safest choice)
+      return 'professional';
+    },
+
+    // ============ EXTRACT ROLE SENIORITY (v3.3) ============
+    // Determines seniority level for language calibration in the body
+    extractSeniorityLevel(jobData) {
+      const title = (jobData?.title || '').toLowerCase();
+      if (/\b(chief|c-suite|cto|ceo|cfo|coo|cio|ciso|president|executive|evp|svp|vp|vice president)\b/i.test(title)) return 'executive';
+      if (/\b(director|head of|principal|staff)\b/i.test(title)) return 'leadership';
+      if (/\b(senior|sr\.?|lead|manager)\b/i.test(title)) return 'senior';
+      if (/\b(junior|jr\.?|entry|graduate|intern|associate|trainee|apprentice)\b/i.test(title)) return 'junior';
+      return 'mid';
+    },
+
+    // ============ FORMAT FOR DIFFERENT OUTPUTS ============
+    formatAsText(coverLetter) {
+      return coverLetter.text;
+    },
+
+    formatAsHTML(coverLetter) {
+      const paragraphs = coverLetter.paragraphs.map(p => {
+        if (p === '') return '<br>';
+        return `<p>${p}</p>`;
+      });
+      return paragraphs.join('\n');
+    },
+
+    // ============ VALIDATE COVER LETTER ============
+    validate(coverLetter) {
+      const issues = [];
+      const text = typeof coverLetter === 'string' ? CoverLetter : coverLetter.text;
+      const wordCount = text.split(/\s+/).length;
+
+      if (wordCount < 150) {
+        issues.push('Cover letter is too short (minimum 150 words recommended)');
+      }
+      if (wordCount > 500) {
+        issues.push('Cover letter is too long (maximum 500 words recommended)');
+      }
+      if (!/dear/i.test(text)) {
+        issues.push('Missing greeting (Dear Hiring Manager)');
+      }
+      if (!/sincerely|regards|thank/i.test(text)) {
+        issues.push('Missing closing statement');
+      }
+
+      return {
+        isValid: issues.length === 0,
+        issues,
+        wordCount
+      };
+    },
+
+    // ============ EXTRACT ACHIEVEMENT (HELPER) ============
+    extractAchievement(bullet) {
+      if (!bullet) return 'significant performance improvements';
+      const match = bullet.match(/(\d+%?\s*(?:improvement|increase|reduction|faster|efficiency|growth))/i);
+      // `Match` (capital M) is undeclared; in strict mode that throws.
+      // It only threw when the regex FOUND a figure -- so the branch that
+      // worked was the one that gave up, and the branch that had a real
+      // metric to quote was the one that crashed.
+      return match ? match[1] : bullet.slice(0, 50) + (bullet.length > 50 ? '...' : '');
+    }
+  };
+
+  // Export
+  global.CoverLetterGenerator = CoverLetterGenerator;
+  
+  console.log('[CoverLetterGenerator] v3.0 loaded - Natural keyword injection enabled');
+
+})(typeof window !== 'undefined' ? window : this);

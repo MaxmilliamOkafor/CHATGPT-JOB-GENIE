@@ -1,0 +1,1217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QuantumHire AI - ATS Tailor</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <!-- Premium Header -->
+    <header class="header">
+      <div class="logo">
+        <img src="icons/icon48.png" alt="QuantumHire AI" class="logo-icon">
+        <div class="logo-text">
+          <h1>QuantumHire AI</h1>
+          <span class="tagline">ATS Optimisation Engine v2.5</span>
+        </div>
+      </div>
+      <div class="header-controls">
+        <div class="status-indicator" id="statusIndicator">
+          <span class="status-dot"></span>
+          <span class="status-text">Ready</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Login Section -->
+    <section id="loginSection" class="section hidden">
+      <div class="login-card">
+        <div class="login-header">
+          <div class="login-icon">🔐</div>
+          <h2>Sign In</h2>
+          <p class="login-subtitle">Use your QuantumHire account</p>
+        </div>
+        <div class="input-group">
+          <label for="email">Email</label>
+          <input type="email" id="email" placeholder="your@email.com" autocomplete="email">
+        </div>
+        <div class="input-group">
+          <label for="password">Password</label>
+          <input type="password" id="password" placeholder="Password" autocomplete="current-password">
+        </div>
+        <button id="loginBtn" class="btn btn-primary btn-large btn-glow">
+          <span class="btn-text">Sign In</span>
+          <span class="btn-icon">→</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- Main Section -->
+    <section id="mainSection" class="section hidden">
+      <!-- User Info Bar -->
+      <div class="user-bar">
+        <div class="user-info">
+          <span class="user-avatar" id="userAvatar">U</span>
+          <span id="userEmail" class="user-email"></span>
+        </div>
+        <button id="logoutBtn" class="btn-link">Logout</button>
+      </div>
+
+      <!-- AI Provider Settings - Compact Toggle -->
+      <div class="ai-provider-panel" id="aiSettingsPanel">
+        <div class="ai-provider-toggle-row">
+          <div class="ai-provider-left">
+            <span class="ai-provider-icon">🤖</span>
+            <span class="ai-provider-title">AI Provider</span>
+          </div>
+          <div class="ai-provider-right">
+            <div class="ai-toggle-group">
+              <button class="ai-toggle-btn selected" id="btnKimi" data-provider="kimi">
+                <span class="toggle-icon">🚀</span>
+                <span class="toggle-name">Kimi K2</span>
+              </button>
+              <button class="ai-toggle-btn" id="btnOpenAI" data-provider="openai">
+                <span class="toggle-icon">🧠</span>
+                <span class="toggle-name">OpenAI</span>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="ai-provider-info-bar">
+          <span class="ai-active-badge" id="activeProviderBadge">
+            <span class="badge-dot kimi"></span>
+            <span class="badge-text">Kimi K2</span>
+          </span>
+          <span class="ai-model-label" id="activeModelLabel">kimi-k2-0711-preview</span>
+          <span class="ai-saved-indicator hidden" id="aiSettingsSaved">✓</span>
+          <button class="ai-test-btn" id="testConnectionBtn" title="Test API Key Connection">🔗 Test</button>
+        </div>
+        <!-- Connection Test Panel (hidden by default) -->
+        <div class="connection-test-panel hidden" id="connectionTestPanel">
+          <div class="test-result" id="connectionTestResult">
+            <span class="test-status" id="testStatusIcon">⏳</span>
+            <span class="test-message" id="testMessage">Click "Test" to validate API key</span>
+          </div>
+          <div class="test-details hidden" id="testDetails">
+            <pre id="testDetailsText"></pre>
+          </div>
+        </div>
+      </div>
+
+      <!-- Debug Report Panel -->
+      <div class="debug-report-panel hidden" id="debugReportPanel">
+        <div class="debug-report-header">
+          <span class="debug-icon">🐛</span>
+          <span class="debug-title">Debug Report</span>
+          <button class="btn-close" id="closeDebugReport" aria-label="Close debug report">×</button>
+        </div>
+        <div class="debug-report-content" id="debugReportContent">
+          <p>No debug data collected yet. Run tailoring to collect logs.</p>
+        </div>
+        <div class="debug-actions">
+          <button class="btn btn-small btn-secondary" id="downloadDebugReport">⬇️ Download Report</button>
+          <button class="btn btn-small btn-outline" id="copyDebugReport">📋 Copy to Clipboard</button>
+        </div>
+      </div>
+
+      <!-- Settings Panel -->
+      <div class="settings-panel">
+        <!-- Auto-Trigger Toggle (NEW) -->
+        <div class="setting-row auto-trigger-setting">
+          <label class="toggle-row" for="autoTriggerToggle">
+            <span class="toggle-label">
+              <span class="setting-icon">⚡</span>
+              Auto-trigger on ATS detection
+            </span>
+            <input type="checkbox" id="autoTriggerToggle" checked />
+          </label>
+        </div>
+        <p class="setting-help">Automatically runs "Extract & Apply" when Workday, Greenhouse, etc. are detected.</p>
+        
+        <div class="setting-row">
+          <label class="toggle-row" for="autoTailorToggle">
+            <span class="toggle-label">
+              <span class="setting-icon">⚙️</span>
+              Automatic ATS tailoring
+            </span>
+            <input type="checkbox" id="autoTailorToggle" />
+          </label>
+        </div>
+        <p class="setting-help">Runs once per job when upload fields are detected.</p>
+        
+        <!-- AI Page Autofill Toggle - master kill-switch for the autofill engine -->
+        <div class="setting-row autofill-setting">
+          <div class="toggle-row">
+            <span class="toggle-label">
+              <span class="setting-icon">🤖</span>
+              AI Page Autofill
+            </span>
+            <label class="toggle-switch" for="autofillEnabledToggle" aria-label="Toggle AI Page Autofill">
+              <input type="checkbox" id="autofillEnabledToggle" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <p class="setting-help">When ON, the autofill engine fills application forms automatically. When OFF, the engine is fully disabled - no API calls, no form interaction.</p>
+
+        <!-- LinkedIn Easy Apply Toggle - independent of the master switch,
+             because the heavy engine is denylisted on linkedin.com -->
+        <div class="setting-row autofill-setting">
+          <div class="toggle-row">
+            <span class="toggle-label">
+              <span class="setting-icon">💼</span>
+              LinkedIn Easy Apply Autofill
+            </span>
+            <label class="toggle-switch" for="linkedinAutofillToggle" aria-label="Toggle LinkedIn Easy Apply Autofill">
+              <input type="checkbox" id="linkedinAutofillToggle" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <p class="setting-help">When ON, fills the LinkedIn Easy Apply dialog from your profile as each step appears. Runs only on linkedin.com.</p>
+
+        <!-- Auto-advance: fills AND clicks through the steps -->
+        <div class="setting-row autofill-setting">
+          <div class="toggle-row">
+            <span class="toggle-label">
+              <span class="setting-icon">⏩</span>
+              Auto-advance Easy Apply steps
+            </span>
+            <label class="toggle-switch" for="linkedinAutoAdvanceToggle" aria-label="Toggle auto-advance through Easy Apply steps">
+              <input type="checkbox" id="linkedinAutoAdvanceToggle" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <p class="setting-help">Presses Easy Apply on the job, fills each step, then clicks Next/Review through to the end, with no clicking from you. It stops on its own at the final Submit, or earlier if a required question has no answer in your profile. Each job is attempted once.</p>
+
+        <!-- Auto-submit: the irreversible one, deliberately separate -->
+        <div class="setting-row autofill-setting">
+          <div class="toggle-row">
+            <span class="toggle-label">
+              <span class="setting-icon">🚀</span>
+              Auto-submit the application
+            </span>
+            <label class="toggle-switch" for="linkedinAutoSubmitToggle" aria-label="Toggle automatic submission of the application">
+              <input type="checkbox" id="linkedinAutoSubmitToggle" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <p class="setting-help" id="linkedinAutoSubmitHelp">Also presses Submit, so an application is sent end to end with no input from you. Sending cannot be undone and goes to a real employer, so this is separate from auto-advance. Requires auto-advance to be ON.</p>
+
+        <div style="display:flex;gap:6px;margin:0 0 8px;">
+          <button id="linkedinRunNowBtn" class="btn-secondary" style="flex:1;">💼 Fill Easy Apply now</button>
+          <button id="indeedRunNowBtn" class="btn-secondary" style="flex:1;">Fill Indeed now</button>
+        </div>
+        <div id="autofillRunResult" style="font-size:11px;margin:0 0 8px;"></div>
+
+        <!-- Application follow-up email -->
+        <div class="setting-row autofill-setting">
+          <div class="toggle-row">
+            <span class="toggle-label">
+              <span class="setting-icon">✉️</span>
+              Application Follow-up Email
+            </span>
+            <label class="toggle-switch" for="followupEnabledToggle" aria-label="Toggle application follow-up email">
+              <input type="checkbox" id="followupEnabledToggle" />
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+        </div>
+        <p class="setting-help">After you submit, if the job posting <strong>published</strong> a recruiter email, offers to send a short note from your Gmail with the job title and Job ID so they can find your application. Nothing sends without your click.</p>
+
+        <details id="followupPanel" class="fu-panel">
+          <summary>✉️ Gmail &amp; email template - setup and test</summary>
+          <div class="fu-body">
+
+            <!-- One check for the whole chain. Every previous round of
+                 debugging started with "which part failed?", and the answer
+                 was never visible from any single screen. -->
+            <div class="fu-card">
+              <div class="fu-card-title">Is this working?</div>
+              <p class="fu-note" style="margin-top:0;">Checks every step a follow-up depends on
+                and names the one that would stop it. Sends nothing.</p>
+              <div class="fu-actions">
+                <button id="followupPreflightBtn" class="fu-btn fu-btn-primary fu-btn-wide">Run full check</button>
+              </div>
+              <pre id="followupPreflight" class="fu-diagnostics"></pre>
+              <div class="fu-actions">
+                <button id="traceCopyBtn" class="fu-btn">Copy full trace</button>
+                <button id="traceSaveBtn" class="fu-btn">Download trace</button>
+                <button id="traceClearBtn" class="fu-btn">Clear trace</button>
+              </div>
+              <p class="fu-note">The trace records every call, its timing and any error, with
+                passwords, tokens and API keys stripped out. Copy it into a bug report.</p>
+            </div>
+
+            <!-- 1. Connection -->
+            <div class="fu-card">
+              <div class="fu-card-title">Gmail connection</div>
+              <div id="followupGmailStatus" class="fu-status">
+                <span class="fu-dot"></span>
+                <span class="fu-status-text">Checking…</span>
+              </div>
+              <div class="fu-actions">
+                <button id="followupConnectBtn" class="fu-btn fu-btn-primary">Connect Gmail</button>
+                <button id="followupDiagnoseBtn" class="fu-btn">Diagnose setup</button>
+              </div>
+              <pre id="followupDiagnostics" class="fu-diagnostics"></pre>
+
+              <div class="fu-field" style="margin-top:10px;">
+                <label class="fu-label" for="followupClientId">
+                  Client ID <span class="fu-hint">stored on this device only</span>
+                </label>
+                <!-- Placeholder must not resemble a real credential: a
+                     realistic-looking fake ID reads as a stored value and
+                     makes users think one is embedded in the extension. -->
+                <input type="text" id="followupClientId" class="fu-input fu-input-mono"
+                       placeholder="Paste your Google OAuth client ID here" />
+              </div>
+              <div class="fu-actions">
+                <button id="followupSaveClientBtn" class="fu-btn">Save</button>
+                <button id="followupClearClientBtn" class="fu-btn">Clear</button>
+              </div>
+              <div class="fu-field" style="margin-top:9px;">
+                <label class="fu-label" for="followupRedirectUri">
+                  Redirect URI <span class="fu-hint">must be registered on your Google client, exactly</span>
+                </label>
+                <input type="text" id="followupRedirectUri" class="fu-input fu-input-mono" readonly />
+              </div>
+              <div class="fu-actions">
+                <button id="followupCopyRedirectBtn" class="fu-btn fu-btn-wide">Copy redirect URI</button>
+              </div>
+              <div class="fu-actions">
+                <button id="followupOpenConsoleBtn" class="fu-btn fu-btn-wide">Open Google Console credentials ↗</button>
+              </div>
+              <p class="fu-note">Never committed to your repo. Use a <strong>Web application</strong>
+                OAuth client, and paste the redirect URI under
+                <strong>Authorised redirect URIs</strong> - not Authorised JavaScript origins.
+                See GMAIL_SETUP.md.</p>
+            </div>
+
+            <!-- 2. Recipient -->
+            <div class="fu-card">
+              <div class="fu-card-title">Recipient</div>
+              <div class="fu-field">
+                <label class="fu-label" for="followupTo">
+                  To <span class="fu-hint">auto-filled when the posting publishes one</span>
+                </label>
+                <input type="email" id="followupTo" class="fu-input" placeholder="recruiter@company.com" />
+              </div>
+              <div id="followupDetected" class="fu-note"></div>
+            </div>
+
+            <!-- 2b. Contact lookup (opt-in) -->
+            <div class="fu-card">
+              <div class="fu-card-title">Contact lookup <span class="fu-hint">optional</span></div>
+              <p class="fu-note" style="margin-top:0;">
+                Finds a recruiter for this role only when nothing is published anywhere.
+                Always shown for review before sending.
+                <!-- The GDPR point is a real obligation on the sender, so it stays
+                     reachable, but it does not need to be the first thing read. -->
+                <a href="#" class="fu-more" id="enrichMoreLink">How it works</a>
+              </p>
+              <div id="enrichMore" class="fu-note" style="display:none;">
+                Runs only after the posting, its structured data and the employer's
+                careers page all publish no address. Searches <strong>your own</strong>
+                provider account for this company, role and location, and never
+                overwrites an address the employer published.
+                <br /><br />
+                A looked-up address is a business email from a data provider, not one
+                the recipient gave you. In the EU that needs a lawful basis under GDPR,
+                and the responsibility sits with you as sender.
+              </div>
+
+              <div class="fu-field">
+                <label class="fu-label" for="enrichEnabledLabel">
+                  Enable lookup <span class="fu-hint">on by default</span>
+                </label>
+                <label class="toggle-switch" for="enrichEnabledToggle" id="enrichEnabledLabel"
+                       aria-label="Toggle contact lookup">
+                  <input type="checkbox" id="enrichEnabledToggle" />
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+
+              <div class="fu-field" style="margin-top:9px;">
+                <label class="fu-label" for="enrichProvider">Provider</label>
+                <select id="enrichProvider" class="fu-select"></select>
+              </div>
+              <p id="enrichHint" class="fu-note"></p>
+
+              <!-- Providers that issue a key from their dashboard. -->
+              <div id="enrichKeyFields">
+                <div class="fu-field">
+                  <label class="fu-label" for="enrichApiKey">
+                    API key <span class="fu-hint">stored on this device only</span>
+                  </label>
+                  <input type="password" id="enrichApiKey" class="fu-input fu-input-mono"
+                         placeholder="Paste your provider API key here" autocomplete="off" />
+                </div>
+              </div>
+
+              <!-- Closely publishes no dashboard key: its API mints a token
+                   for an account holder. The password is sent once to
+                   Closely's own login endpoint and never stored. -->
+              <div id="enrichAccountFields" style="display:none;">
+                <div class="fu-field">
+                  <label class="fu-label" for="enrichAccountEmail">Provider account email</label>
+                  <input type="email" id="enrichAccountEmail" class="fu-input"
+                         placeholder="you@example.com" autocomplete="off" />
+                </div>
+                <div class="fu-field" style="margin-top:9px;">
+                  <label class="fu-label" for="enrichAccountPassword">
+                    Password <span class="fu-hint">used once to mint a token, never stored</span>
+                  </label>
+                  <input type="password" id="enrichAccountPassword" class="fu-input"
+                         placeholder="Your provider password" autocomplete="off" />
+                </div>
+              </div>
+
+              <!-- Shown instead of the sign-in fields once a token exists.
+                   Leaving empty email and password boxes on screen reads as
+                   "not signed in" when you are. -->
+              <div id="enrichConnected" class="fu-connected" style="display:none;">
+                <span class="fu-dot fu-dot-ok"></span>
+                <span id="enrichConnectedText">Connected</span>
+              </div>
+
+              <div class="fu-actions">
+                <button id="enrichSaveBtn" class="fu-btn fu-btn-primary">Save key</button>
+                <button id="enrichTestBtn" class="fu-btn">Test key</button>
+                <button id="enrichClearBtn" class="fu-btn">Clear</button>
+              </div>
+              <div class="fu-actions" id="enrichSwitchRow" style="display:none;">
+                <button id="enrichSwitchBtn" class="fu-btn fu-btn-wide">Sign in with a different account</button>
+              </div>
+              <div class="fu-actions">
+                <button id="enrichGetKeyBtn" class="fu-btn fu-btn-wide">Open provider API keys page ↗</button>
+              </div>
+              <div class="fu-actions">
+                <!-- Runs the real lookup against the job in the current tab
+                     and reports every step. Without this, a lookup that
+                     silently never fired is indistinguishable from one that
+                     ran and found nobody. -->
+                <button id="enrichFindNowBtn" class="fu-btn fu-btn-wide">Test the lookup on this job (diagnostic)</button>
+              </div>
+              <p class="fu-note">The lookup runs <strong>automatically</strong> during tailoring - this
+                button is only for checking what it does and why. If nothing is found anywhere,
+                the follow-up is skipped for that application rather than sent to a guess.</p>
+
+              <!-- Manual override, not the main path. Everything above runs
+                   without it; this exists for the case where the automatic
+                   search finds nobody but you already know who to write to. -->
+              <!-- Most ATS postings name nobody and publish no address, but
+                   the people are on LinkedIn and findable by title. This
+                   opens the searches that find them, scoped to this
+                   employer and this location. -->
+              <div class="fu-actions" style="margin-top:9px;">
+                <button id="findPeopleBtn" class="fu-btn fu-btn-wide">Find the right people on LinkedIn</button>
+              </div>
+              <div id="findPeopleTargets" class="fu-note"></div>
+
+              <details style="margin-top:9px;">
+                <summary class="fu-label" style="cursor:pointer;">Manual override: resolve a specific person</summary>
+              <div class="fu-field" style="margin-top:9px;">
+                <label class="fu-label" for="enrichProfileUrl">
+                  LinkedIn profile URL <span class="fu-hint">only needed if the automatic search found nobody</span>
+                </label>
+                <input type="text" id="enrichProfileUrl" class="fu-input"
+                       placeholder="https://www.linkedin.com/in/their-handle" />
+              </div>
+              <div class="fu-actions">
+                <button id="enrichResolveProfileBtn" class="fu-btn fu-btn-wide">Get this person's email</button>
+              </div>
+              </details>
+              <pre id="enrichDiagnostics" class="fu-diagnostics"></pre>
+              <div id="enrichStatus" class="fu-note"></div>
+            </div>
+
+            <!-- 3. Message -->
+            <div class="fu-card">
+              <div class="fu-card-title">Message template</div>
+
+              <div class="fu-field">
+                <label class="fu-label" for="followupTemplateSelect">Template</label>
+                <select id="followupTemplateSelect" class="fu-select"></select>
+              </div>
+              <div class="fu-field" style="margin-top:9px;">
+                <label class="fu-label" for="followupTemplateName">Name</label>
+                <input type="text" id="followupTemplateName" class="fu-input" placeholder="Template name" />
+              </div>
+              <div class="fu-actions">
+                <button id="followupNewBtn" class="fu-btn">New</button>
+                <button id="followupDupBtn" class="fu-btn">Duplicate</button>
+                <button id="followupDeleteBtn" class="fu-btn fu-btn-danger">Delete</button>
+              </div>
+              <p class="fu-note">Editing a built-in preset saves it as your own copy - the originals stay available.</p>
+
+              <div class="fu-field" style="margin-top:10px;">
+                <label class="fu-label" for="followupSubject">Subject</label>
+                <input type="text" id="followupSubject" class="fu-input" />
+              </div>
+              <div class="fu-field">
+                <label class="fu-label" for="followupBody">
+                  Body <span class="fu-hint">click a variable to insert it</span>
+                </label>
+                <textarea id="followupBody" class="fu-textarea" rows="12"></textarea>
+              </div>
+
+              <div class="fu-tokens" id="followupTokens">
+                <button class="fu-token" type="button">{{job_title}}</button>
+                <button class="fu-token" type="button">{{company_name}}</button>
+                <button class="fu-token" type="button">{{job_id}}</button>
+                <button class="fu-token" type="button">{{reference_block}}</button>
+                <button class="fu-token" type="button">{{recipient_name}}</button>
+                <button class="fu-token" type="button">{{recipient_first_name}}</button>
+                <button class="fu-token" type="button">{{job_location}}</button>
+                <button class="fu-token" type="button">{{job_url}}</button>
+                <button class="fu-token" type="button">{{highlight}}</button>
+                <button class="fu-token" type="button">{{my_name}}</button>
+                <button class="fu-token" type="button">{{my_email}}</button>
+                <button class="fu-token" type="button">{{my_phone}}</button>
+                <button class="fu-token" type="button">{{my_linkedin}}</button>
+                <button class="fu-token" type="button">{{today}}</button>
+              </div>
+
+              <div class="fu-actions">
+                <button id="followupSaveBtn" class="fu-btn">Save</button>
+                <button id="followupResetBtn" class="fu-btn">Reset presets</button>
+              </div>
+              <div class="fu-field" style="margin-top:4px;">
+                <label class="fu-check">
+                  <input type="checkbox" id="followupAttachToggle" checked />
+                  <span>Attach my tailored CV and cover letter</span>
+                </label>
+              </div>
+              <p class="fu-note" id="followupAttachNote">Attaches the documents generated for
+                this job. Works on both send paths: the Gmail API attaches them directly,
+                and "Open in Gmail" drops them into the compose window for you. If Gmail
+                refuses the drop, the files are downloaded so you can drag them in.</p>
+              <div class="fu-actions">
+                <button id="followupComposeBtn" class="fu-btn fu-btn-primary fu-btn-wide">
+                  Open in Gmail (no setup needed)
+                </button>
+              </div>
+              <p class="fu-note">Opens Gmail with the note already written, ready to send.
+                Needs no Google client ID, no OAuth and no Cloud Console: you are already
+                signed in to Gmail. Press Send yourself.</p>
+              <div class="fu-actions">
+                <button id="followupTestBtn" class="fu-btn">Send test to me</button>
+                <button id="followupSendBtn" class="fu-btn">Send follow-up</button>
+              </div>
+              <p class="fu-note">These two send silently through the Gmail API and need the
+                connection above to be set up.</p>
+              <div id="followupResult" class="fu-result"></div>
+            </div>
+
+          </div>
+        </details>
+
+        <!-- User Location (always shown in CV header as "Dublin, IE | phone | email | extracted location") -->
+        <div class="location-setting">
+          <label class="setting-label">
+            <span class="setting-icon">📍</span>
+            Your Location (CV Header)
+          </label>
+          <p class="setting-help" style="margin-top:2px">Adapts to each job's location so geo-filters don't knock you out (misspelled or malformed job locations are ignored). Falls back to your profile location (Dublin, IE).</p>
+        </div>
+      </div>
+
+      <!-- Detected Job Card -->
+      <div class="job-card" id="jobCard">
+        <div class="job-header">
+          <div class="job-header-left">
+            <span class="job-label">Detected Job</span>
+            <span class="tier-badge hidden" id="tierBadge">Tier 1</span>
+          </div>
+          <div class="job-header-actions">
+            <span id="companyIndicator" class="company-indicator hidden" title="Company detection source">🏢</span>
+            <button id="editJobTitle" class="btn-icon btn-edit hidden" title="Edit job title" aria-label="Edit job title">✏️</button>
+            <button id="refreshJob" class="btn-icon" title="Refresh" aria-label="Refresh job detection">🔄</button>
+          </div>
+        </div>
+        <div class="job-title-row">
+          <h3 id="jobTitle" class="job-title">Scanning page...</h3>
+          <input type="text" id="jobTitleInput" class="job-title-input hidden" placeholder="Enter job title">
+        </div>
+        <p id="jobCompany" class="job-company"></p>
+        <p id="jobLocation" class="job-location"></p>
+        <span id="noJobBadge" class="no-job-badge hidden">No job detected</span>
+      </div>
+
+      <!-- History Panel -->
+      <details class="history-panel" id="historyPanel">
+        <summary class="history-header">
+          <span class="history-icon">📜</span>
+          <span>Recent Tailored Jobs</span>
+        </summary>
+        <div class="history-list" id="historyList">
+          <p class="history-empty">No recent jobs. Tailor a job to see history.</p>
+        </div>
+      </details>
+
+      <!-- Main Actions Card -->
+      <div class="actions-card">
+        <!-- Primary Action Button -->
+        <button id="tailorBtn" class="btn btn-primary btn-large btn-gradient">
+          <span class="btn-icon-left">⚡</span>
+          <span class="btn-text">Extract & Apply Keywords to CV</span>
+          <span class="btn-time">~5s</span>
+        </button>
+        
+          <div class="progress-container hidden" id="progressContainer">
+            <div class="progress-bar">
+              <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <p class="progress-text" id="progressText">Starting...</p>
+          
+          <!-- Step-by-step progress -->
+          <div class="pipeline-steps" id="pipelineSteps">
+            <div class="pipeline-step" id="step1">
+              <span class="step-icon">⏳</span>
+              <span class="step-text">Step 1/3: Extracting keywords from job description...</span>
+            </div>
+            <div class="pipeline-step" id="step2">
+              <span class="step-icon">⏳</span>
+              <span class="step-text">Step 2/3: Boosting CV to 95-100% match...</span>
+            </div>
+            <div class="pipeline-step" id="step3">
+              <span class="step-icon">⏳</span>
+              <span class="step-text">Step 3/3: Generating ATS CV & Cover Letter...</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Keyword Extraction Section -->
+        <div class="boost-section" id="boostSection">
+          <div class="keyword-buttons">
+            <button id="viewKeywordsBtn" class="btn btn-secondary btn-boost" title="Fast local keyword extraction">
+              <span class="btn-icon">🔍</span>
+              <span class="btn-text">Quick Extract</span>
+            </button>
+            <button id="aiExtractBtn" class="btn btn-accent btn-boost" title="AI-powered keyword extraction">
+              <span class="btn-icon">🤖</span>
+              <span class="btn-text">AI Extract</span>
+            </button>
+          </div>
+          <p class="boost-description">Extract keywords from job description for ATS optimisation</p>
+          
+          <!-- Skill Gap Analysis -->
+          <button id="skillGapBtn" class="btn btn-outline btn-skill-gap" title="Compare keywords across job postings">
+            <span class="btn-icon">📊</span>
+            <span class="btn-text">Skill Gap Analysis</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Skill Gap Panel (hidden by default) -->
+      <div class="skill-gap-panel hidden" id="skillGapPanel">
+        <div class="skill-gap-header">
+          <span class="panel-icon">📊</span>
+          <span class="panel-title">Skill Gap Analysis</span>
+          <button id="closeSkillGap" class="btn-close" title="Close" aria-label="Close skill gap panel">×</button>
+        </div>
+        <div class="skill-gap-content">
+          <div class="skill-gap-summary" id="skillGapSummary">
+            <p>Compare keywords from multiple job postings to identify in-demand skills you may be missing.</p>
+          </div>
+          <div class="skill-gap-section" id="coreSkillsSection">
+            <h4>🎯 Most In-Demand Skills</h4>
+            <div class="skill-chips" id="coreSkillsChips"></div>
+          </div>
+          <div class="skill-gap-section" id="gapsSection">
+            <h4>⚠️ Potential Skill Gaps</h4>
+            <div class="skill-chips" id="gapsChips"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Generated Documents Card -->
+      <div class="documents-card hidden" id="documentsCard">
+        <!-- AI Match Analysis Panel -->
+        <div class="ai-match-analysis" id="aiMatchAnalysis">
+          <div class="match-panel-header">
+            <div class="panel-logo">
+              <span class="logo-icon">🎯</span>
+              <div class="logo-text">
+                <span class="panel-title">AI Match Analysis</span>
+                <span class="panel-subtitle">Powered by <span id="matchPanelProvider">Kimi K2</span></span>
+              </div>
+            </div>
+          </div>
+          
+          <div class="gauge-container" id="gaugeContainer">
+            <div class="ats-match-gauge">
+              <div class="gauge-circle">
+                <svg viewBox="0 0 100 100" class="gauge-svg">
+                  <circle class="gauge-bg" cx="50" cy="50" r="45" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="8"/>
+                  <circle class="gauge-progress" id="matchGaugeCircle" cx="50" cy="50" r="45" fill="none" stroke="#00d4ff" stroke-width="8" stroke-linecap="round" stroke-dasharray="283" stroke-dashoffset="283" transform="rotate(-90 50 50)"/>
+                </svg>
+                <div class="gauge-text">
+                  <span class="gauge-percentage" id="matchPercentage">0%</span>
+                </div>
+              </div>
+              <div class="gauge-label">
+                <span class="gauge-title">Profile Match</span>
+                <span class="gauge-subtitle" id="matchSubtitle">Click "Tailor" to analyse your match score</span>
+                <span class="keyword-count-badge" id="keywordCountBadge">0 of 0 keywords matched</span>
+              </div>
+            </div>
+          </div>
+          
+          <div class="keywords-container" id="keywordsContainer">
+            <div class="keyword-match-header">
+              <span class="keyword-icon">🔍</span>
+              <span class="keyword-title">Keyword Match</span>
+            </div>
+            <p class="keyword-description">See which job keywords match your profile and what's missing to improve your score.</p>
+            
+            <div class="keyword-section priority-high" id="highPrioritySection">
+              <div class="keyword-section-header">
+                <span class="section-title">High Priority</span>
+                <span class="section-count" id="highPriorityCount">0/0</span>
+              </div>
+              <div class="keyword-chips" id="highPriorityChips"></div>
+            </div>
+            
+            <div class="keyword-section priority-medium" id="mediumPrioritySection">
+              <div class="keyword-section-header">
+                <span class="section-title">Medium Priority</span>
+                <span class="section-count" id="mediumPriorityCount">0/0</span>
+              </div>
+              <div class="keyword-chips" id="mediumPriorityChips"></div>
+            </div>
+            
+            <div class="keyword-section priority-low" id="lowPrioritySection">
+              <div class="keyword-section-header">
+                <span class="section-title">Low Priority</span>
+                <span class="section-count" id="lowPriorityCount">0/0</span>
+              </div>
+              <div class="keyword-chips" id="lowPriorityChips"></div>
+            </div>
+          </div>
+
+          <!-- Keyword Coverage Report -->
+          <div class="coverage-container hidden" id="coverageContainer">
+            <div class="coverage-header">
+              <div class="coverage-header-left">
+                <span class="coverage-icon">🧪</span>
+                <span class="coverage-title">Keyword Coverage (Injected)</span>
+              </div>
+              <button id="copyCoverageBtn" class="btn-icon" title="Copy coverage report" aria-label="Copy coverage report">📋</button>
+            </div>
+            <p class="coverage-description">Debug view showing which keywords were injected and where they appear in your CV.</p>
+
+            <div class="coverage-section coverage-high">
+              <div class="coverage-section-header">
+                <span class="section-title">High Priority</span>
+                <span class="section-count" id="coverageHighCount">0/0</span>
+              </div>
+              <div class="coverage-list" id="coverageHighList"></div>
+            </div>
+
+            <div class="coverage-section coverage-medium">
+              <div class="coverage-section-header">
+                <span class="section-title">Medium Priority</span>
+                <span class="section-count" id="coverageMediumCount">0/0</span>
+              </div>
+              <div class="coverage-list" id="coverageMediumList"></div>
+            </div>
+
+            <div class="coverage-section coverage-low">
+              <div class="coverage-section-header">
+                <span class="section-title">Low Priority</span>
+                <span class="section-count" id="coverageLowCount">0/0</span>
+              </div>
+              <div class="coverage-list" id="coverageLowList"></div>
+            </div>
+          </div>
+
+          <!-- 75% Qualification Threshold Panel (NEW) -->
+          <div class="qualification-threshold-panel hidden" id="qualificationThresholdPanel">
+            <div class="qual-panel-header">
+              <div class="qual-header-left">
+                <span class="qual-icon">🎯</span>
+                <span class="qual-title">Qualification Threshold</span>
+              </div>
+              <div class="qual-header-right">
+                <span class="qual-badge" id="qualThresholdBadge">--</span>
+              </div>
+            </div>
+            
+            <!-- Threshold Indicator -->
+            <div class="qual-indicator" id="qualIndicator">
+              <div class="qual-progress-bar">
+                <div class="qual-progress-fill" id="qualProgressFill" style="width: 0%"></div>
+                <div class="qual-threshold-marker" style="left: 75%">75%</div>
+              </div>
+              <div class="qual-status-message" id="qualStatusMessage">
+                Analyse job to see qualification match
+              </div>
+            </div>
+            
+            <!-- Summary Stats -->
+            <div class="qual-summary" id="qualSummary">
+              <div class="qual-stat">
+                <span class="qual-stat-label">Required Met</span>
+                <span class="qual-stat-value" id="requiredMetCount">0/0</span>
+              </div>
+              <div class="qual-stat">
+                <span class="qual-stat-label">Preferred Met</span>
+                <span class="qual-stat-value" id="preferredMetCount">0/0</span>
+              </div>
+              <div class="qual-stat">
+                <span class="qual-stat-label">Overall</span>
+                <span class="qual-stat-value" id="overallMatchScore">0%</span>
+              </div>
+            </div>
+            
+            <!-- Qualification Breakdown -->
+            <details class="qual-breakdown-details">
+              <summary class="qual-breakdown-header">
+                <span>📋 Qualification Breakdown</span>
+              </summary>
+              <div class="qual-breakdown-list" id="qualBreakdownList">
+                <p class="qual-placeholder">Click "Tailor" to analyse qualifications</p>
+              </div>
+            </details>
+            
+            <!-- Recommendations -->
+            <details class="qual-recommendations-details hidden" id="qualRecommendationsSection">
+              <summary class="qual-recommendations-header">
+                <span>💡 Improvement Recommendations</span>
+              </summary>
+              <div class="qual-recommendations-list" id="qualRecommendationsList">
+              </div>
+            </details>
+          </div>
+        </div>
+
+        <!-- ATS Match Section (legacy compact view) -->
+        <div class="ats-match-section hidden" id="atsMatchSection">
+          <div class="ats-match-header">
+            <span class="ats-label">ATS Match</span>
+            <span class="ats-score" id="atsMatchScore">0%</span>
+          </div>
+          <div class="ats-keywords hidden" id="atsKeywords">
+            <div class="keywords-matched" id="matchedKeywords"></div>
+            <div class="keywords-missing" id="missingKeywords"></div>
+          </div>
+        </div>
+
+        <h3 class="documents-title">📄 Generated Documents</h3>
+        
+        <!-- Document Items -->
+        <div class="document-item" id="cvDocument">
+          <div class="document-info">
+            <span class="document-icon">📋</span>
+            <div class="document-details">
+              <span class="document-name" id="cvFileName">Tailored CV</span>
+              <span class="document-size" id="cvSize"></span>
+            </div>
+          </div>
+          <div class="document-actions">
+            <button id="downloadCv" class="btn btn-small btn-icon-only" title="Download CV (DOCX)" aria-label="Download CV as DOCX">⬇️</button>
+            <button id="downloadCvText" class="btn btn-small btn-icon-only" title="Download Text" aria-label="Download CV as text">📝</button>
+          </div>
+        </div>
+
+        <div class="document-item" id="coverDocument">
+          <div class="document-info">
+            <span class="document-icon">✉️</span>
+            <div class="document-details">
+              <span class="document-name" id="coverFileName">Cover Letter</span>
+              <span class="document-size" id="coverSize"></span>
+            </div>
+          </div>
+          <div class="document-actions">
+            <button id="downloadCover" class="btn btn-small btn-icon-only" title="Download Cover Letter (DOCX)" aria-label="Download cover letter as DOCX">⬇️</button>
+            <button id="downloadCoverText" class="btn btn-small btn-icon-only" title="Download Text" aria-label="Download cover letter as text">📝</button>
+          </div>
+        </div>
+
+        <!-- Preview Tabs -->
+        <div class="preview-tabs">
+          <button id="previewCvTab" class="preview-tab active">Resume</button>
+          <button id="previewCoverTab" class="preview-tab">Cover Letter</button>
+          <button id="previewTextTab" class="preview-tab">Text View</button>
+        </div>
+        
+        <!-- Preview Content -->
+        <div class="preview-content-wrapper">
+          <div id="previewContent" class="preview-content placeholder">Generated content will appear here...</div>
+        </div>
+        
+        <!-- Action Buttons -->
+        <button id="copyContent" class="btn btn-secondary btn-copy">
+          <span class="btn-icon-left">📋</span> Copy
+        </button>
+
+        <button id="attachBoth" class="btn btn-success btn-large">
+          <span class="btn-icon-left">📎</span>
+          Attach Both to Application
+        </button>
+      </div>
+
+      <!-- Quick Stats -->
+      <div class="stats-card">
+        <div class="stat">
+          <span class="stat-value" id="todayCount">0</span>
+          <span class="stat-label">Today</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="totalCount">0</span>
+          <span class="stat-label">Total</span>
+        </div>
+        <div class="stat">
+          <span class="stat-value" id="avgTime">0s</span>
+          <span class="stat-label">Avg Time</span>
+        </div>
+      </div>
+
+      <!-- Workday Multi-Page Support Panel -->
+      <div class="workday-panel" id="workdayPanel">
+        <details class="workday-accordion">
+          <summary class="workday-header">
+            <span class="workday-icon">🔄</span>
+            <span class="workday-title">Workday Multi-Page Flow</span>
+            <span class="workday-status" id="workdayFlowStatus">Ready</span>
+          </summary>
+          
+          <div class="workday-content">
+            <!-- State Persistence Indicator -->
+            <div class="workday-state-row" id="workdayStateRow">
+              <div class="state-indicator">
+                <span class="state-dot" id="stateDot"></span>
+                <span class="state-text" id="stateText">No saved state</span>
+              </div>
+              <button id="clearWorkdayState" class="btn btn-small btn-outline" title="Clear saved state">Clear</button>
+            </div>
+            
+            <!-- JD Snapshot Panel -->
+            <div class="snapshot-section">
+              <div class="snapshot-header">
+                <span class="snapshot-icon">📸</span>
+                <span class="snapshot-title">JD Snapshot</span>
+                <span class="snapshot-badge" id="snapshotStatus">Not captured</span>
+              </div>
+              
+              <div class="snapshot-info" id="snapshotInfo">
+                <div class="snapshot-row">
+                  <span class="snapshot-label">Job Title:</span>
+                  <span class="snapshot-value" id="snapshotJobTitle">-</span>
+                </div>
+                <div class="snapshot-row">
+                  <span class="snapshot-label">Company:</span>
+                  <span class="snapshot-value" id="snapshotCompany">-</span>
+                </div>
+                <div class="snapshot-row">
+                  <span class="snapshot-label">Location:</span>
+                  <span class="snapshot-value" id="snapshotLocation">-</span>
+                </div>
+                <div class="snapshot-row">
+                  <span class="snapshot-label">Keywords:</span>
+                  <span class="snapshot-value snapshot-keywords" id="snapshotKeywords">0 extracted</span>
+                </div>
+              </div>
+              
+              <div class="snapshot-jd-preview">
+                <details>
+                  <summary>📄 View JD Preview</summary>
+                  <div class="jd-preview-content" id="snapshotJDPreview">No JD captured yet.</div>
+                </details>
+              </div>
+            </div>
+            
+            <!-- Action Buttons -->
+            <div class="workday-actions">
+              <button id="captureSnapshotBtn" class="btn btn-secondary btn-snapshot">
+                <span class="btn-icon">📸</span>
+                <span class="btn-text">Capture JD Now</span>
+              </button>
+              <button id="forceWorkdayApplyBtn" class="btn btn-accent btn-apply">
+                <span class="btn-icon">🚀</span>
+                <span class="btn-text">Force Apply</span>
+              </button>
+            </div>
+            
+            <!-- Multi-Page Progress -->
+            <div class="multipage-progress" id="multipageProgress">
+              <div class="progress-step completed" id="mpStep1">
+                <span class="step-num">1</span>
+                <span class="step-label">JD Capture</span>
+              </div>
+              <div class="progress-connector"></div>
+              <div class="progress-step" id="mpStep2">
+                <span class="step-num">2</span>
+                <span class="step-label">Login/Create</span>
+              </div>
+              <div class="progress-connector"></div>
+              <div class="progress-step" id="mpStep3">
+                <span class="step-num">3</span>
+                <span class="step-label">Form Fill</span>
+              </div>
+              <div class="progress-connector"></div>
+              <div class="progress-step" id="mpStep4">
+                <span class="step-num">4</span>
+                <span class="step-label">Submit</span>
+              </div>
+            </div>
+            
+            <!-- Credentials (Collapsible) -->
+            <details class="credentials-section">
+              <summary>🔐 Workday Credentials</summary>
+              <div class="credentials-form">
+                <div class="input-group-small">
+                  <label>Email</label>
+                  <input type="email" id="workdayEmail" placeholder="your@email.com">
+                </div>
+                <div class="input-group-small">
+                  <label>Password</label>
+                  <input type="password" id="workdayPassword" placeholder="Password">
+                </div>
+                <div class="input-group-small">
+                  <label>Verify Password</label>
+                  <input type="password" id="workdayVerifyPassword" placeholder="Verify Password">
+                </div>
+                <button id="saveWorkdayCreds" class="btn btn-small btn-secondary">Save Credentials</button>
+              </div>
+            </details>
+            
+            <!-- Auto-Flow Toggle -->
+            <div class="workday-auto-row">
+              <label class="toggle-row" for="workdayAutoToggle">
+                <span class="toggle-label">Auto-fill on page changes</span>
+                <input type="checkbox" id="workdayAutoToggle" checked />
+              </label>
+            </div>
+            
+            <!-- NEW: Automatic Autofill Toggle -->
+            <div class="workday-auto-row">
+              <label class="toggle-row" for="workdayAutofillToggle">
+                <span class="toggle-label">🤖 Automatic Autofill (AI-Powered)</span>
+                <input type="checkbox" id="workdayAutofillToggle" />
+              </label>
+            </div>
+            <p class="setting-help">Uses Kimi K2 AI to intelligently answer screening questions that pass knockout filters.</p>
+            
+            <!-- Saved Responses Panel -->
+            <details class="saved-responses-section">
+              <summary>💾 Saved Responses Memory</summary>
+              <div class="saved-responses-content">
+                <p class="saved-responses-info">Remembered answers from previous applications. Used for instant autofill.</p>
+                <div class="saved-responses-stats" id="savedResponsesStats">
+                  <span class="stat-badge">0 saved responses</span>
+                </div>
+                <div class="saved-responses-actions">
+                  <button id="viewSavedResponsesBtn" class="btn btn-small btn-secondary">View All</button>
+                  <button id="clearSavedResponsesBtn" class="btn btn-small btn-outline btn-danger">Clear All</button>
+                </div>
+                <div class="saved-responses-list hidden" id="savedResponsesList"></div>
+              </div>
+            </details>
+            
+            <button id="runWorkdayFlow" class="btn btn-primary btn-full">
+              <span class="btn-icon">▶️</span>
+              <span class="btn-text">Run Full Workday Flow</span>
+            </button>
+            
+            <!-- NEW: Manual Autofill Button -->
+            <button id="workdayManualAutofillBtn" class="btn btn-accent btn-full" style="margin-top: 8px;">
+              <span class="btn-icon">🤖</span>
+              <span class="btn-text">Run Manual Autofill</span>
+            </button>
+          </div>
+        </details>
+      </div>
+
+      <!-- Bulk Automation Panel -->
+      <details class="bulk-panel">
+        <summary class="bulk-header">
+          <span class="bulk-icon">📦</span>
+          <span>Bulk CSV Automation</span>
+        </summary>
+        <div class="bulk-content">
+          <div class="bulk-upload">
+            <input type="file" id="csvFileInput" accept=".csv" class="csv-input">
+            <button id="parseCsvBtn" class="btn btn-secondary btn-small">Parse CSV</button>
+          </div>
+          <div class="csv-preview hidden" id="csvPreview">
+            <span id="csvStats" class="csv-stats">0 jobs parsed</span>
+            <button id="startBulkAutomation" class="btn btn-primary btn-small" disabled>Start Automation</button>
+          </div>
+          <div class="bulk-controls hidden" id="bulkControls">
+            <div class="bulk-progress-bar">
+              <div class="bulk-progress-fill" id="bulkProgressFill"></div>
+            </div>
+            <span id="currentJobStatus" class="current-job-status">Ready</span>
+            <div class="bulk-buttons">
+              <button id="pauseBulkBtn" class="btn btn-warning btn-small">Pause</button>
+              <button id="resumeBulkBtn" class="btn btn-success btn-small hidden">Resume</button>
+              <button id="stopBulkBtn" class="btn btn-danger btn-small">Stop</button>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      
+      <!-- Parse CV Debug Panel -->
+      <details class="parse-cv-debug-panel" id="parseCVDebugPanel">
+        <summary class="parse-cv-debug-header">
+          <span class="debug-icon">📄</span>
+          <span>Parse CV Debug</span>
+          <span class="debug-badge" id="parseCVStatus">Idle</span>
+        </summary>
+        <div class="parse-cv-debug-content">
+          <div class="debug-section">
+            <div class="debug-section-title">📊 Parsed CV Info</div>
+            <div class="debug-row">
+              <span class="debug-label">File Type:</span>
+              <span class="debug-value" id="parsedCVFileType"> - </span>
+            </div>
+            <div class="debug-row">
+              <span class="debug-label">File Size:</span>
+              <span class="debug-value" id="parsedCVFileSize"> - </span>
+            </div>
+            <div class="debug-row">
+              <span class="debug-label">Text Length:</span>
+              <span class="debug-value" id="parsedCVTextLength"> - </span>
+            </div>
+            <div class="debug-row">
+              <span class="debug-label">Parse Time:</span>
+              <span class="debug-value" id="parsedCVTime"> - </span>
+            </div>
+          </div>
+          <div class="debug-section">
+            <div class="debug-section-title">📝 Text Snippet (first 500 chars)</div>
+            <div class="debug-snippet" id="parsedCVSnippet">
+              <p class="debug-empty">No CV parsed yet</p>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <!-- Preview vs Download Diff Panel -->
+      <details class="diff-panel" id="diffPanel">
+        <summary class="diff-header">
+          <span class="debug-icon">🔍</span>
+          <span>Preview vs Download Diff</span>
+          <span class="smoke-test-badge idle" id="smokeTestBadge">Ready</span>
+        </summary>
+        <div class="diff-content">
+          <!-- Smoke Test Section -->
+          <div class="debug-section">
+            <div class="debug-section-title">🧪 PDF Smoke Test (3-Role Fixture)</div>
+            <div class="debug-row">
+              <span class="debug-label">Status:</span>
+              <span class="debug-value" id="smokeTestStatus">Not run</span>
+            </div>
+            <div class="debug-row">
+              <span class="debug-label">Time:</span>
+              <span class="debug-value" id="smokeTestTime"> - </span>
+            </div>
+            <p class="debug-help">Generates CV using built-in 3-role fixture (Meta, Google, AWS) and validates in under 3 seconds.</p>
+            <button id="runSmokeTest" class="btn btn-accent btn-full">
+              <span class="btn-icon">🚀</span>
+              <span class="btn-text">Run Smoke Test</span>
+            </button>
+          </div>
+          
+          <!-- Structured JSON Section -->
+          <div class="debug-section">
+            <div class="debug-section-title">📊 (1) Structured professional_experience JSON</div>
+            <div class="diff-list" id="diffStructuredJSON">
+              <p class="diff-empty">Run diff analysis or smoke test to see data</p>
+            </div>
+          </div>
+          
+          <!-- Preview Text Section -->
+          <div class="debug-section">
+            <div class="debug-section-title">📝 (2) Rendered Preview Text</div>
+            <div class="diff-preview" id="diffPreviewText">
+              <p class="diff-empty">No preview captured yet</p>
+            </div>
+          </div>
+          
+          <!-- Mismatches Section -->
+          <div class="debug-section">
+            <div class="debug-section-title">⚠️ (3) Mismatches Detected</div>
+            <div class="diff-mismatches" id="diffMismatches">
+              <p class="diff-empty">Run analysis to detect mismatches</p>
+            </div>
+          </div>
+          
+          <!-- Diff Actions -->
+          <div class="debug-actions">
+            <button id="runDiffAnalysis" class="btn btn-small btn-secondary">🔍 Analyse Current CV</button>
+            <button id="copyDiffReport" class="btn btn-small btn-outline">📋 Copy Report</button>
+          </div>
+        </div>
+      </details>
+      <!-- Footer with Dashboard Link -->
+      <div class="popup-footer">
+        <a href="https://id-preview--2777be38-8dd2-4b20-ad45-fa61a1988fa3.lovable.app" target="_blank" class="dashboard-link">
+          <span class="link-icon">📊</span>
+          <span>Open Dashboard</span>
+          <span class="link-arrow">→</span>
+        </a>
+        <button id="openDebugSettings" class="btn btn-link">🔧 Debug Console</button>
+        <button id="showDebugReportBtn" class="btn btn-link">🐛 Debug Report</button>
+        <button id="openBulkApply" class="btn btn-link">Bulk Apply Dashboard</button>
+      </div>
+    </section>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toastContainer"></div>
+  </div>
+
+  <!-- Debug Panel Scripts (MUST load before popup.js) -->
+  <!-- The debug export the user sends back is written by DebugLogger,
+       which persists to chrome.storage. It was loaded only as a content
+       script, so an export could contain the page-side "extension_loaded"
+       lines and NOTHING from the popup, where all the tailoring happens.
+       Every export therefore read "4 entries, 0 errors, 0 successes" no
+       matter what had gone wrong. Loaded first so it is available to the
+       scripts below. -->
+  <script src="debug-logger.js"></script>
+  <script src="cache-manager.js"></script>
+  <script src="strategic-keyword-integration.js"></script>
+  <script src="qualification-threshold-engine.js"></script>
+  <script src="apply-verdict.js"></script>
+  <script src="jd-contact-extractor.js"></script>
+  <script src="ats-platforms.js"></script>
+  <script src="jd-context.js"></script>
+  <script src="jg-trace.js"></script>
+  <script src="validation-engine.js"></script>
+  <script src="contact-enrichment.js"></script>
+  <script src="linkedin-people-search.js"></script>
+  <!-- Step 1 of the email chain: turns a job into LinkedIn profile slugs so
+       Closely/ContactOut have something to resolve. Without it the email
+       providers are skipped as "needs-named-poster" and never called. -->
+  <script src="profile-web-search.js"></script>
+  <script src="linkedin-voyager.js"></script>
+  <script src="linkedin-profile-memory.js"></script>
+  <script src="followup-email.js"></script>
+  <script src="cover-letter-generator.js"></script>
+  <script src="jd-skill-extractor.js"></script>
+  <script src="recruiter-audit.js"></script>
+  <!-- popup.js gates tailoring on CareerBoostEngine.detectArchetype. It was
+       in the manifest's content_scripts but never loaded here, so in the
+       popup the symbol was undefined and the whole gate silently skipped. -->
+  <script src="career-boost-engine.js"></script>
+  <!-- Page size and spelling follow the posting's country. Loaded before
+       docx-generator.js and popup.js, both of which ask it for a region. -->
+  <script src="regional-format.js"></script>
+  <script src="docx-generator.js"></script>
+  <!-- Location stack: popup.js calls ATSLocationTailor for the job-adaptive
+       CV header location; without these it silently no-ops to raw text. -->
+  <script src="location-db.js"></script>
+  <script src="city-dataset.js"></script>
+  <script src="universal-location-strategy.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
