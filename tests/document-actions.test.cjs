@@ -10,6 +10,7 @@ function popupSetup(){
  const context={window:{addEventListener(){},DynamicScore:require('../dynamic-score.js')},document:{addEventListener(){},getElementById:id=>elements[id]},
  console:{log(){},warn(){},error(){}},DocxGenerator:generator,navigator:{clipboard:{writeText:async text=>{copied=text;}}},
  chrome:{tabs:{query:async()=>[{id:77}]}},setTimeout,clearTimeout};
+ vm.runInNewContext(fs.readFileSync(require.resolve('../dynamic-score.js'),'utf8'),context);
  vm.runInNewContext(fs.readFileSync(require.resolve('../popup.js'),'utf8')+'\nthis.Popup=ATSTailor;',context);
  const popup=Object.create(context.Popup.prototype);popup.generatedDocuments={cv:'Alex Sample\nSUMMARY\nPython developer.',coverLetter:'Dear Hiring Manager,\nI build tools.'};
  popup.showToast=(...args)=>notices.push(args);
@@ -148,4 +149,16 @@ test('background attachment still tries the cover after a CV upload throws',asyn
 test('background attachment confirms success only after both operations succeed',async()=>{
  const {ctx}=backgroundAttachmentSetup();const result=await ctx.attach();assert.equal(result.success,true);
  assert.equal(result.message,'CV: attached. Cover letter: attached');
+});
+
+test('tailoring recovers omitted relevant saved skills in the existing skills section',()=>{
+ const {popup}=popupSetup();
+ const cv='Alex Sample\nSUMMARY\nAnalyst\nTECHNICAL SKILLS\nSQL\nEDUCATION\nBSc';
+ const improved=popup.recoverOmittedProfileSkills(cv,{all:['SQL','Power BI','Tableau']},{skills:['SQL','Power BI','Unrelated tool']});
+ assert.match(improved,/Additional skills: Power BI/);assert.ok(!improved.includes('Tableau'));assert.ok(!improved.includes('Unrelated tool'));
+ assert.ok(improved.endsWith('EDUCATION\nBSc'));assert.equal(popup.calculateMatchScore(improved,{all:['SQL','Power BI','Tableau']}).matchScore,67);
+});
+test('job keywords and strategy alone never authorize missing qualifications',()=>{
+ const {popup}=popupSetup();const cv='Alex Sample\nSKILLS\nSQL';
+ assert.equal(popup.recoverOmittedProfileSkills(cv,{all:['SQL','Python']},{skills:['not Python'],ats_strategy:'Add Python'}),cv);
 });

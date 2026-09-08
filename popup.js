@@ -5553,6 +5553,23 @@ class ATSTailor {
     }
   }
 
+  recoverOmittedProfileSkills(cvText, keywords, profile) {
+    const before = this.calculateMatchScore(cvText, keywords);
+    if (before.matchScore >= 90) return cvText;
+    // Recover explicitly saved skills, never infer qualifications from JD text.
+    const skills = (Array.isArray(profile?.skills) ? profile.skills : [])
+      .map(skill => typeof skill === 'string' ? skill : skill?.name)
+      .filter(skill => typeof skill === 'string' && skill.trim() && !/\b(no|not|without|learning|beginner)\b/i.test(skill));
+    const additions = [...new Set(skills.map(skill => skill.trim()))].filter(skill =>
+      this.calculateMatchScore(skill, { all: before.missingKeywords }).matchedKeywords.length &&
+      !this.calculateMatchScore(cvText, { all: [skill] }).matchedKeywords.length);
+    if (!additions.length) return cvText;
+    const heading = /^(TECHNICAL SKILLS|SKILLS|CORE SKILLS|TECHNICAL PROFICIENCIES)\s*$/m;
+    if (!heading.test(cvText)) return cvText;
+    // Keep the existing template and sections; add only relevant saved skills.
+    return cvText.replace(heading, match => match + '\nAdditional skills: ' + additions.join(', '));
+  }
+
   fastKeywordInjection(cvText, keywords, missingKeywords) {
     // Missing requirements are review items, never evidence of experience.
     return {tailoredCV:cvText, injectedKeywords:[], reviewKeywords:missingKeywords || []};
@@ -5876,7 +5893,8 @@ class ATSTailor {
             const fb = this._defaultLocation || 'Dublin, IE';
             return appLoc && appLoc !== fb ? appLoc : undefined;
           })(),
-          requirements: [],
+          requirements: keywords.all || [],
+          keywordCoverageTarget: { minimum: 90, ideal: 100, keywords: keywords.all || [], highPriority: keywords.highPriority || [] },
           aiProvider: this.aiProvider, // Pass selected AI provider
           userProfile: {
             firstName: p.first_name || '',
@@ -6180,7 +6198,10 @@ class ATSTailor {
       console.log('[ATS Tailor] Step 2 - Initial match score:', this.generatedDocuments.matchScore + '%');
       updateStep(2, 'complete');
 
-      // Review coverage without manufacturing credentials or targeting a score.
+      // Recover relevant skills the first tailoring response omitted from the saved profile.
+      this.generatedDocuments.cv = this.recoverOmittedProfileSkills(this.generatedDocuments.cv, keywords, p);
+
+      // Review actual coverage after the evidence-backed recovery.
       updateStep(3, 'working');
       updateProgress(55, 'Step 3/3: Reviewing keyword coverage and preparing documents...');
       const review = this.calculateMatchScore(this.generatedDocuments.cv, keywords);

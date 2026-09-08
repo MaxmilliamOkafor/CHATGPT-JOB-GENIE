@@ -91,3 +91,7 @@ These fixes still require loaded-extension testing against the user's attached-f
 ## Background attachment outcome checks
 
 89 Node tests pass. Stored-file attachment uses scoped replacement with separate CV/cover outcomes, retries DOCX construction from current text if stored bytes are invalid, and reports missing files or upload exceptions. Removed the generic hardcoded 100%/files-attached banner. Workday no longer receives immediate success from this storage path before checking uploads. Pipeline state clears absent cover documents and marks files loaded only when a CV exists. Live employer upload verification remains outstanding.
+
+## Coverage target and omitted-skill recovery
+
+91 Node tests pass. Tailoring requests now include the extracted keyword requirements and explicit 90% minimum/100% ideal target. When a response falls below 90%, relevant skills explicitly saved in the profile can be restored to its existing skills section. Unsupported job terms and strategy text are not qualification evidence; measured scores remain actual coverage. This local recovery covers saved skills, not unverified semantic inferences about experience. Backend adherence to the additional request fields requires integration testing.
