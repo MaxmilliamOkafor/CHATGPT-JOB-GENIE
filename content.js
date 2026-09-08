@@ -134,7 +134,7 @@
   }
   
   // Global success banner message (100% for ALL platforms) - FIXED: removed duplicate prefix
-  const SUCCESS_BANNER_MSG = '✅ Done! Match: 100% - Files attached!';
+  const SUCCESS_BANNER_MSG = 'Documents prepared. Review keyword coverage and attachments on the form.';
 
   const SUPPORTED_HOSTS = [
     // Standard ATS platforms. Kept only as a fallback for when
@@ -1149,7 +1149,7 @@
             const _coverTxt = (typeof coverContent !== 'undefined' && coverContent && coverContent.text) ? coverContent.text : '';
             coverFile = (_coverTxt && buildDocxFileFromText(_coverTxt, pdfResult.cover && pdfResult.cover.filename, 'cover'))
               || (pdfResult.cover ? createPDFFile(pdfResult.cover.base64 || pdfResult.cover, pdfResult.cover.filename || 'Cover_Letter.pdf') : null);
-            filesLoaded = true;
+            filesLoaded = !!cvFile;
             
             forceEverything();
             ultraFastReplace();
@@ -1157,7 +1157,7 @@
             const elapsed = Math.round(performance.now() - start);
             
             // Unified success banner (all ATS)
-            const displayScore = 100;
+            const displayScore = matchScore;
 
             updateBanner(SUCCESS_BANNER_MSG, 'success');
             sendResponse({ status: 'attached', timing: elapsed, matchScore: displayScore, keywords: keywords.length });
@@ -1253,7 +1253,7 @@
             if (result.success) {
               if (type === 'cv') cvFile = file;
               else { coverFile = file; coverLetterText = text || ''; }
-              filesLoaded = true;
+              filesLoaded = !!cvFile;
             }
             sendResponse(result);
           } finally { window.__JG_FILE_ATTACH_AUTHORISED__ = false; }
@@ -1485,11 +1485,8 @@
           } catch (e) {}
           cvFile = buildDocxFileFromText(_cvTxt, result.cvPDF.filename, 'cv')
             || createPDFFile(result.cvPDF.base64 || result.cvPDF, result.cvPDF.filename || 'Resume.pdf');
-          if (result.coverPDF) {
-            coverFile = (_covTxt && buildDocxFileFromText(_covTxt, result.coverPDF.filename, 'cover'))
-              || createPDFFile(result.coverPDF.base64 || result.coverPDF, result.coverPDF.filename || 'Cover_Letter.pdf');
-          }
-          filesLoaded = true;
+          coverFile = buildDocxFileFromText(_covTxt, result.coverPDF?.filename || 'Cover_Letter.docx', 'cover');
+          filesLoaded = !!cvFile;
           
           // Cache in storage
           chrome.storage.local.set({
@@ -3363,43 +3360,39 @@
   }
 
   // ============ LOAD FILES AND START ==========
+  async function attachPreparedDocuments() {
+    stopAttachLoops();
+    if (!window.JobGenieAttachments) return { success: false, message: 'Reload this application page to load the attachment engine.' };
+    const outcomes = {};
+    window.__JG_FILE_ATTACH_AUTHORISED__ = true;
+    try {
+      for (const [kind, file, matches] of [['cv', cvFile, isCVField], ['cover', coverFile, isCoverField]]) {
+        try {
+          outcomes[kind] = file
+            ? await window.JobGenieAttachments.replace({ doc: document, file, kind, matches })
+            : { success: false, message: 'No current DOCX. Tailor this document again.' };
+        } catch (error) { outcomes[kind] = { success: false, message: error.message || 'Attachment failed.' }; }
+      }
+    } finally { window.__JG_FILE_ATTACH_AUTHORISED__ = false; }
+    const success = !!outcomes.cv.success && !!outcomes.cover.success;
+    const describe = (label, result) => `${label}: ${result.success ? 'attached' : result.message || 'not attached'}`;
+    return { success, ...outcomes, message: `${describe('CV', outcomes.cv)}. ${describe('Cover letter', outcomes.cover)}` };
+  }
+
   function loadFilesAndStart() {
     chrome.storage.local.get([
       'cvDocx', 'cvDocxFileName', 'coverDocx', 'coverDocxFileName',
-      'cvPDF', 'coverPDF', 'cvText', 'coverLetterText', 'cvFileName', 'coverFileName',
-    ], (data) => {
-      // DOCX is the ONLY attached format. Priority: pre-built DOCX base64
-      // from the popup -> build DOCX on the spot from the CV/cover text ->
-      // (last resort) PDF only if there is no text at all to build from.
-      cvFile = data.cvDocx
-        ? createDocxFile(data.cvDocx, data.cvDocxFileName || 'Tailored_Resume.docx')
-        : (buildDocxFileFromText(data.cvText || '', data.cvFileName, 'cv')
-           || createPDFFile(data.cvPDF, data.cvFileName || 'Tailored_Resume.pdf'));
-      coverFile = data.coverDocx
-        ? createDocxFile(data.coverDocx, data.coverDocxFileName || 'Tailored_Cover_Letter.docx')
-        : (buildDocxFileFromText(data.coverLetterText || '', data.coverFileName, 'cover')
-           || createPDFFile(data.coverPDF, data.coverFileName || 'Tailored_Cover_Letter.pdf'));
-      console.log('[ATS Tailor] Attaching CV:', cvFile && cvFile.name, '| Cover:', coverFile && coverFile.name);
+      'cvText', 'coverLetterText', 'cvFileName', 'coverFileName',
+    ], async (data) => {
+      // Rebuild invalid or absent DOCX payloads from this payload's text only.
+      cvFile = createDocxFile(data.cvDocx, data.cvDocxFileName || 'Tailored_Resume.docx')
+        || buildDocxFileFromText(data.cvText || '', data.cvFileName, 'cv');
+      coverFile = createDocxFile(data.coverDocx, data.coverDocxFileName || 'Tailored_Cover_Letter.docx')
+        || buildDocxFileFromText(data.coverLetterText || '', data.coverFileName, 'cover');
       coverLetterText = data.coverLetterText || '';
-      filesLoaded = true;
-
-      console.log('[ATS Tailor] Files loaded, starting attach');
-
-      // Immediate attach attempt
-      forceEverything();
-
-      // Workday: DO NOT start rapid attach loops (Workday clears input after upload)
-      if (isWorkdayHost()) {
-        console.log('[ATS Tailor Workday] Skipping attach loops (one-time attach mode)');
-        // Show success immediately for Workday after single attach
-        showSuccessRibbon();
-        updateBanner(SUCCESS_BANNER_MSG, 'success');
-        hideBanner();
-        return;
-      }
-
-      // Start guarded loop (non-Workday) - success shown inside after attach completes
-      ultraFastReplace();
+      filesLoaded = !!cvFile;
+      const result = await attachPreparedDocuments();
+      updateBanner(result.message, result.success ? 'success' : 'error');
     });
   }
 
@@ -3681,7 +3674,7 @@
         cvFile = buildDocxFileFromText(typeof tailoredCV === 'string' ? tailoredCV : '', pdfResult.cv.filename, 'cv')
           || createPDFFile(pdfResult.cv.base64 || pdfResult.cv, pdfResult.cv.filename || 'Resume.pdf');
         coverFile = buildDocxFileFromText(coverLetterText, 'Cover_Letter.docx', 'cover');
-        filesLoaded = true;
+        filesLoaded = !!cvFile;
         
         // Cache for future use
         chrome.storage.local.set({

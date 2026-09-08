@@ -87,3 +87,7 @@ Regression coverage includes copy selection, literal preview text, partial attac
 86 Node tests pass. Restored the pre-redesign CV and cover-letter renderers (headings, spacing, density and date alignment). Preview, clipboard, text download and explicit attachment text derive from the generated DOCX paragraphs. The popup retains its compact size and single-screen navigation with blue controls. Legacy PDF file creation now fails closed; mislabeled DOCX filenames are corrected and PDF bytes rejected. A scoped replacement path handles explicitly labelled upload groups whose input disappears after attachment, only when DOCX acceptance is visible. Added regressions for both cases.
 
 These fixes still require loaded-extension testing against the user's attached-file state. Fixture success does not verify server-side upload processing or every employer's custom controls. No new live uploads were performed.
+
+## Background attachment outcome checks
+
+89 Node tests pass. Stored-file attachment uses scoped replacement with separate CV/cover outcomes, retries DOCX construction from current text if stored bytes are invalid, and reports missing files or upload exceptions. Removed the generic hardcoded 100%/files-attached banner. Workday no longer receives immediate success from this storage path before checking uploads. Pipeline state clears absent cover documents and marks files loaded only when a CV exists. Live employer upload verification remains outstanding.

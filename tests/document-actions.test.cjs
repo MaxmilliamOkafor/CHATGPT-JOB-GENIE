@@ -124,3 +124,28 @@ test('labelled existing CV can be replaced when the employer hides the input',as
  const result=await attachments.replace({...f,kind:'cv',matches:()=>true,timeout:250});
  assert.equal(result.success,true);assert.equal(f.removed(),1);assert.equal(f.input().files[0].name,'New_CV.docx');
 });
+
+function backgroundAttachmentSetup({cv=true,cover=true,throwCv=false}={}) {
+ const source=fs.readFileSync(require.resolve('../content.js'),'utf8');
+ const start=source.indexOf('  async function attachPreparedDocuments()'),end=source.indexOf('  function loadFilesAndStart()',start);
+ const calls=[];
+ const ctx={cvFile:cv?{name:'CV.docx'}:null,coverFile:cover?{name:'Letter.docx'}:null,isCVField(){},isCoverField(){},stopAttachLoops(){},document:{},
+ window:{JobGenieAttachments:{async replace({kind}){calls.push(kind);if(kind==='cv'&&throwCv)throw Error('Upload rejected');return {success:true};}}}};
+ vm.runInNewContext(source.slice(start,end)+'\nthis.attach=attachPreparedDocuments;',ctx);
+ return {ctx,calls};
+}
+test('background attachment does not report both files attached when cover is missing',async()=>{
+ const {ctx,calls}=backgroundAttachmentSetup({cover:false});const result=await ctx.attach();
+ assert.equal(result.success,false);assert.equal(result.cv.success,true);assert.equal(result.cover.success,false);
+ assert.deepEqual(calls,['cv']);assert.match(result.message,/Cover letter: No current DOCX/);
+ assert.equal(ctx.window.__JG_FILE_ATTACH_AUTHORISED__,false);
+});
+test('background attachment still tries the cover after a CV upload throws',async()=>{
+ const {ctx,calls}=backgroundAttachmentSetup({throwCv:true});const result=await ctx.attach();
+ assert.equal(result.success,false);assert.equal(result.cover.success,true);assert.deepEqual(calls,['cv','cover']);
+ assert.match(result.message,/Upload rejected/);assert.equal(ctx.window.__JG_FILE_ATTACH_AUTHORISED__,false);
+});
+test('background attachment confirms success only after both operations succeed',async()=>{
+ const {ctx}=backgroundAttachmentSetup();const result=await ctx.attach();assert.equal(result.success,true);
+ assert.equal(result.message,'CV: attached. Cover letter: attached');
+});
