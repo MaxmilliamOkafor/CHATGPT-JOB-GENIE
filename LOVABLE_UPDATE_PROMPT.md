@@ -12,3 +12,5 @@ Update my existing Job Genie Lovable app to align with the extension changes in 
 8. Add regression tests for 8/19 coverage, zero keywords, unrelated partial words, missing eligibility answers, failed dropdown selection, cancellation, changed jobs, stale files, duplicate locations, international phone numbers, DOCX and PDF text preservation, and preview/download consistency. Test the UI at narrow and wide widths and with keyboard navigation. Report fixture tests separately from live Greenhouse/Workday checks. Do not claim universal ATS compatibility or guaranteed interviews.
 
 Provide a concise implementation report, migration requirements, screenshots, test results, and remaining deployment gates. Do not deploy or merge without a separate instruction.
+
+Preserve the original CV template and compact single-screen extension layout. Use blue selection colors. Both employer attachments must be DOCX; never fall back to a stale PDF. Website changes alone cannot update the installed extension.

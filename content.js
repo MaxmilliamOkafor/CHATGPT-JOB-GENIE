@@ -785,13 +785,13 @@
           ? createDocxFile(message.cvDocx, message.cvDocxFileName || 'Resume.docx')
           : (buildDocxFileFromText(message.cvText || '', message.cvFileName, 'cv')
              || (message.cvPdf ? createPDFFile(message.cvPdf, message.cvFileName || 'Resume.pdf') : null));
-        if (cvF) { cvFile = cvF; filesLoaded = true; }
+        cvFile = cvF; filesLoaded = !!cvF;
         // Cover letter: same priority
         const coF = message.coverDocx
           ? createDocxFile(message.coverDocx, message.coverDocxFileName || 'Cover_Letter.docx')
           : (buildDocxFileFromText(message.coverText || '', message.coverFileName, 'cover')
              || (message.coverPdf ? createPDFFile(message.coverPdf, message.coverFileName || 'Cover_Letter.pdf') : null));
-        if (coF) coverFile = coF;
+        coverFile = coF;
         console.log('[ATS Tailor] Attach payload set -- CV:', cvFile && cvFile.name,
           '| Cover:', coverFile && coverFile.name);
         sendResponse({ ok: true, cvFileName: cvFile && cvFile.name, coverFileName: coverFile && coverFile.name });
@@ -1248,7 +1248,7 @@
           window.__JG_FILE_ATTACH_AUTHORISED__ = true;
           try {
             const result = await window.JobGenieAttachments.replace({
-              doc: document, file, matches: type === 'cv' ? isCVField : isCoverField,
+              doc: document, file, kind: type, matches: type === 'cv' ? isCVField : isCoverField,
             });
             if (result.success) {
               if (type === 'cv') cvFile = file;
@@ -2010,13 +2010,14 @@
 
   // ============ PDF FILE CREATION ============
   function createPDFFile(base64, name) {
-    return createBlobFile(base64, name, 'application/pdf');
+    // Legacy callers must never attach a stale PDF. Regenerate DOCX from text.
+    return null;
   }
 
   function createDocxFile(base64, name) {
     return createBlobFile(
       base64,
-      name,
+      String(name || 'Document').replace(/\.(pdf|docx|txt)$/i, '') + '.docx',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     );
   }
@@ -2052,6 +2053,7 @@
       }
 
       const byteString = atob(data);
+      if (!byteString.startsWith('PK\x03\x04')) return null;
       const buffer = new ArrayBuffer(byteString.length);
       const view = new Uint8Array(buffer);
       for (let i = 0; i < byteString.length; i++) {
@@ -3678,7 +3680,7 @@
         // Store and attach files -- DOCX-first from the tailored text.
         cvFile = buildDocxFileFromText(typeof tailoredCV === 'string' ? tailoredCV : '', pdfResult.cv.filename, 'cv')
           || createPDFFile(pdfResult.cv.base64 || pdfResult.cv, pdfResult.cv.filename || 'Resume.pdf');
-        coverFile = pdfResult.cover ? createPDFFile(pdfResult.cover.base64 || pdfResult.cover, pdfResult.cover.filename || 'Cover_Letter.pdf') : null;
+        coverFile = buildDocxFileFromText(coverLetterText, 'Cover_Letter.docx', 'cover');
         filesLoaded = true;
         
         // Cache for future use

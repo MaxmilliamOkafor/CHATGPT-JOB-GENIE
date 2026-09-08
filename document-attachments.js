@@ -32,9 +32,24 @@
     const accept = (input.accept || '').toLowerCase().split(',').map(s => s.trim()).filter(Boolean);
     return !accept.length || accept.some(value => value === '.' + file.name.split('.').pop().toLowerCase() || value === file.type || value === '*/*' || (value.endsWith('/*') && file.type.startsWith(value.slice(0, -1))));
   }
-  async function replace({ doc, file, matches, timeout = 2500 }) {
+  async function replace({ doc, file, matches, kind, timeout = 2500 }) {
     const find = () => Array.from(doc.querySelectorAll('input[type="file"]')).filter(matches);
     let candidates = find();
+    if (!candidates.length && (kind === 'cv' || kind === 'cover')) {
+      // Greenhouse can remove its file input while an attachment is displayed.
+      // Only act on one explicitly labelled document group with DOCX support.
+      const groups = Array.from(doc.querySelectorAll('[role="group"], fieldset')).filter(group => {
+        const ids = (group.getAttribute('aria-labelledby') || '').split(/\s+/);
+        const label = group.getAttribute('aria-label') || ids.map(id => doc.getElementById(id)?.textContent || '').join(' ') || group.querySelector('legend')?.textContent || '';
+        return (kind === 'cv' ? /^(resume(?:\s*\/\s*cv)?|cv)\s*\*?$/i : /^cover\s*letter\s*\*?$/i).test(label.trim()) && /\bdocx\b/i.test(group.textContent || '') && removalControl(group);
+      });
+      if (groups.length === 1) {
+        removalControl(groups[0]).click();
+        const deadline = Date.now() + timeout;
+        do { await wait(100); candidates = find(); } while (!candidates.length && Date.now() < deadline);
+      }
+    }
+
     if (candidates.length !== 1) return { success: false, skipped: !candidates.length, message: candidates.length ? 'Multiple matching upload fields. Select the intended field manually.' : 'No matching upload field found.' };
     let input = candidates[0];
     // Check before removing anything. Never destroy a valid attachment for an unsupported format.

@@ -1058,8 +1058,8 @@ class ATSTailor {
   
   // NEW: Download text version of CV/Cover Letter
   downloadTextVersion(type) {
-    this.prepareDocumentText();
-    const content = type === 'cv' ? this.generatedDocuments.cv : this.generatedDocuments.coverLetter;
+    this.buildDocxArtifact();
+    const content = type === 'cv' ? this.generatedDocuments.cvExportText : this.generatedDocuments.coverExportText;
     if (!content) {
       this.showToast(`No ${type === 'cv' ? 'CV' : 'Cover Letter'} content to download`, 'error');
       return;
@@ -1211,7 +1211,7 @@ class ATSTailor {
   buildDocxArtifact() {
     this.prepareDocumentText();
     if (!this.generatedDocuments) return;
-    for (const key of ['cvDocx', 'cvDocxFileName', 'coverDocx', 'coverDocxFileName']) delete this.generatedDocuments[key];
+    for (const key of ['cvDocx', 'cvDocxFileName', 'coverDocx', 'coverDocxFileName', 'cvExportText', 'coverExportText']) delete this.generatedDocuments[key];
 
     if (typeof DocxGenerator === 'undefined') {
       console.warn('[ATS Tailor] DOCX generator not loaded');
@@ -1224,6 +1224,7 @@ class ATSTailor {
         const baseName = (this.generatedDocuments.cvFileName || 'Resume').replace(/\.(pdf|docx|txt)$/i, '');
         const result = DocxGenerator.fromCvText(cvText, { name: baseName, filename: `${baseName}.docx` });
         if (result && result.success && result.base64) {
+          this.generatedDocuments.cvExportText = result.text;
           this.generatedDocuments.cvDocx = result.base64;
           this.generatedDocuments.cvDocxFileName = result.filename || `${baseName}.docx`;
           console.log('[ATS Tailor] CV DOCX ready:', this.generatedDocuments.cvDocxFileName);
@@ -1239,6 +1240,7 @@ class ATSTailor {
         const baseName = (this.generatedDocuments.coverFileName || 'Cover_Letter').replace(/\.(pdf|docx|txt)$/i, '');
         const result = DocxGenerator.fromCoverLetterText(clText, { name: baseName, filename: `${baseName}.docx` });
         if (result && result.success && result.base64) {
+          this.generatedDocuments.coverExportText = result.text;
           this.generatedDocuments.coverDocx = result.base64;
           this.generatedDocuments.coverDocxFileName = result.filename || `${baseName}.docx`;
           console.log('[ATS Tailor] Cover Letter DOCX ready:', this.generatedDocuments.coverDocxFileName);
@@ -2028,10 +2030,10 @@ class ATSTailor {
   }
 
   copyCurrentContent() {
-    this.prepareDocumentText();
+    this.buildDocxArtifact();
     const content = this.currentPreviewTab !== 'cover'
-      ? this.generatedDocuments.cv 
-      : this.generatedDocuments.coverLetter;
+      ? (this.generatedDocuments.cvExportText || this.generatedDocuments.cv)
+      : (this.generatedDocuments.coverExportText || this.generatedDocuments.coverLetter);
     
     if (content) {
       return navigator.clipboard.writeText(content)
@@ -2058,9 +2060,9 @@ class ATSTailor {
     const previewContent = document.getElementById('previewContent');
     if (!previewContent) return;
     
-    this.prepareDocumentText();
+    this.buildDocxArtifact();
     const type = this.currentPreviewTab === 'cover' ? 'coverLetter' : 'cv';
-    const content = this.generatedDocuments[type] || '';
+    const content = this.generatedDocuments[type === 'cv' ? 'cvExportText' : 'coverExportText'] || this.generatedDocuments[type] || '';
     previewContent.textContent = content || 'Tailor documents to preview them here.';
     previewContent.classList.toggle('placeholder', !content);
   }
@@ -8069,7 +8071,7 @@ class ATSTailor {
     const g = this.generatedDocuments;
     const docx = type === 'cv' ? g.cvDocx : g.coverDocx;
     const filename = type === 'cv' ? g.cvDocxFileName : g.coverDocxFileName;
-    const text = type === 'cv' ? g.cv : g.coverLetter;
+    const text = type === 'cv' ? g.cvExportText : g.coverExportText;
     if (!docx) return { success: false, message: `No current ${type === 'cv' ? 'CV' : 'cover letter'} file. Tailor again.` };
     try {
       if (!tabId) { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); tabId = tab?.id; }

@@ -1721,7 +1721,6 @@
     };
   }
 
-  // One normalised source for preview, copy, export and upload. Never infer phone digits.
   function normalizeText(text) {
     const lines = foldDashes(String(text || '')).replace(/\r\n?/g, '\n')
       .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
@@ -1745,14 +1744,11 @@
     }).join('\n').trim();
   }
 
-  function buildFaithfulBodyXml(text) {
-    const lines = normalizeText(text).split('\n');
-    const bodyXml = lines.map((line, i) => {
-      const heading = /^(PROFESSIONAL SUMMARY|SUMMARY|PROFESSIONAL EXPERIENCE|WORK EXPERIENCE|EXPERIENCE|EDUCATION|TECHNICAL SKILLS|SKILLS|PROJECTS|CERTIFICATIONS|ACHIEVEMENTS)$/.test(line.trim());
-      return paragraph(run(line, { sz: i === 0 ? 32 : 22, bold: i === 0 || heading, color: i === 0 || heading ? C.NAVY : C.BODY }),
-        { spacingAfter: line ? 70 : 30, keepNext: i === 0 || heading });
-    }).join('');
-    return { bodyXml, rels: [] };
+  function exportedText(xml) {
+    const decode = value => value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+    return (xml.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || []).map(p =>
+      (p.match(/<w:t(?: [^>]*)?>[\s\S]*?<\/w:t>/g) || []).map(t => decode(t.replace(/<[^>]+>/g, ''))).join('')
+    ).join('\n').trim();
   }
 
   function fromCvText(cvText, opts = {}) {
@@ -1760,16 +1756,33 @@
       if (!cvText || typeof cvText !== 'string') {
         return { success: false, error: 'empty CV text' };
       }
-      cvText = normalizeText(cvText);
-      const { bodyXml: baseXml, rels } = buildFaithfulBodyXml(cvText);
+      const { bodyXml: baseXml, rels } = buildBodyXml(cvText);
 
-      // Preserve readable 11pt body text; long CVs continue onto another page.
+      // FIT TO ONE PAGE, LOOSEST PROFILE FIRST.
+      //
+      // Content is not touched: the audit already chose which bullets
+      // survive, knowing the posting, and this generator has no basis to
+      // overrule that. Only spacing and the type scale move.
+      //
+      // The 4% margin covers the difference between these metrics and
+      // Word's own. Filling the page to the last twip and then finding
+      // Word disagrees by one line is the failure this exists to avoid,
+      // and it costs a couple of points of density to rule out.
       const pg = pageTwipsFrom(opts);
       const usableH = Math.round((pg.h - 864 - 864) * 0.96);
       const usableW = pg.w - 900 - 900;
-      const bodyXml = baseXml;
-      const density = 'readable';
-      const heightTwips = estimateHeightTwips(bodyXml, usableW);
+
+      let bodyXml = baseXml;
+      let density = DENSITY[DENSITY.length - 1].name;
+      let heightTwips = 0;
+      for (let i = 0; i < DENSITY.length; i++) {
+        const candidate = applyDensity(baseXml, DENSITY[i]);
+        const h = estimateHeightTwips(candidate, usableW);
+        bodyXml = candidate;
+        density = DENSITY[i].name;
+        heightTwips = h;
+        if (h <= usableH) break;
+      }
 
       const files = [
         { name: '[Content_Types].xml', content: CONTENT_TYPES_XML },
@@ -1782,7 +1795,7 @@
       const baseName = (opts.name || 'Resume').replace(/\s+/g, '_').replace(/[^A-Za-z0-9_]/g, '');
       const filename = opts.filename || `${baseName}_CV.docx`;
       return {
-        success: true, base64, filename, size: zipBytes.length,
+        success: true, base64, filename, size: zipBytes.length, text: exportedText(bodyXml),
         density, heightTwips, pageHeightTwips: usableH,
         fitsOnePage: heightTwips <= usableH,
       };
@@ -1797,11 +1810,24 @@
       if (!coverText || typeof coverText !== 'string') {
         return { success: false, error: 'empty cover letter text' };
       }
-      coverText = normalizeText(coverText);
-      const { bodyXml: baseXml, rels } = buildFaithfulBodyXml(coverText);
+      const { bodyXml: baseXml, rels } = buildCoverLetterBodyXml(coverText);
 
+      // A cover letter that runs to two pages does not get its second
+      // page read, and unlike the CV there is nothing here worth losing
+      // to prevent that -- every paragraph is argument. So only the
+      // spacing moves, and only as far as it needs to.
+      //
+      // The type scale is deliberately left alone: shrinking the text of
+      // a letter to buy a page is visible in a way that tightening the
+      // gaps is not.
       const pg = pageTwipsFrom(opts);
-      const bodyXml = baseXml;
+      const usableH = Math.round((pg.h - 864 - 864) * 0.96);
+      const usableW = pg.w - 900 - 900;
+      let bodyXml = baseXml;
+      for (const d of DENSITY) {
+        bodyXml = applyDensity(baseXml, { sz: 0, space: d.space });
+        if (estimateHeightTwips(bodyXml, usableW) <= usableH) break;
+      }
 
       const files = [
         { name: '[Content_Types].xml', content: CONTENT_TYPES_XML },
@@ -1813,7 +1839,7 @@
       const base64 = bytesToBase64(zipBytes);
       const baseName = (opts.name || 'Cover_Letter').replace(/\s+/g, '_').replace(/[^A-Za-z0-9_]/g, '');
       const filename = opts.filename || `${baseName}_Cover_Letter.docx`;
-      return { success: true, base64, filename, size: zipBytes.length };
+      return { success: true, base64, filename, size: zipBytes.length, text: exportedText(bodyXml) };
     } catch (e) {
       console.warn(TAG, 'cover-letter generation failed:', e);
       return { success: false, error: e.message };

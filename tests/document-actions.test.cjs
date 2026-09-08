@@ -17,13 +17,13 @@ function popupSetup(){
 }
 test('copy text view uses the CV; cover view uses the letter',async()=>{
  const s=popupSetup();s.popup.currentPreviewTab='text';
- await s.popup.copyCurrentContent();assert.equal(s.copied(),s.popup.generatedDocuments.cv);
- s.popup.currentPreviewTab='cover';await s.popup.copyCurrentContent();assert.equal(s.copied(),s.popup.generatedDocuments.coverLetter);
+ await s.popup.copyCurrentContent();assert.equal(s.copied(),s.popup.generatedDocuments.cvExportText);
+ s.popup.currentPreviewTab='cover';await s.popup.copyCurrentContent();assert.equal(s.copied(),s.popup.generatedDocuments.coverExportText);
 });
 test('preview displays exact normalised text including ampersands and URL',()=>{
  const s=popupSetup();s.popup.generatedDocuments.cv='Alex Sample\nSUMMARY\nR&D with C++\nhttps://example.invalid/a?x=1&y=2';
  s.popup.currentPreviewTab='text';s.popup.updatePreviewContent();
- assert.equal(s.elements.previewContent.textContent,s.popup.generatedDocuments.cv);
+ assert.equal(s.elements.previewContent.textContent,s.popup.generatedDocuments.cvExportText);
 });
 test('attach both reports partial failure and uses one tab',async()=>{
  const s=popupSetup(), calls=[];
@@ -46,7 +46,7 @@ test('attachment always rebuilds after source text changes',async()=>{
  s.popup.generatedDocuments.cv='Alex Sample\nSUMMARY\nUpdated C# developer.';
  await s.popup.attachDocument('cv',77);
  assert.notEqual(payloads[0].docx,payloads[1].docx);
- assert.equal(payloads[1].text,s.popup.generatedDocuments.cv);
+ assert.equal(payloads[1].text,s.popup.generatedDocuments.cvExportText);
  assert.equal(payloads[1].filename,s.popup.generatedDocuments.cvDocxFileName);
 });
 function fixture({accept='',reject=false,existing=true,replaceNode=false}={}){
@@ -95,7 +95,7 @@ test('text download uses the currently reviewed cover letter',async()=>{
  s.context.Blob=Blob;s.context.URL={createObjectURL:value=>{blob=value;return 'blob:test';},revokeObjectURL(){}};
  s.context.document.createElement=()=>anchor={click(){}};s.context.document.body={appendChild(){},removeChild(){}};
  s.popup.downloadTextVersion('cover');
- assert.equal(await blob.text(),s.popup.generatedDocuments.coverLetter);assert.equal(anchor.download,'Cover_Letter.txt');
+ assert.equal(await blob.text(),s.popup.generatedDocuments.coverExportText);assert.equal(anchor.download,'Cover_Letter.txt');
 });
 
 test('contact formatting takes phone digits only from the saved profile',()=>{
@@ -103,4 +103,24 @@ test('contact formatting takes phone digits only from the saved profile',()=>{
  s.popup.generatedDocuments.cv='Alex Sample\nDublin, Dublin, IE, Ireland | Ireland | +353 08 742 61508 | candidate@example.invalid\nSUMMARY\nEngineer';
  s.popup.prepareDocumentText();
  assert.match(s.popup.generatedDocuments.cv,/Dublin, Ireland \| \+353 874 261 508/);
+});
+
+test('legacy PDF payloads cannot create attachment files; DOCX names are corrected',()=>{
+ const source=fs.readFileSync(require.resolve('../content.js'),'utf8');
+ const start=source.indexOf('  function createPDFFile('),end=source.indexOf('  // ============ LOCATION SANITIZATION',start);
+ const ctx={atob:s=>Buffer.from(s,'base64').toString('binary'),File:class{constructor(parts,name,opts){this.name=name;this.type=opts.type;}},console:{log(){},error(){}}};
+ vm.runInNewContext(source.slice(start,end)+'\nthis.factory={createPDFFile,createDocxFile};',ctx);
+ assert.equal(ctx.factory.createPDFFile(Buffer.from('%PDF-old').toString('base64'),'Old.pdf'),null);
+ assert.equal(ctx.factory.createDocxFile(Buffer.from('%PDF-old').toString('base64'),'Old.docx'),null);
+ const result=ctx.factory.createDocxFile(generator.fromCvText('Alex Sample\nSUMMARY\nEngineer.').base64,'CV.pdf');
+ assert.equal(result.name,'CV.docx');assert.match(result.type,/wordprocessingml/);
+});
+test('labelled existing CV can be replaced when the employer hides the input',async()=>{
+ const f=fixture({replaceNode:true});
+ const query=f.doc.querySelectorAll;
+ const group={getAttribute:name=>name==='aria-label'?'Resume/CV*':null,textContent:'Old_CV.pdf Accepted docx pdf',querySelector:()=>null,
+ querySelectorAll:()=>[{textContent:'×',getAttribute:()=>null,click(){f.input().parentElement.querySelectorAll('button')[0].click();}}]};
+ f.doc.querySelectorAll=selector=>selector.includes('fieldset')?[group]:f.removed()?query(selector):[];
+ const result=await attachments.replace({...f,kind:'cv',matches:()=>true,timeout:250});
+ assert.equal(result.success,true);assert.equal(f.removed(),1);assert.equal(f.input().files[0].name,'New_CV.docx');
 });

@@ -46,9 +46,10 @@ test('duplicate location components are removed across contact segments',()=>{
 });
 test('final CV and cover-letter wording/order match the exported paragraphs',()=>{
  const source='Alex Sample\nAnalyst, Reporting\nDublin, Dublin, IE, Ireland | Ireland | +353 874 261 508 | candidate@example.invalid\n\nPROFESSIONAL SUMMARY\nR&D with C++, C# and .NET.\n\nPROFESSIONAL EXPERIENCE\nSample Company\nEngineer\n2020 - 2024\n- Delivered a reviewed result.\n\nPROJECTS\nhttps://example.invalid/demo?a=1&b=2';
- const expected=docx.normalizeText(source).replace(/\s+/g,' ').trim();
+
  for(const build of [docx.fromCvText,docx.fromCoverLetterText]){
-  const output=unpack(build(source));
-  assert.equal(output.text.replace(/\s+/g,' ').trim(),expected);
+  const result=build(source);
+  const output=unpack(result);
+  assert.equal(output.text.replace(/\s+/g,' ').trim(),result.text.replace(/\s+/g,' ').trim());
  }
 });

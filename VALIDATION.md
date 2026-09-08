@@ -81,3 +81,9 @@ DOCX exports preserve final normalised wording and order rather than applying a 
 Tailoring instructions now target 90–100% relevant keyword coverage using supported profile evidence. Displayed coverage is recomputed from final text; individual chips use the same whole-term matcher. The target is not guaranteed, and the remote tailoring service's interpretation of these instructions needs authenticated validation.
 
 Regression coverage includes copy selection, literal preview text, partial attachment failure, concurrent clicks, old-file removal and input replacement, rejected formats preserving old attachments, employer error detection, missing cover fields, revision identity, identical DOCX download/attachment bytes, text downloads and full exported paragraph parity. These are fixture tests, not live employer upload acceptance. Browser UI QA and authenticated AI/provider/button integrations remain release gates; no applications were submitted.
+
+## Restored document layout and DOCX-only attachment correction
+
+86 Node tests pass. Restored the pre-redesign CV and cover-letter renderers (headings, spacing, density and date alignment). Preview, clipboard, text download and explicit attachment text derive from the generated DOCX paragraphs. The popup retains its compact size and single-screen navigation with blue controls. Legacy PDF file creation now fails closed; mislabeled DOCX filenames are corrected and PDF bytes rejected. A scoped replacement path handles explicitly labelled upload groups whose input disappears after attachment, only when DOCX acceptance is visible. Added regressions for both cases.
+
+These fixes still require loaded-extension testing against the user's attached-file state. Fixture success does not verify server-side upload processing or every employer's custom controls. No new live uploads were performed.
