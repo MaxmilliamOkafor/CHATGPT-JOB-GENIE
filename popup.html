@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Job Genie — Application workspace</title>
   <link rel="stylesheet" href="popup.css">
+  <link rel="stylesheet" href="popup-readability.css">
 </head>
 <body>
   <div class="container">
@@ -59,6 +60,12 @@
         <button id="logoutBtn" class="btn-link">Logout</button>
       </div>
 
+      <nav class="workspace-nav" aria-label="Workspace">
+        <button type="button" data-view="apply" aria-pressed="true">Apply</button>
+        <button type="button" data-view="documents" aria-pressed="false">Documents</button>
+        <button type="button" data-view="followup" aria-pressed="false">Follow-up</button>
+        <button type="button" data-view="settings" aria-pressed="false">Settings</button>
+      </nav>
       <!-- AI Provider Settings - Compact Toggle -->
       <div class="ai-provider-panel" id="aiSettingsPanel">
         <div class="ai-provider-toggle-row">
@@ -662,7 +669,7 @@
                 </div>
               </div>
               <div class="gauge-label">
-                <span class="gauge-title">Profile Match</span>
+                <span class="gauge-title">Keyword coverage</span>
                 <span class="gauge-subtitle" id="matchSubtitle">Click "Tailor" to analyse your match score</span>
                 <span class="keyword-count-badge" id="keywordCountBadge">0 of 0 keywords matched</span>
               </div>
@@ -674,7 +681,7 @@
               <span class="keyword-icon">🔍</span>
               <span class="keyword-title">Keyword Match</span>
             </div>
-            <p class="keyword-description">See which job keywords match your profile and what's missing to improve your score.</p>
+            <p class="keyword-description">Check missing terms. Include them only when supported by your experience.</p>
             
             <div class="keyword-section priority-high" id="highPrioritySection">
               <div class="keyword-section-header">
@@ -706,11 +713,11 @@
             <div class="coverage-header">
               <div class="coverage-header-left">
                 <span class="coverage-icon">🧪</span>
-                <span class="coverage-title">Keyword Coverage (Injected)</span>
+                <span class="coverage-title">Keyword evidence</span>
               </div>
               <button id="copyCoverageBtn" class="btn-icon" title="Copy coverage report" aria-label="Copy coverage report">📋</button>
             </div>
-            <p class="coverage-description">Debug view showing which keywords were injected and where they appear in your CV.</p>
+            <p class="coverage-description">Review where tracked keywords appear in your CV.</p>
 
             <div class="coverage-section coverage-high">
               <div class="coverage-section-header">
@@ -1220,5 +1227,6 @@
   <script src="universal-location-strategy.js"></script>
   <script src="dynamic-score.js"></script>
   <script src="popup.js"></script>
+  <script src="popup-navigation.js"></script>
 </body>
 </html>

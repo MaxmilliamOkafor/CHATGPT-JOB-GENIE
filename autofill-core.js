@@ -831,7 +831,7 @@
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, best.value);
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    return true;
+    return el.value === best.value;
   }
 
   function fillRadioGroup(doc, name, value) {
@@ -867,7 +867,11 @@
         el.dispatchEvent(new KeyboardEvent('keyup', { key: value.slice(-1), bubbles: true }));
       }
       await new Promise((r) => setTimeout(r, 350));
-      if (options.shouldContinue && !options.shouldContinue()) return false;
+      if (options.shouldContinue && !options.shouldContinue()) {
+        if (isInput) setValue(el, previous);
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        return false;
+      }
 
       // The listbox is usually rendered at body level and tied to the
       // control by aria-controls/aria-owns, so searching the control's
@@ -876,8 +880,10 @@
       let opts = [];
       const owns = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
       if (owns) {
-        const box = doc.getElementById(owns);
-        if (box) opts = Array.prototype.slice.call(box.querySelectorAll('[role="option"], li, [class*="option" i]'));
+        for (const id of owns.split(/\s+/)) {
+          const box = doc.getElementById(id);
+          if (box) opts.push(...box.querySelectorAll('[role="option"], li, [class*="option" i]'));
+        }
       }
       if (!owns && !opts.length) {
         opts = Array.prototype.slice.call(
@@ -887,7 +893,10 @@
         if (isVisible(o) && o.getAttribute('aria-disabled') !== 'true' && optionMatches(o.textContent, value)) {
           o.click();
           await new Promise((r) => setTimeout(r, 80));
-          return true;
+          const selected = o.getAttribute('aria-selected') === 'true' ||
+            (el.getAttribute('aria-expanded') === 'false' && optionMatches(isInput ? el.value : el.textContent, value));
+          if (selected) return true;
+          break;
         }
       }
 
@@ -918,7 +927,7 @@
     let alreadySet = 0;
     let answerable = 0;
 
-    const controls = scope.querySelectorAll('input, select, textarea, [role="combobox"]');
+    const controls = scope.querySelectorAll('input, select, textarea, [role="combobox"], [aria-haspopup="listbox"]');
 
     // DOES THIS FORM ASK FOR THE COUNTRY CODE SEPARATELY?
     //
@@ -951,7 +960,8 @@
       if (o.shouldContinue && !o.shouldContinue()) break;
       try {
         const type = (el.type || '').toLowerCase();
-        if (['hidden', 'file', 'submit', 'button', 'reset', 'image', 'password'].includes(type)) continue;
+        const customDropdown = el.getAttribute('role') === 'combobox' || el.getAttribute('aria-haspopup') === 'listbox';
+        if (['hidden', 'file', 'submit', 'reset', 'image', 'password'].includes(type) || (type === 'button' && !customDropdown)) continue;
         if (!isVisible(el)) continue;
 
         // Radios must resolve the GROUP question; their own label is just
@@ -1003,7 +1013,7 @@
             el.click();
             filled++;
           }
-        } else if (el.getAttribute('role') === 'combobox') {
+        } else if (customDropdown) {
           // Inputs included. An <input role="combobox"> is a typeahead --
           // LinkedIn's Easy Apply shape -- and a plain setValue types the
           // text without ever committing a selection, so the step stays

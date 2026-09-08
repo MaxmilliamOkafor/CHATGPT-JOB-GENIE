@@ -72,6 +72,7 @@
   // ---- XML helpers -----------------------------------------------------
   function xmlEscape(s) {
     return String(s == null ? '' : s)
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -179,51 +180,8 @@
   // carry their own copy with the same faults, so fixing the DOCX left
   // the PDF broken.
   function normalizePhoneToken(seg) {
-    const raw = String(seg || '');
-    const cleaned = raw.replace(/[^\d+]/g, '');
-    if (!/\d{7,}/.test(cleaned)) return seg; // not a phone
-
-    // MEASURED AGAINST BOTH PARSERS, NOT ONE.
-    //
-    // An earlier version of this emitted "+353: 0874261508". The colon
-    // was chosen because OpenResume's rule,
-    // /\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}/, then extracts a clean
-    // "0874261508" instead of running through the country code. That was
-    // right about OpenResume and wrong about everything else:
-    // libphonenumber, which is what Workday and Greenhouse validate
-    // phone fields with, REJECTS that string under IE, DE, GB, US and
-    // with no region set. Optimising for the parser I could read the
-    // source of, and never testing the validator the real portals use.
-    //
-    //   "+353: 0874261508"     OpenResume "0874261508"   libphonenumber FAILS
-    //   "+353 0874261508"      OpenResume "353 0874261"  a WRONG number
-    //   "+353 087 426 1508"    OpenResume "087 426 1508" libphonenumber valid
-    //
-    // Three things are each load-bearing. The TRUNK ZERO makes the
-    // national number ten digits, which a 3-3-4 rule needs. The SPACE
-    // after the country code keeps it readable and dialable. And the
-    // GROUPING inside the national part is what stops the match spanning
-    // the country code: without those spaces the regex takes
-    // "353 0874261" and a recruiter calls a number that is not yours.
-    const D = { 353: 9, 44: 10, 33: 9, 61: 9, 91: 10 };
-
-    const m = raw.match(/^\s*\+(\d{1,3})\D+(.+)$/);
-    if (m) {
-      const cc = m[1];
-      let national = m[2].replace(/\D/g, '');
-      if (national.length >= 7) {
-        if (national.charAt(0) !== '0' && D[cc] === national.length) national = '0' + national;
-        // 3-3-rest, so the first two groups can never merge with the
-        // country code in front of them.
-        const grouped = national.length > 6
-          ? national.slice(0, 3) + ' ' + national.slice(3, 6) + ' ' + national.slice(6)
-          : national;
-        return '+' + cc + ' ' + grouped;
-      }
-    }
-    // Already national and contiguous: leave it exactly as it is.
-    if (/^\d{7,}$/.test(cleaned)) return cleaned;
-    return seg;
+    // Formatting must never add digits or infer a national trunk prefix.
+    return String(seg || '').trim();
   }
 
   // Does this segment look like a phone number? (mostly digits + phone punct)
@@ -239,7 +197,15 @@
   // parsers (Workday, Greenhouse, Sovren, HireAbility) handle most
   // reliably when splitting a contact line into email/phone/location.
   function contactParagraph(text, relsCollector, opts = {}) {
-    const segs = text.split(/\s*[|·]\s*/).map((s) => s.trim()).filter(Boolean);
+    const seen = new Set();
+    const segs = text.split(/\s*[|·]\s*/).map(s => s.trim()).filter(Boolean).map(seg => {
+      if (seg.includes('@') || /https?:|www\./i.test(seg) || looksLikePhone(seg)) return seg;
+      return seg.split(/\s*,\s*/).filter(part => {
+        const key = part.toLocaleLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      }).join(', ');
+    }).filter(Boolean);
     const sep = '  |  ';
     const pieces = [];
     segs.forEach((seg, i) => {

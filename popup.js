@@ -1189,6 +1189,9 @@ class ATSTailor {
   }
 
   buildDocxArtifact() {
+    if (!this.generatedDocuments) return;
+    for (const key of ['cvDocx', 'cvDocxFileName', 'coverDocx', 'coverDocxFileName']) delete this.generatedDocuments[key];
+
     if (typeof DocxGenerator === 'undefined') {
       console.warn('[ATS Tailor] DOCX generator not loaded');
       return;
@@ -4540,56 +4543,20 @@ class ATSTailor {
   /**
    * OPTIMIZED: Update match gauge with animation
    */
-  // ██ THE GAUGE READ 100% WHILE NOTHING HAD MATCHED ██
-  //
-  // Reported as "tailoring not working anymore", with a screenshot of a
-  // full green ring reading 100% and "Perfect profile match!" directly
-  // above "0 of 35 keywords matched" and thirty-five red crosses.
-  //
-  // Both of those were hard-coded. The `score` argument was computed,
-  // passed in, and thrown away: the ring was forced to a full circle,
-  // the number to the literal string '100%', and the subtitle to
-  // "Perfect profile match!" on every render. So the one indicator that
-  // exists to say whether the run worked could only ever say yes, and a
-  // complete failure of the keyword pipeline displayed as success.
-  //
-  // A status display that cannot report a failure is worse than no
-  // status display, because it is trusted. It now shows the real
-  // number, and it says plainly when there is nothing to measure.
   updateMatchGauge(score, matched, total) {
-    const gaugeCircle = document.getElementById('matchGaugeCircle');
-    if (gaugeCircle) {
-      const circumference = 2 * Math.PI * 45;
-      const dashOffset = circumference - (score / 100) * circumference;
-      gaugeCircle.setAttribute('stroke-dashoffset', dashOffset.toString());
-      
-      // Profile Match is always 100% - always show green
-      let strokeColor = '#2ed573';
-      gaugeCircle.setAttribute('stroke', strokeColor);
-      // Force gauge to full circle for 100%
-      const fullDashOffset = circumference - (100 / 100) * circumference;
-      gaugeCircle.setAttribute('stroke-dashoffset', fullDashOffset.toString());
+    const count = Math.max(0, Math.floor(Number(total) || 0));
+    const hits = Math.min(count, Math.max(0, Math.floor(Number(matched) || 0)));
+    const coverage = count ? Math.round(hits / count * 100) : 0;
+    const circle = document.getElementById('matchGaugeCircle');
+    if (circle) {
+      circle.setAttribute('stroke-dashoffset', String(2 * Math.PI * 45 * (1 - coverage / 100)));
+      circle.setAttribute('stroke', coverage >= 80 ? '#6ee7b7' : '#fcd34d');
     }
-    
-    const matchPercentage = document.getElementById('matchPercentage');
-    // CRITICAL: Profile Match is ALWAYS 100% - matching YOUR profile to job requirements
-    if (matchPercentage) matchPercentage.textContent = '100%';
-    
-    const matchSubtitle = document.getElementById('matchSubtitle');
-    if (matchSubtitle) {
-      matchSubtitle.textContent = 'Perfect profile match!';
-    }
-    
-    const keywordCountBadge = document.getElementById('keywordCountBadge');
-    if (keywordCountBadge) {
-      keywordCountBadge.textContent = `${matched} of ${total} keywords matched`;
-    }
-    
-    // Update AI provider name in match panel
-    const matchPanelProvider = document.getElementById('matchPanelProvider');
-    if (matchPanelProvider) {
-      matchPanelProvider.textContent = this.aiProvider === 'kimi' ? 'Kimi K2' : 'OpenAI';
-    }
+    const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    set('matchPercentage', count ? `${coverage}%` : '—');
+    set('matchSubtitle', count ? (coverage === 100 ? 'All tracked keywords found. Review evidence.' : 'Review missing keywords against your experience.') : 'No keywords available to measure.');
+    set('keywordCountBadge', `${hits} of ${count} keywords matched`);
+    set('matchPanelProvider', this.aiProvider === 'kimi' ? 'Kimi K2' : 'OpenAI');
   }
 
   /**

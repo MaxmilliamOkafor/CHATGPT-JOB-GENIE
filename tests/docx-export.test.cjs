@@ -26,3 +26,21 @@ test('long DOCX exports preserve the final content',()=>{
  const result=unpack(docx.fromCvText('Alex Sample\n\nEXPERIENCE\n'+paragraphs.join('\n')));
  assert.ok(result.text.includes('Delivered project 59'));
 });
+test('CV export never adds digits to an international phone number',()=>{
+ const result=unpack(docx.fromCvText('Alex Sample\n+353 874 261 508 | candidate@example.invalid\n\nSUMMARY\nEngineer.'));
+ assert.ok(result.text.includes('+353 874 261 508'));
+ assert.ok(!result.text.includes('+353 087'));
+});
+test('cover letter preserves paragraphs, technical skills and closing',()=>{
+ const result=unpack(docx.fromCoverLetterText('Alex Sample\n\nDear Hiring Manager,\n\nI build C++ and C# tools with .NET.\n\nI collaborate with café teams.\n\nSincerely,\nAlex Sample'));
+ for(const term of ['Dear Hiring Manager','C++','C#','.NET','café','Sincerely','Alex Sample']) assert.ok(result.text.includes(term),term);
+});
+test('XML-invalid control characters cannot corrupt a generated file',()=>{
+ const result=unpack(docx.fromCoverLetterText('Dear Hiring Manager,\n\nReliable\u0001 engineering.\n\nSincerely,\nAlex Sample'));
+ assert.ok(result.text.includes('Reliable engineering.'));
+});
+test('duplicate location components are removed across contact segments',()=>{
+ const result=unpack(docx.fromCoverLetterText('Alex Sample\nDublin, Dublin, Ireland | Ireland | candidate@example.invalid\n\nDear Hiring Manager,\n\nI build reliable tools.\n\nSincerely,\nAlex Sample'));
+ assert.ok(!result.text.includes('Dublin, Dublin'));
+ assert.equal((result.text.match(/Ireland/g)||[]).length,1);
+});

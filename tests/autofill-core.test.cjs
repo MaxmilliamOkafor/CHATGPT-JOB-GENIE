@@ -27,3 +27,17 @@ test('residence does not imply permission to work',()=>{
  assert.equal(core.authorisedForQuestion('Authorized to work in Ireland?',{country:'Ireland'}),'');
  assert.equal(core.authorisedForQuestion('Authorized to work in Ireland?',{work_authorized_countries:['IE']}),'Yes');
 });
+test('custom dropdown requires selection evidence and honors linked listboxes',async()=>{
+ const original=global.KeyboardEvent;
+ global.KeyboardEvent=class {constructor(type,init){this.type=type;Object.assign(this,init);}};
+ try {
+  let selected=false, clicked=0;
+  const doc={defaultView:{getComputedStyle(){return {display:'block',visibility:'visible',opacity:'1'};}},getElementById(id){return id==='answers'?{querySelectorAll(){return [option];}}:null;}};
+  const option={textContent:'Yes',ownerDocument:doc,getBoundingClientRect(){return {width:100,height:30};},getAttribute(k){return k==='aria-selected'&&selected?'true':null;},click(){clicked++;}};
+  const el={tagName:'BUTTON',ownerDocument:doc,textContent:'Select...',getAttribute(k){return k==='aria-controls'?'missing answers':null;},click(){},focus(){},dispatchEvent(){}};
+  assert.equal(await core.fillCustomDropdown(el,'Yes'),false);
+  assert.equal(clicked,1);
+  option.click=()=>{selected=true;};
+  assert.equal(await core.fillCustomDropdown(el,'Yes'),true);
+ } finally {global.KeyboardEvent=original;}
+});

@@ -49,3 +49,20 @@ Six additional tests cover purpose-specific inbox rejection, recruiting-context 
 - DOCX exports pass ZIP CRC, XML parsing, selectable text preservation (technical punctuation and Unicode), no-layout-table/no-textbox checks, and preservation of the last paragraph in a long fixture. These checks do not prove visual rendering or vendor ATS parsing.
 
 The extension has still not been installed into the managed browser. Existing browser-policy restrictions and authenticated upload/API gates remain unresolved. This is not a deployment certification.
+
+## Popup readability pass
+
+Added a dedicated final stylesheet with a 480px popup, 14px body text, 13px help text, 44px minimum controls, 50px primary action, opaque input backgrounds, readable placeholders, and explicit status colors. Calculated contrast for the selected body, muted, button, placeholder and status text pairs ranges from 8.82:1 to 13.98:1. These are palette calculations, not a full rendered accessibility audit. The manifest/resource check now covers 70 entry-point resources. The managed browser's visual-review limitation remains.
+
+## Popup and export follow-up (September 8, 2026)
+
+70 automated tests pass. Packaged-resource and syntax checks cover 71 resources.
+The actual gauge method now derives coverage from matched/total counts: 8/19 displays 42%, and 0/0 is unmeasured. Earlier scoring tests did not exercise the gauge and therefore missed its hardcoded success display.
+
+The popup is 600px wide with four task views, violet/teal actions, and an explicit screening-answer editor. Settings and diagnostics no longer precede the main action. Browser preview was attempted again and blocked with ERR_BLOCKED_BY_CLIENT; navigation and loaded-extension interaction remain manual release gates.
+
+Autofill now discovers button-based listboxes and multiple ARIA-owned listboxes. It requires committed selection evidence and checks native select values after events. A mocked dropdown regression verifies that clicking alone does not count as success. This is not live Greenhouse or Workday validation.
+
+DOCX formatting no longer adds phone digits, removes repeated contact location components, and strips XML-invalid controls. Failed/missing DOCX rebuilds clear old artifacts. Added cover-letter text-preservation tests. The user-supplied CV and cover letter were rendered for inspection; those files show duplicated location components and the cover letter contains an awkward phrase. The generated text still requires candidate review. No new employer upload was performed, and PDF/preview parity remains unverified.
+
+LOVABLE_UPDATE_PROMPT.md contains the requested implementation prompt. It does not mean the Lovable app itself has been updated. The extension remains a draft release candidate.
