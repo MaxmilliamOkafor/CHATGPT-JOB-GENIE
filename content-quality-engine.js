@@ -9,7 +9,7 @@
   const BANNED_WORDS = [
     'orchestrated', 'championed', 'pioneered', 'helmed', 'realm',
     'comprehensive', 'demonstrating', 'showcasing', 'spearheaded',
-    'meticulous', 'approximately', 'dynamic', 'synergy', 'cutting-edge',
+    'meticulous', 'dynamic', 'synergy', 'cutting-edge',
     'best-in-class', 'world-class', 'results-driven', 'detail-oriented',
     'team player', 'go-getter', 'various', 'assisted',
     'leverage', 'leveraging', 'leveraged',
@@ -831,7 +831,7 @@
         result = this.removeBannedContent(result);
       }
 
-      // Step 7: Humaniser pass — break AI-detectable patterns
+      // Step 7: Preserve voice and perform deterministic whitespace cleanup
       result = this.humaniseText(result);
 
       // Final cleanup
@@ -843,79 +843,9 @@
     // ============ HUMANISER PASS (v3.0 anti-AI detection) ============
     humaniseText(text) {
       if (!text || typeof text !== 'string') return text;
-      let r = text;
-
-      // 1. REMOVED: substituting the subject pronoun.
-      //
-      // This rewrote ". I <verb>" into ". This <verb>", ". My <verb>" or
-      // ". <verb>", and no branch of it produces valid English:
-      //
-      //   "I think I could add value"  -> "This think I could add value"
-      //   "I have gone from..."        -> "My have gone from..."
-      //   "I am particularly proud"    -> "am particularly proud"
-      //
-      // The auxiliary list it relied on covers only nine verbs, so any
-      // other verb left the substitution stranded with no subject at
-      // all. It fired on 60% of first-person sentences, which in a cover
-      // letter -- a document that is first-person by nature -- is most
-      // of the text. Varying sentence openings is a real goal; swapping
-      // out the subject is not a way to achieve it.
-      //
-      // The contraction variation below does the same job grammatically.
-
-      // 2. Vary paragraph/sentence openers — flag if 3+ consecutive sentences start same way
-      //
-      // Rewritten to work a line at a time. It used to split the WHOLE
-      // text on sentence boundaries and rejoin with `sentences.join(' ')`,
-      // which replaced every newline between them with a space -- so a
-      // four-paragraph cover letter came out as one unbroken block.
-      r = r.split('\n').map((lineText) => {
-        const sentences = lineText.split(/(?<=[.!?])\s+/);
-        if (sentences.length < 3) return lineText;
-        const openers = sentences.map((s) => (s.match(/^\S+/) || [''])[0].toLowerCase());
-        for (let i = 2; i < openers.length; i++) {
-          if (openers[i] && openers[i] === openers[i - 1] && openers[i] === openers[i - 2]) {
-            const alts = ['Specifically, ', 'For example, ', 'In practice, ', 'Here, ', 'One example: '];
-            const pick = alts[Math.floor(Math.random() * alts.length)];
-            sentences[i] = pick + sentences[i].charAt(0).toLowerCase() + sentences[i].slice(1);
-          }
-        }
-        return sentences.join(' ');
-      }).join('\n');
-
-      // 3. Contract formal phrases to casual contractions (human writers use these)
-      r = r.replace(/\bI have\b/g, () => Math.random() < 0.4 ? "I've" : 'I have');
-      r = r.replace(/\bI would\b/g, () => Math.random() < 0.4 ? "I'd" : 'I would');
-      r = r.replace(/\bI will\b/g, () => Math.random() < 0.3 ? "I'll" : 'I will');
-      r = r.replace(/\bdo not\b/g, () => Math.random() < 0.3 ? "don't" : 'do not');
-      r = r.replace(/\bdid not\b/g, () => Math.random() < 0.3 ? "didn't" : 'did not');
-      r = r.replace(/\bcannot\b/g, () => Math.random() < 0.3 ? "can't" : 'cannot');
-      r = r.replace(/\bwould not\b/g, () => Math.random() < 0.3 ? "wouldn't" : 'would not');
-      r = r.replace(/\bit is\b/g, () => Math.random() < 0.3 ? "it's" : 'it is');
-      r = r.replace(/\bthat is\b/g, () => Math.random() < 0.3 ? "that's" : 'that is');
-
-      // 4. Vary sentence length — split overly long sentences (AI tends to write long, even ones)
-      r = r.replace(/([^.!?]{120,?})(,\s)(which |that |where |and )/g, (m, before, comma, conj) => {
-        if (Math.random() < 0.4) return before + '. ' + conj.charAt(0).toUpperCase() + conj.slice(1);
-        return m;
-      });
-
-      // 5. Remove adverb-stacking (two+ adverbs near each other is an AI signature)
-      r = r.replace(/\b(consistently|effectively|efficiently|significantly|substantially|dramatically|tremendously|considerably)\s+(improved|enhanced|increased|reduced|decreased|boosted|grew|delivered)/gi,
-        (m, adv, verb) => verb);
-
-      // 6. Replace passive "was/were + past participle" with active where possible
-      r = r.replace(/\bwas (given|assigned|tasked|entrusted|appointed)\b/gi, 'received');
-      r = r.replace(/\bwere (implemented|deployed|developed|built|created)\b/gi, (m, verb) => verb);
-
-      // 7. Remove filler hedging that AI inserts ("I believe that", "I feel that")
-      r = r.replace(/\bI (believe|feel|think) that\b/gi, '');
-
-      // 8. Collapse double spaces introduced by removals
-      r = r.replace(/ {2,}/g, ' ');
-      r = r.replace(/\.\s*\.\s/g, '. ');
-
-      return r.trim();
+      // Preserve voice, grammar and qualifiers. Natural prose is generated
+      // from evidence, not random contractions, fillers or passive-voice swaps.
+      return text.replace(/[ \t]{2,}/g, ' ').trim();
     },
 
     // ============ CV/ATS BLOCK SANITISATION (Preserve line layout) ============
@@ -1704,18 +1634,9 @@
     },
 
     // ============ REMOVE EM DASHES ============
-    // "~40%" is the symbol form of "approximately", which is already a
-    // banned word -- so the ban was evaded by writing it as punctuation.
-    // A hedged figure reads as a guessed figure, which costs more
-    // credibility than having no figure at all.
+    // Approximation is part of the factual claim, not a style defect.
     stripApproximations(text) {
-      if (!text) return text;
-      return String(text)
-        // ~40%, ≈40%, c.40%, approx. 40%, circa 40%, around 40%
-        .replace(/[~≈∼]\s*(?=[\d£$€])/g, '')
-        .replace(/\b(?:approx\.?|circa|c\.)\s+(?=[\d£$€])/gi, '')
-        .replace(/\b(?:roughly|approximately|about|around|an estimated|in the region of)\s+(?=[\d£$€])/gi, '')
-        .replace(/[ \t]{2,}/g, ' ');
+      return text;
     },
 
     removeEmDashes(text) {
