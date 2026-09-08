@@ -310,6 +310,7 @@
         "docx-generator.js",
         "workday-handlers.js",
         "autofill-controller.js",
+        "document-attachments.js",
         "content.js"
       ],
       "css": [

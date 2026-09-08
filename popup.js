@@ -739,6 +739,7 @@ class ATSTailor {
     document.getElementById('downloadCv')?.addEventListener('click', () => this.downloadDocxVersion('cv'));
     document.getElementById('downloadCover')?.addEventListener('click', () => this.downloadDocxVersion('cover'));
     document.getElementById('attachBoth')?.addEventListener('click', () => this.attachBothDocuments());
+    document.getElementById('previewDocumentSelect')?.addEventListener('change', event => this.switchPreviewTab(event.target.value));
     document.getElementById('copyContent')?.addEventListener('click', () => this.copyCurrentContent());
     document.getElementById('copyCoverageBtn')?.addEventListener('click', () => this.copyCoverageReport());
     
@@ -1057,6 +1058,7 @@ class ATSTailor {
   
   // NEW: Download text version of CV/Cover Letter
   downloadTextVersion(type) {
+    this.prepareDocumentText();
     const content = type === 'cv' ? this.generatedDocuments.cv : this.generatedDocuments.coverLetter;
     if (!content) {
       this.showToast(`No ${type === 'cv' ? 'CV' : 'Cover Letter'} content to download`, 'error');
@@ -1064,8 +1066,8 @@ class ATSTailor {
     }
     
     const fileName = type === 'cv' 
-      ? (this.generatedDocuments.cvFileName || 'Resume').replace('.pdf', '') + '.txt'
-      : (this.generatedDocuments.coverFileName || 'Cover_Letter').replace('.pdf', '') + '.txt';
+      ? (this.generatedDocuments.cvFileName || 'Resume').replace(/\.(pdf|docx|txt)$/i, '') + '.txt'
+      : (this.generatedDocuments.coverFileName || 'Cover_Letter').replace(/\.(pdf|docx|txt)$/i, '') + '.txt';
     
     // Use ResumeBuilder if available
     if (typeof ResumeBuilder !== 'undefined' && ResumeBuilder.downloadTextVersion) {
@@ -1094,6 +1096,7 @@ class ATSTailor {
    * from the portal.
    */
   downloadDocxVersion(type = 'cv') {
+    this.buildDocxArtifact();
     const isCover = type === 'cover';
     const sourceText = isCover ? this.generatedDocuments.coverLetter : this.generatedDocuments.cv;
     if (!sourceText) {
@@ -1113,7 +1116,7 @@ class ATSTailor {
       ? (this.generatedDocuments.coverFileName || 'Cover_Letter')
       : (this.generatedDocuments.cvFileName || 'Resume');
     const baseName = fallbackName.replace(/\.(pdf|docx|txt)$/i, '');
-    const result = builder(sourceText, { name: baseName, filename: `${baseName}.docx` });
+    const result = { success: !!(isCover ? this.generatedDocuments.coverDocx : this.generatedDocuments.cvDocx), base64: isCover ? this.generatedDocuments.coverDocx : this.generatedDocuments.cvDocx, filename: isCover ? this.generatedDocuments.coverDocxFileName : this.generatedDocuments.cvDocxFileName, error: 'Could not build the current document' };
     if (!result.success) {
       this.showToast(`DOCX export failed: ${result.error}`, 'error');
       return;
@@ -1188,7 +1191,25 @@ class ATSTailor {
     }
   }
 
+  prepareDocumentText() {
+    if (!this.generatedDocuments || typeof DocxGenerator === 'undefined') return;
+    for (const key of ['cv', 'coverLetter']) {
+      let text = DocxGenerator.normalizeText(this.generatedDocuments[key] || '');
+      const phone = String((this._cachedProfile || this.profileInfo || {}).phone || '').trim();
+      if (phone) {
+        let header = true;
+        text = text.split('\n').map(line => {
+          if (/^(PROFESSIONAL SUMMARY|SUMMARY|EXPERIENCE|PROFESSIONAL EXPERIENCE|Dear\b)/i.test(line.trim())) header = false;
+          if (!header || !line.includes('|')) return line;
+          return line.split(' | ').map(part => /^[+()\d][\d\s()+.-]{6,}$/.test(part.trim()) ? phone : part).join(' | ');
+        }).join('\n');
+      }
+      this.generatedDocuments[key] = text;
+    }
+  }
+
   buildDocxArtifact() {
+    this.prepareDocumentText();
     if (!this.generatedDocuments) return;
     for (const key of ['cvDocx', 'cvDocxFileName', 'coverDocx', 'coverDocxFileName']) delete this.generatedDocuments[key];
 
@@ -2007,12 +2028,13 @@ class ATSTailor {
   }
 
   copyCurrentContent() {
-    const content = this.currentPreviewTab === 'cv' 
+    this.prepareDocumentText();
+    const content = this.currentPreviewTab !== 'cover'
       ? this.generatedDocuments.cv 
       : this.generatedDocuments.coverLetter;
     
     if (content) {
-      navigator.clipboard.writeText(content)
+      return navigator.clipboard.writeText(content)
         .then(() => this.showToast('Copied to clipboard!', 'success'))
         .catch(() => this.showToast('Failed to copy', 'error'));
     } else {
@@ -2022,6 +2044,8 @@ class ATSTailor {
 
   switchPreviewTab(tab) {
     this.currentPreviewTab = tab;
+    const picker = document.getElementById('previewDocumentSelect');
+    if (picker) picker.value = tab === 'cover' ? 'cover' : 'cv';
     
     document.getElementById('previewCvTab')?.classList.toggle('active', tab === 'cv');
     document.getElementById('previewCoverTab')?.classList.toggle('active', tab === 'cover');
@@ -2034,38 +2058,11 @@ class ATSTailor {
     const previewContent = document.getElementById('previewContent');
     if (!previewContent) return;
     
-    // Handle text view tab
-    if (this.currentPreviewTab === 'text') {
-      const cvContent = this.generatedDocuments.cv || '';
-      if (cvContent) {
-        // Show plain text version with monospace formatting
-        previewContent.innerHTML = `<pre style="white-space: pre-wrap; font-family: 'Courier New', monospace; font-size: 10px; line-height: 1.3; padding: 8px; background: #f5f5f5; border-radius: 4px; overflow-x: auto;">${cvContent.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
-        previewContent.classList.remove('placeholder');
-      } else {
-        previewContent.textContent = 'Generate CV to see text version...';
-        previewContent.classList.add('placeholder');
-      }
-      return;
-    }
-    
-    const content = this.currentPreviewTab === 'cv' 
-      ? this.generatedDocuments.cv 
-      : this.generatedDocuments.coverLetter;
-    
-    const hasPdf = this.currentPreviewTab === 'cv' 
-      ? this.generatedDocuments.cvPdf 
-      : this.generatedDocuments.coverPdf;
-    
-    if (content) {
-      previewContent.innerHTML = this.formatPreviewContent(content, this.currentPreviewTab);
-      previewContent.classList.remove('placeholder');
-    } else if (hasPdf) {
-      previewContent.textContent = `PDF generated - click Download to view the ${this.currentPreviewTab === 'cv' ? 'CV' : 'Cover Letter'}`;
-      previewContent.classList.add('placeholder');
-    } else {
-      previewContent.textContent = 'Click "Tailor CV & Cover Letter" to generate...';
-      previewContent.classList.add('placeholder');
-    }
+    this.prepareDocumentText();
+    const type = this.currentPreviewTab === 'cover' ? 'coverLetter' : 'cv';
+    const content = this.generatedDocuments[type] || '';
+    previewContent.textContent = content || 'Tailor documents to preview them here.';
+    previewContent.classList.toggle('placeholder', !content);
   }
 
   formatPreviewContent(content, type) {
@@ -2164,25 +2161,25 @@ class ATSTailor {
     const coverFileName = document.getElementById('coverFileName');
     
     if (cvFileName && this.generatedDocuments.cvFileName) {
-      cvFileName.textContent = this.generatedDocuments.cvFileName;
-      cvFileName.title = this.generatedDocuments.cvFileName;
+      cvFileName.textContent = this.generatedDocuments.cvDocxFileName || this.generatedDocuments.cvFileName;
+      cvFileName.title = cvFileName.textContent;
     }
     
     if (coverFileName && this.generatedDocuments.coverFileName) {
-      coverFileName.textContent = this.generatedDocuments.coverFileName;
-      coverFileName.title = this.generatedDocuments.coverFileName;
+      coverFileName.textContent = this.generatedDocuments.coverDocxFileName || this.generatedDocuments.coverFileName;
+      coverFileName.title = coverFileName.textContent;
     }
     
     const cvSize = document.getElementById('cvSize');
     const coverSize = document.getElementById('coverSize');
     
     if (cvSize && this.generatedDocuments.cvPdf) {
-      const sizeKB = Math.round(this.generatedDocuments.cvPdf.length * 0.75 / 1024);
+      const sizeKB = Math.round((this.generatedDocuments.cvDocx || this.generatedDocuments.cvPdf).length * 0.75 / 1024);
       cvSize.textContent = `${sizeKB} KB`;
     }
     
     if (coverSize && this.generatedDocuments.coverPdf) {
-      const sizeKB = Math.round(this.generatedDocuments.coverPdf.length * 0.75 / 1024);
+      const sizeKB = Math.round((this.generatedDocuments.coverDocx || this.generatedDocuments.coverPdf).length * 0.75 / 1024);
       coverSize.textContent = `${sizeKB} KB`;
     }
     
@@ -4483,6 +4480,12 @@ class ATSTailor {
   }
 
   _renderMatchAnalysis() {
+    this.prepareDocumentText();
+    const tracked = this.generatedDocuments.keywords?.all;
+    if (tracked?.length) {
+      const current = this.calculateMatchScore(this.generatedDocuments.cv || '', { all: tracked });
+      Object.assign(this.generatedDocuments, current);
+    }
     const matchScore = this.generatedDocuments.matchScore || 0;
     const matchedKeywords = this.cleanKeywordList(this.generatedDocuments.matchedKeywords);
     const missingKeywords = this.cleanKeywordList(this.generatedDocuments.missingKeywords);
@@ -4595,7 +4598,7 @@ class ATSTailor {
       let matchCount = 0;
       const chipsHtml = keywords.map(kw => {
         const kwLower = kw.toLowerCase();
-        const isMatched = matchedSet.has(kwLower) || cvTextLower.includes(kwLower);
+        const isMatched = window.DynamicScore.calculateDynamicMatch(cvTextLower, [kw]).matched.length > 0;
         if (isMatched) matchCount++;
         
         const escapedKw = this.escapeHtml(kw);
@@ -5888,7 +5891,7 @@ class ATSTailor {
             skills: Array.isArray(p.skills) ? p.skills : [],
             certifications: Array.isArray(p.certifications) ? p.certifications : [],
             achievements: Array.isArray(p.achievements) ? p.achievements : [],
-            atsStrategy: p.ats_strategy || '',
+            atsStrategy: [p.ats_strategy || '', 'Aim for 90-100% coverage of relevant job keywords using only supported profile evidence. Use the employer wording where accurate (for example BI tools alongside Power BI). Prioritise the most relevant achievements. Never invent tools, experience, metrics or eligibility to reach the target. Report unsupported requirements.'].join('\n'),
             // Job-adaptive location (sanitised; falls back to profile)
             city: this.getApplicationLocation(),
             country: p.country || undefined,
@@ -8027,14 +8030,16 @@ class ATSTailor {
   async attachInAnyFrame(tabId, message) {
     const ask = (frameId) => new Promise((resolve) => {
       const opts = (frameId === undefined) ? undefined : { frameId };
+      const timer = setTimeout(() => resolve({ success: false, message: 'Application frame timed out.' }), 10000);
       try {
         chrome.tabs.sendMessage(tabId, message, opts, (response) => {
           // Reading lastError stops Chrome logging it as unchecked; a
           // frame with no content script simply has nothing to say.
           const ignored = chrome.runtime.lastError;
+          clearTimeout(timer);
           resolve(ignored ? null : response);
         });
-      } catch (e) { resolve(null); }
+      } catch (e) { clearTimeout(timer); resolve(null); }
     });
 
     let frameIds = [];
@@ -8059,86 +8064,42 @@ class ATSTailor {
     return lastAnswer || { success: false, message: 'No upload field found in any frame' };
   }
 
-  async attachDocument(type) {
-    // DOCX is the attached file (best ATS parseability). PDF base64 is
-    // passed only as a fallback the content script uses if no DOCX exists.
-    const docx = type === 'cv' ? this.generatedDocuments.cvDocx : this.generatedDocuments.coverDocx;
-    const docxFileName = type === 'cv' ? this.generatedDocuments.cvDocxFileName : this.generatedDocuments.coverDocxFileName;
-    const doc = type === 'cv' ? this.generatedDocuments.cvPdf : this.generatedDocuments.coverPdf;
-    const textDoc = type === 'cv' ? this.generatedDocuments.cv : this.generatedDocuments.coverLetter;
-    const baseFallback = type === 'cv'
-      ? `${this.profileInfo?.firstName || 'Applicant'}_${this.profileInfo?.lastName || ''}_CV`.replace(/_+/g, '_')
-      : `${this.profileInfo?.firstName || 'Applicant'}_${this.profileInfo?.lastName || ''}_Cover_Letter`.replace(/_+/g, '_');
-    const filename = docxFileName
-      || (docx ? `${baseFallback}.docx` : (type === 'cv' ? this.generatedDocuments.cvFileName : this.generatedDocuments.coverFileName) || `${baseFallback}.pdf`);
-
-    if (!docx && !doc && !textDoc) {
-      this.showToast('No document available', 'error');
-      return;
-    }
-
+  async attachDocument(type, tabId) {
+    this.buildDocxArtifact();
+    const g = this.generatedDocuments;
+    const docx = type === 'cv' ? g.cvDocx : g.coverDocx;
+    const filename = type === 'cv' ? g.cvDocxFileName : g.coverDocxFileName;
+    const text = type === 'cv' ? g.cv : g.coverLetter;
+    if (!docx) return { success: false, message: `No current ${type === 'cv' ? 'CV' : 'cover letter'} file. Tailor again.` };
     try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) throw new Error('No active tab');
-
-      const message = {
-        action: 'attachDocument',
-        type,
-        docx,            // preferred: DOCX base64
-        pdf: doc,        // fallback only
-        text: textDoc,
-        filename,
-      };
-
-      // Ask EVERY frame, not just the top one. iCIMS renders its
-      // application inside icims_formFrame, and Greenhouse,
-      // SmartRecruiters and Workable widgets are routinely embedded in a
-      // company's own careers page -- so the upload input is often in a
-      // frame. A top-frame-only send reports "no upload field found" on
-      // exactly those sites.
-      //
-      // sendMessage without a frameId reaches every frame but returns only
-      // the FIRST reply, so one frame's "not here" would mask another
-      // frame's success. Each frame is therefore asked separately and the
-      // run counts as attached if ANY of them managed it.
-      const res = await this.attachInAnyFrame(tab.id, message);
-
-      if (res?.success && res?.skipped) {
-        this.showToast(res.message || 'Skipped (no upload field)', 'success');
-        return;
-      }
-
-      if (res?.success) {
-        this.showToast(`${type === 'cv' ? 'CV' : 'Cover Letter'} attached!`, 'success');
-        return;
-      }
-
-      this.showToast(res?.message || 'Failed to attach document', 'error');
-    } catch (error) {
-      console.error('Attach error:', error);
-      this.showToast(error?.message || 'Failed to attach document', 'error');
-    }
+      if (!tabId) { const [tab] = await chrome.tabs.query({ active: true, currentWindow: true }); tabId = tab?.id; }
+      if (!tabId) throw new Error('No active application tab');
+      return await this.attachInAnyFrame(tabId, { action: 'attachDocument', type, docx, text, filename, replaceExisting: true });
+    } catch (error) { return { success: false, message: error.message || 'Attachment failed' }; }
   }
 
   async attachBothDocuments() {
-    this.showToast('Attaching documents...', 'success');
-    
-    try {
-      // SEQUENTIAL ATTACH: Same proven method as ats-tailor-extension both attach
-      // Step 1: Attach CV first
-      await this.attachDocument('cv');
-      
-      // Step 2: Wait 500ms for UI to settle (prevents race conditions)
-      await new Promise(r => setTimeout(r, 500));
-      
-      // Step 3: Attach Cover Letter
-      await this.attachDocument('cover');
-      
-      this.showToast('Both documents attached!', 'success');
-    } catch (error) {
-      console.error('[ATS Tailor] attachBothDocuments error:', error);
-      this.showToast(error.message || 'Failed to attach documents', 'error');
-    }
+    if (this._attachingDocuments) return this._attachingDocuments;
+    const button = document.getElementById('attachBoth');
+    if (button) button.disabled = true;
+    this._attachingDocuments = (async () => {
+      try {
+        this.showToast('Replacing application attachments...', 'success');
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab?.id) throw new Error('No active application tab');
+        const cv = await this.attachDocument('cv', tab.id);
+        const cover = await this.attachDocument('cover', tab.id);
+        const success = !!cv?.success && !!cover?.success;
+        const label = (name, result) => `${name}: ${result?.success ? 'attached' : result?.message || 'not attached'}`;
+        this.showToast(success ? 'Both current documents attached. Review the form.' : `${label('CV', cv)}. ${label('Cover letter', cover)}`, success ? 'success' : 'error');
+        return { success, cv, cover };
+      } catch (error) {
+        this.showToast(error.message || 'Attachment failed', 'error');
+        return { success: false, message: error.message };
+      }
+    })();
+    try { return await this._attachingDocuments; }
+    finally { this._attachingDocuments = null; if (button) button.disabled = false; }
   }
 
   showToast(message, type = 'success') {

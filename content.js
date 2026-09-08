@@ -1241,59 +1241,23 @@
             return;
           }
           
-          // Store in global variables for attachment functions
-          if (type === 'cv') {
-            cvFile = file;
-            filesLoaded = true;
-            // Attach CV
-            forceCVReplace();
-          } else if (type === 'cover') {
-            coverFile = file;
-            coverLetterText = text || '';
-            filesLoaded = true;
-            // Attach Cover Letter
-            forceCoverReplace();
-          }
-          
-          // Force everything to ensure attachment
-          forceEverything();
-          
-          // Check if attachment was successful
-          const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
-          let attached = false;
-          
-          if (type === 'cv') {
-            attached = fileInputs.some(input => isCVField(input) && input.files && input.files.length > 0);
-          } else if (type === 'cover') {
-            attached = fileInputs.some(input => isCoverField(input) && input.files && input.files.length > 0);
-            // Also check textareas for cover letter text
-            if (!attached && text) {
-              const textareas = document.querySelectorAll('textarea');
-              attached = Array.from(textareas).some(ta => {
-                const label = (ta.labels?.[0]?.textContent || ta.name || ta.id || '').toLowerCase();
-                return /cover/i.test(label) && (ta.value || '').trim().length > 0;
-              });
+          // Manual attach is a fresh replacement, independent of automatic cooldowns.
+          if (type !== 'cv' && type !== 'cover') throw new Error('Unknown document type');
+          stopAttachLoops();
+          if (!window.JobGenieAttachments) throw new Error('Reload this application page to load the updated attachment engine.');
+          window.__JG_FILE_ATTACH_AUTHORISED__ = true;
+          try {
+            const result = await window.JobGenieAttachments.replace({
+              doc: document, file, matches: type === 'cv' ? isCVField : isCoverField,
+            });
+            if (result.success) {
+              if (type === 'cv') cvFile = file;
+              else { coverFile = file; coverLetterText = text || ''; }
+              filesLoaded = true;
             }
-          }
-          
-          if (attached) {
-            console.log(`[ATS Tailor] ${type} attached successfully`);
-            // WHAT HAPPENS NEXT DEPENDS ENTIRELY ON THE PLATFORM.
-            //
-            // A live audit of ten ATS found only three that parse an
-            // uploaded CV into the form. Every one was being treated the
-            // same, so on the seven that do not, the user watched an
-            // attached file and a blank form and had no way to know
-            // whether that was the site or us.
-            sendResponse(Object.assign(
-              { success: true, message: `${type} attached successfully` },
-              type === 'cv' ? describeAutofill() : {}
-            ));
-          } else {
-            console.log(`[ATS Tailor] ${type} attachment failed - no upload field found`);
-            sendResponse({ success: false, skipped: true, message: 'No upload field found for ' + type });
-          }
-          
+            sendResponse(result);
+          } finally { window.__JG_FILE_ATTACH_AUTHORISED__ = false; }
+
         } catch (error) {
           console.error('[ATS Tailor] attachDocument error:', error);
           sendResponse({ success: false, message: error.message || 'Attachment failed' });
@@ -2301,7 +2265,7 @@
 
   /** True when this input already holds the file, by either signal. */
   function inputHoldsFile(input, file) {
-    if (input.files && input.files.length > 0) return true;
+    if (input.files && input.files.length > 0) return !!file && Array.from(input.files).some(actual => actual.name === file.name && actual.size === file.size);
     return !!(file && pageShowsAttachment(file.name));
   }
 

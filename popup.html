@@ -60,12 +60,7 @@
         <button id="logoutBtn" class="btn-link">Logout</button>
       </div>
 
-      <nav class="workspace-nav" aria-label="Workspace">
-        <button type="button" data-view="apply" aria-pressed="true">Apply</button>
-        <button type="button" data-view="documents" aria-pressed="false">Documents</button>
-        <button type="button" data-view="followup" aria-pressed="false">Follow-up</button>
-        <button type="button" data-view="settings" aria-pressed="false">Settings</button>
-      </nav>
+
       <!-- AI Provider Settings - Compact Toggle -->
       <div class="ai-provider-panel" id="aiSettingsPanel">
         <div class="ai-provider-toggle-row">
@@ -848,11 +843,8 @@
         </div>
 
         <!-- Preview Tabs -->
-        <div class="preview-tabs">
-          <button id="previewCvTab" class="preview-tab active">Resume</button>
-          <button id="previewCoverTab" class="preview-tab">Cover Letter</button>
-          <button id="previewTextTab" class="preview-tab">Text View</button>
-        </div>
+        <label for="previewDocumentSelect">Preview document</label>
+        <select id="previewDocumentSelect"><option value="cv">CV</option><option value="cover">Cover letter</option></select>
         
         <!-- Preview Content -->
         <div class="preview-content-wrapper">

@@ -1,36 +1,12 @@
-/* Keep task navigation separate from application data and visibility states. */
+/* One application view; advanced preferences stay collapsed. */
 document.addEventListener('DOMContentLoaded', () => {
   const main = document.getElementById('mainSection');
-  const nav = main?.querySelector('.workspace-nav');
-  if (!nav) return;
-  const panels = {};
-  for (const name of ['apply', 'documents', 'followup', 'settings']) {
-    const panel = document.createElement('div');
-    panel.id = `workspace-${name}`;
-    panel.className = 'workspace-view';
-    panel.setAttribute('aria-label', name);
-    panel.hidden = name !== 'apply';
-    main.appendChild(panel);
-    panels[name] = panel;
-    nav.querySelector(`[data-view="${name}"]`).setAttribute('aria-controls', panel.id);
+  if (!main) return;
+  const footer = main.querySelector('.popup-footer');
+  for (const selector of ['#aiSettingsPanel', '.workspace-settings', '#historyPanel']) {
+    const node = main.querySelector(selector);
+    if (node) main.insertBefore(node, footer);
   }
-  // Move follow-up before its settings parent to make it independently reachable.
-  const followup = document.getElementById('followupPanel');
-  if (followup) { panels.followup.appendChild(followup); followup.open = true; }
-  for (const child of Array.from(main.children)) {
-    if (child === nav || child.classList.contains('workspace-view') || child.classList.contains('user-bar')) continue;
-    const view = child.matches('#documentsCard, #historyPanel, #parseCVDebugPanel, #diffPanel') ? 'documents'
-      : child.matches('#aiSettingsPanel, .workspace-settings, .bulk-panel, .popup-footer, #debugReportPanel') ? 'settings' : 'apply';
-    panels[view].appendChild(child);
-  }
-  const empty = document.createElement('p');
-  empty.className = 'documents-empty';
-  empty.textContent = 'Tailor a CV from Apply to review and download your documents here.';
-  panels.documents.prepend(empty);
-  const docs = document.getElementById('documentsCard');
-  const sync = () => { empty.hidden = docs && !docs.classList.contains('hidden'); };
-  if (docs) new MutationObserver(sync).observe(docs, { attributes: true, attributeFilter: ['class'] });
-  sync();
   const answers = document.createElement('section');
   answers.className = 'job-card';
   const heading = document.createElement('h3'); heading.textContent = 'Saved screening answers';
@@ -40,7 +16,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const status = document.createElement('p'); status.setAttribute('role', 'status');
   const help = document.createElement('p'); help.textContent = 'Use the complete question, including country or employer. Unknown answers remain for review.';
   answers.append(heading, help, question, answer, save, status);
-  panels.settings.prepend(answers);
+  main.querySelector('.workspace-settings')?.appendChild(answers);
   save.addEventListener('click', async () => {
     const q = question.value.trim(), a = answer.value.trim();
     if (!q || !a) { status.textContent = 'Enter both the complete question and your answer.'; return; }
@@ -54,11 +30,4 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch (error) { status.textContent = 'Could not save. Please try again.'; }
     finally { save.disabled = false; }
   });
-  for (const button of nav.querySelectorAll('button')) {
-    button.addEventListener('click', () => {
-      for (const [name, panel] of Object.entries(panels)) panel.hidden = name !== button.dataset.view;
-      for (const item of nav.querySelectorAll('button')) item.setAttribute('aria-pressed', String(item === button));
-      window.scrollTo({ top: 0, behavior: 'instant' });
-    });
-  }
 });

@@ -66,3 +66,18 @@ Autofill now discovers button-based listboxes and multiple ARIA-owned listboxes.
 DOCX formatting no longer adds phone digits, removes repeated contact location components, and strips XML-invalid controls. Failed/missing DOCX rebuilds clear old artifacts. Added cover-letter text-preservation tests. The user-supplied CV and cover letter were rendered for inspection; those files show duplicated location components and the cover letter contains an awkward phrase. The generated text still requires candidate review. No new employer upload was performed, and PDF/preview parity remains unverified.
 
 LOVABLE_UPDATE_PROMPT.md contains the requested implementation prompt. It does not mean the Lovable app itself has been updated. The extension remains a draft release candidate.
+
+
+## Compact green UI and document-action repair
+
+84 Node tests and the strict manifest/syntax check for 72 packaged resources pass.
+
+The latest user preference supersedes the four-view redesign. Restored a 380px compact green popup and removed the Apply/Documents/Follow-up/Settings navigation. A single CV/cover-letter picker replaces the three preview tabs; saved screening answers remain in collapsed preferences. The Lovable prompt now records this preference too.
+
+Fixed Text View copy choosing the cover letter, unconditional “Both documents attached” success, and existing-file guards mistaking an old CV for the new document. Explicit attachment now uses a separate scoped replacement engine, checks allowed file types before removing anything, reacquires rerendered inputs, and verifies a file-input or filename signal. It does not click unrelated X controls or submit an application. Each document returns its own result; repeated Attach Both clicks share one operation. Formats other than DOCX require manual handling when the employer disallows DOCX.
+
+DOCX exports preserve final normalised wording and order rather than applying a separate content-rewriting parser. Preview, copy, text downloads, DOCX downloads and popup attachment use that text. Duplicate header location components are removed and an available saved profile phone replaces malformed header formatting without inferring new digits. Long documents retain an 11pt body rather than shrinking to force one page. Synthetic CV (two pages) and cover letter (one page) were rendered and all pages inspected.
+
+Tailoring instructions now target 90–100% relevant keyword coverage using supported profile evidence. Displayed coverage is recomputed from final text; individual chips use the same whole-term matcher. The target is not guaranteed, and the remote tailoring service's interpretation of these instructions needs authenticated validation.
+
+Regression coverage includes copy selection, literal preview text, partial attachment failure, concurrent clicks, old-file removal and input replacement, rejected formats preserving old attachments, employer error detection, missing cover fields, revision identity, identical DOCX download/attachment bytes, text downloads and full exported paragraph parity. These are fixture tests, not live employer upload acceptance. Browser UI QA and authenticated AI/provider/button integrations remain release gates; no applications were submitted.
