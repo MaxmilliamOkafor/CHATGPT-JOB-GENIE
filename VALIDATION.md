@@ -95,3 +95,9 @@ These fixes still require loaded-extension testing against the user's attached-f
 ## Coverage target and omitted-skill recovery
 
 91 Node tests pass. Tailoring requests now include the extracted keyword requirements and explicit 90% minimum/100% ideal target. When a response falls below 90%, relevant skills explicitly saved in the profile can be restored to its existing skills section. Unsupported job terms and strategy text are not qualification evidence; measured scores remain actual coverage. This local recovery covers saved skills, not unverified semantic inferences about experience. Backend adherence to the additional request fields requires integration testing.
+
+## Screenshot-directed dark palette and evidence mapping
+
+92 tests pass. Applied near-black/violet surfaces and violet/cyan actions while preserving popup dimensions and navigation. Tailoring now supplies keyword-to-source evidence snippets from saved roles, projects and skills through the existing atsStrategy field. Snippets remain source context, not verified assertions; the backend must preserve negation and scope. Coverage under 90% displays the remaining keyword count needed; 90% is the target-state threshold. Screenshot colors were inspected, but loaded-extension rendering and live backend response quality remain unverified. See LOVABLE_UPDATE_PROMPT.md for the external endpoint work.
+
+Natural-language follow-up: 93 tests pass. The local recovery no longer creates an Additional skills line. It can extend an existing list of confirmed skills with at most five relevant saved skills; it leaves category placement to the tailoring service rather than guessing. This does not establish the quality of live AI-written achievement bullets.

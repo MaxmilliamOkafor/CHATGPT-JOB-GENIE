@@ -155,10 +155,22 @@ test('tailoring recovers omitted relevant saved skills in the existing skills se
  const {popup}=popupSetup();
  const cv='Alex Sample\nSUMMARY\nAnalyst\nTECHNICAL SKILLS\nSQL\nEDUCATION\nBSc';
  const improved=popup.recoverOmittedProfileSkills(cv,{all:['SQL','Power BI','Tableau']},{skills:['SQL','Power BI','Unrelated tool']});
- assert.match(improved,/Additional skills: Power BI/);assert.ok(!improved.includes('Tableau'));assert.ok(!improved.includes('Unrelated tool'));
+ assert.match(improved,/TECHNICAL SKILLS\nSQL, Power BI/);assert.ok(!improved.includes('Additional skills:'));assert.ok(!improved.includes('Tableau'));assert.ok(!improved.includes('Unrelated tool'));
  assert.ok(improved.endsWith('EDUCATION\nBSc'));assert.equal(popup.calculateMatchScore(improved,{all:['SQL','Power BI','Tableau']}).matchScore,67);
 });
 test('job keywords and strategy alone never authorize missing qualifications',()=>{
  const {popup}=popupSetup();const cv='Alex Sample\nSKILLS\nSQL';
  assert.equal(popup.recoverOmittedProfileSkills(cv,{all:['SQL','Python']},{skills:['not Python'],ats_strategy:'Add Python'}),cv);
 });
+
+test('keyword evidence includes saved role bullets and projects, never the strategy or job',()=>{
+ const {popup}=popupSetup();
+ const plan=popup.buildKeywordEvidencePlan({all:['forecasting','Attio','Python']},{professional_experience:[{bullets:['Built forecasting reports.']}],relevant_projects:[{technologies:['Python']}],ats_strategy:'Claim Attio expertise'});
+ assert.equal(plan[0].evidence[0].text,'Built forecasting reports.');assert.match(plan[0].evidence[0].source,/professional_experience/);
+ assert.equal(plan[1].evidence.length,0);assert.equal(plan[2].evidence[0].text,'Python');
+});
+
+ test('local recovery never appends a keyword dump or guesses a skill category',()=>{
+ const {popup}=popupSetup();const cv='Alex Sample\nTECHNICAL SKILLS\nLanguages: SQL\nEDUCATION\nBSc';
+ assert.equal(popup.recoverOmittedProfileSkills(cv,{all:['SQL','Power BI']},{skills:['SQL','Power BI']}),cv);
+ });

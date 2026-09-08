@@ -4555,11 +4555,11 @@ class ATSTailor {
     const circle = document.getElementById('matchGaugeCircle');
     if (circle) {
       circle.setAttribute('stroke-dashoffset', String(2 * Math.PI * 45 * (1 - coverage / 100)));
-      circle.setAttribute('stroke', coverage >= 80 ? '#6ee7b7' : '#fcd34d');
+      circle.setAttribute('stroke', coverage >= 90 ? '#6ee7b7' : '#fcd34d');
     }
     const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
     set('matchPercentage', count ? `${coverage}%` : '—');
-    set('matchSubtitle', count ? (coverage === 100 ? 'All tracked keywords found. Review evidence.' : 'Review missing keywords against your experience.') : 'No keywords available to measure.');
+    set('matchSubtitle', count ? (coverage >= 90 ? '90–100% coverage target reached. Review the tailored CV.' : `Below 90% target: ${Math.max(0, Math.ceil(count * 0.9) - hits)} more supported keywords needed.`) : 'No keywords available to measure.');
     set('keywordCountBadge', `${hits} of ${count} keywords matched`);
     set('matchPanelProvider', this.aiProvider === 'kimi' ? 'Kimi K2' : 'OpenAI');
   }
@@ -5553,6 +5553,24 @@ class ATSTailor {
     }
   }
 
+  buildKeywordEvidencePlan(keywords, profile) {
+    const evidence = [];
+    const collect = (value, source) => {
+      if (typeof value === 'string' && value.trim()) evidence.push({ source, text: value.trim() });
+      else if (Array.isArray(value)) value.forEach((item, i) => collect(item, `${source}[${i}]`));
+      else if (value && typeof value === 'object') {
+        for (const key of ['name', 'title', 'description', 'text', 'summary', 'skills', 'technologies', 'tech_stack', 'bullets', 'achievements', 'responsibilities']) {
+          if (value[key]) collect(value[key], `${source}.${key}`);
+        }
+      }
+    };
+    for (const key of ['skills', 'professional_experience', 'professionalExperience', 'relevant_projects', 'relevantProjects', 'education', 'certifications', 'achievements']) collect(profile?.[key], key);
+    return (keywords?.all || []).map(keyword => ({
+      keyword,
+      evidence: evidence.filter(item => this.calculateMatchScore(item.text, { all: [keyword] }).matchedKeywords.length).slice(0, 3),
+    }));
+  }
+
   recoverOmittedProfileSkills(cvText, keywords, profile) {
     const before = this.calculateMatchScore(cvText, keywords);
     if (before.matchScore >= 90) return cvText;
@@ -5566,8 +5584,21 @@ class ATSTailor {
     if (!additions.length) return cvText;
     const heading = /^(TECHNICAL SKILLS|SKILLS|CORE SKILLS|TECHNICAL PROFICIENCIES)\s*$/m;
     if (!heading.test(cvText)) return cvText;
-    // Keep the existing template and sections; add only relevant saved skills.
-    return cvText.replace(heading, match => match + '\nAdditional skills: ' + additions.join(', '));
+    // Extend an existing plain skills list, never add a catch-all keyword line.
+    // Categorised sections require semantic placement by the tailoring service.
+    const lines = cvText.split('\n');
+    const start = lines.findIndex(line => heading.test(line));
+    for (let i = start + 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      if (/^[A-Z][A-Z &/]{3,}$/.test(line) && !skills.includes(line)) break;
+      if (line.includes(':') || /^[-•]/.test(line)) continue;
+      const listed = line.split(/[,;|]/).map(value => value.trim()).filter(Boolean);
+      if (!listed.length || !listed.every(value => skills.some(skill => skill.toLowerCase() === value.toLowerCase()))) continue;
+      lines[i] = lines[i].trimEnd() + ', ' + additions.slice(0, 5).join(', ');
+      return lines.join('\n');
+    }
+    return cvText;
   }
 
   fastKeywordInjection(cvText, keywords, missingKeywords) {
@@ -5868,6 +5899,7 @@ class ATSTailor {
         await new Promise(resolve => setTimeout(resolve, 3000));
       }
 
+      const keywordEvidencePlan = this.buildKeywordEvidencePlan(keywords, p);
       const tailorController = new AbortController();
       const tailorTimeoutId = setTimeout(() => tailorController.abort(), 120_000); // Increased from 75s to 120s for AI tailoring
 
@@ -5911,7 +5943,7 @@ class ATSTailor {
             skills: Array.isArray(p.skills) ? p.skills : [],
             certifications: Array.isArray(p.certifications) ? p.certifications : [],
             achievements: Array.isArray(p.achievements) ? p.achievements : [],
-            atsStrategy: [p.ats_strategy || '', 'Aim for 90-100% coverage of relevant job keywords using only supported profile evidence. Use the employer wording where accurate (for example BI tools alongside Power BI). Prioritise the most relevant achievements. Never invent tools, experience, metrics or eligibility to reach the target. Report unsupported requirements.'].join('\n'),
+            atsStrategy: [p.ats_strategy || '', 'Use this keyword-to-profile evidence map to tailor the existing summary and relevant experience bullets, preserving the CV template, employers, dates and personal facts. Evidence is source material, not permission to change its meaning. Prioritise high-priority requirements. Verify each missing keyword before returning the draft. Do not append a keyword dump. Evidence map: ' + JSON.stringify(keywordEvidencePlan), 'Aim for 90-100% coverage of relevant job keywords using only supported profile evidence. Use the employer wording where accurate (for example BI tools alongside Power BI). Prioritise the most relevant achievements. Never invent tools, experience, metrics or eligibility to reach the target. Report unsupported requirements.'].join('\n'),
             // Job-adaptive location (sanitised; falls back to profile)
             city: this.getApplicationLocation(),
             country: p.country || undefined,
