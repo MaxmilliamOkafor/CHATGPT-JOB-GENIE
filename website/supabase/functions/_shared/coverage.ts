@@ -287,8 +287,8 @@ export function evaluateRevision(opts: {
   coverLetterRevised?: string;
   terms: string[];
 }): { accept: boolean; reason?: string; coverageBefore: number; coverageAfter: number; changedBullets: Array<{ before: string; after: string }> } {
-  const before = measureCoverage(`${opts.draft}\n${opts.coverLetterDraft ?? ""}`, opts.terms);
-  const after = measureCoverage(`${opts.revised}\n${opts.coverLetterRevised ?? opts.coverLetterDraft ?? ""}`, opts.terms);
+  const before = measureCoverage(opts.draft, opts.terms);
+  const after = measureCoverage(opts.revised, opts.terms);
 
   if (!opts.revised.trim()) {
     return { accept: false, reason: "no usable text returned", coverageBefore: before.percent, coverageAfter: before.percent, changedBullets: [] };

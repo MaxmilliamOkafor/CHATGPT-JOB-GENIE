@@ -115,3 +115,9 @@ Publication note: the new popup writing-style instruction is committed locally b
 ## Shared job-description parsing
 
 102 tests pass. Fixed top-of-page Apply buttons truncating descriptions, middle-of-description cache collisions, and explicit application-form sections entering requirement text. HTML block boundaries are preserved before text extraction. Mandatory and JD skill extractors share the parser, now loaded in the popup as well. Tests cover top buttons, form boundaries, benefit sections preceding qualifications, punctuated technical terms, middle-text edits, and unsectioned/non-English narrative preservation. This is representative local parsing coverage, not universal ATS verification or proof of live backend revision behavior. Conflicting-title handling and complete extension/backend requirement alignment remain unresolved.
+
+## Reference repository comparison and CV-only revision target
+
+Inspected MaxmilliamOkafor/100-keyword main (tree 26bc203430cba8a07e14deae6ca9d0527fdc0ae6). Its dynamic-score.js allows either word to contain the other, inflating matches such as Java/JavaScript. Its popup also has additional recovery passes; those do not prove perfect tailoring, and comments explicitly document prior fabricated bullet suffixes. No blind replacement with that scorer was made.
+
+105 local Node tests pass. Set the tailoring backend target to 100 and corrected both the revision gate and acceptance comparison to measure CV text only. Previously cover-letter terms could stop or mask a needed CV revision despite final scoring being CV-only. Regression checks exercise 50% to 100% actual CV improvement when the letter already contains both terms, reject cover-letter-only improvement, and reject partial-word matches. Evidence gates and the two-pass limit remain. These source changes need backend deployment before affecting live generation; no live AI calls or deployments were performed.
