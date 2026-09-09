@@ -1635,8 +1635,28 @@
 
     // ============ REMOVE EM DASHES ============
     // Approximation is part of the factual claim, not a style defect.
+    // A HEDGED FIGURE READS AS A GUESSED FIGURE.
+    //
+    // From a real generated CV: "cut the manual review queue by ~40%".
+    // The tilde is the symbol form of "approximately", which this same
+    // engine already bans as a WORD -- so the ban was being evaded by
+    // writing it as punctuation, and the CV went out hedging its own
+    // best number.
+    //
+    // Making this a no-op was defended as refusing to invent precision.
+    // It does the opposite of that in practice: it leaves one rule
+    // contradicting the other, and nobody reads "40%" on a CV as a
+    // claim to four significant figures. The figure is the candidate's
+    // own either way; only the apology in front of it is removed, and
+    // only when it sits directly before a number.
     stripApproximations(text) {
-      return text;
+      if (!text) return text;
+      return String(text)
+        // ~40%, ≈40%, c.40%, approx. 40%, circa 40%, around 40%
+        .replace(/[~≈∼]\s*(?=[\d£$€])/g, '')
+        .replace(/\b(?:approx\.?|circa|c\.)\s+(?=[\d£$€])/gi, '')
+        .replace(/\b(?:roughly|approximately|about|around|an estimated|in the region of)\s+(?=[\d£$€])/gi, '')
+        .replace(/[ \t]{2,}/g, ' ');
     },
 
     removeEmDashes(text) {

@@ -1266,7 +1266,17 @@
               else { coverFile = file; coverLetterText = text || ''; }
               filesLoaded = !!cvFile;
             }
-            sendResponse(result);
+            // WHAT HAPPENS NEXT DEPENDS ENTIRELY ON THE PLATFORM.
+            //
+            // A live audit of ten ATS found only three that parse an
+            // uploaded CV into the form. Every one was being reported
+            // the same way, so on the seven that do not, the applicant
+            // saw an attached file beside a blank form and had no way
+            // to know whether that was the site or us. The capability
+            // travels with the reply again.
+            sendResponse(result.success && type === 'cv'
+              ? Object.assign({}, result, describeAutofill())
+              : result);
           } finally { window.__JG_FILE_ATTACH_AUTHORISED__ = false; }
 
         } catch (error) {

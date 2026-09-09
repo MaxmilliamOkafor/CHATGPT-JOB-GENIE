@@ -180,8 +180,55 @@
   // carry their own copy with the same faults, so fixing the DOCX left
   // the PDF broken.
   function normalizePhoneToken(seg) {
-    // Formatting must never add digits or infer a national trunk prefix.
-    return String(seg || '').trim();
+    const raw = String(seg || '');
+    const cleaned = raw.replace(/[^\d+]/g, '');
+    if (!/\d{7,}/.test(cleaned)) return raw.trim();     // not a phone
+
+    // MEASURED AGAINST BOTH PARSERS, NOT ONE.
+    //
+    // Passing the number through untouched was defended as never
+    // inventing a digit. It costs the number entirely: a contact line
+    // reading "+353 874261508" is scanned by OpenResume's published
+    // rule, /\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}/, which finds NOTHING --
+    // so the CV goes out with no extractable phone number on it. An
+    // earlier attempt emitted "+353: 0874261508", which OpenResume
+    // reads correctly and libphonenumber -- what Workday and Greenhouse
+    // actually validate phone fields with -- rejects under IE, DE, GB,
+    // US and with no region set.
+    //
+    //   "+353: 0874261508"     OpenResume "0874261508"   libphonenumber FAILS
+    //   "+353 0874261508"      OpenResume "353 0874261"  a WRONG number
+    //   "+353 874261508"       OpenResume no match       no phone at all
+    //   "+353 087 426 1508"    OpenResume "087 426 1508" libphonenumber valid
+    //
+    // Three things are each load-bearing. The TRUNK ZERO makes the
+    // national number ten digits, which a 3-3-4 rule needs -- and it is
+    // that country's own national notation, not an invented digit: it
+    // is added only where the country code is known AND the national
+    // part is exactly the length that country's numbers are. The SPACE
+    // after the country code keeps the number readable and dialable.
+    // And the GROUPING inside the national part is what stops the match
+    // spanning the country code: without those spaces the regex takes
+    // "353 0874261" and a recruiter calls a number that is not yours.
+    const D = { 353: 9, 44: 10, 33: 9, 61: 9, 91: 10 };
+
+    const m = raw.match(/^\s*\+(\d{1,3})\D+(.+)$/);
+    if (m) {
+      const cc = m[1];
+      let national = m[2].replace(/\D/g, '');
+      if (national.length >= 7) {
+        if (national.charAt(0) !== '0' && D[cc] === national.length) national = '0' + national;
+        // 3-3-rest, so the first two groups can never merge with the
+        // country code in front of them.
+        const grouped = national.length > 6
+          ? national.slice(0, 3) + ' ' + national.slice(3, 6) + ' ' + national.slice(6)
+          : national;
+        return '+' + cc + ' ' + grouped;
+      }
+    }
+    // Already national and contiguous: leave it exactly as it is.
+    if (/^\d{7,}$/.test(cleaned)) return cleaned;
+    return raw.trim();
   }
 
   // Does this segment look like a phone number? (mostly digits + phone punct)

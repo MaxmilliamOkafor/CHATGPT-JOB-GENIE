@@ -26,10 +26,32 @@ test('long DOCX exports preserve the final content',()=>{
  const result=unpack(docx.fromCvText('Alex Sample\n\nEXPERIENCE\n'+paragraphs.join('\n')));
  assert.ok(result.text.includes('Delivered project 59'));
 });
-test('CV export never adds digits to an international phone number',()=>{
+// A PHONE NUMBER NOBODY CAN EXTRACT IS NOT A PHONE NUMBER.
+//
+// This used to demand the number be passed through untouched, on the
+// principle that formatting must never add a digit. The cost was the
+// number itself: "+353 874 261 508" is scanned by OpenResume's
+// published rule, /\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}/, which finds
+// nothing in it -- so the CV shipped with no extractable phone at all,
+// and the parsed profile a recruiter sees had an empty phone field.
+//
+// The national trunk prefix is that country's own notation, not an
+// invented digit, and it is added only where the country code is known
+// AND the national part is exactly the length that country's numbers
+// are. The grouping is what stops a 3-3-4 match spanning the country
+// code and dialling "353 0874261".
+test('CV export writes a phone a resume parser can actually read',()=>{
  const result=unpack(docx.fromCvText('Alex Sample\n+353 874 261 508 | candidate@example.invalid\n\nSUMMARY\nEngineer.'));
- assert.ok(result.text.includes('+353 874 261 508'));
- assert.ok(!result.text.includes('+353 087'));
+ assert.ok(result.text.includes('+353 087 426 1508'),result.text.slice(0,200));
+ const hit=/\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}/.exec(result.text);
+ assert.equal(hit&&hit[0],'087 426 1508');
+ // the digits are the same digits, in the same order
+ assert.equal(result.text.match(/\+353[^|\n]*/)[0].replace(/\D/g,''),'3530874261508');
+});
+test('CV export invents nothing for a country whose format it does not know',()=>{
+ const result=unpack(docx.fromCvText('Alex Sample\n+81 90 1234 5678 | candidate@example.invalid\n\nSUMMARY\nEngineer.'));
+ assert.ok(result.text.includes('+81 901 234 5678'),result.text.slice(0,200));
+ assert.ok(!result.text.includes('+81 0'),'a trunk prefix was invented for an unknown country');
 });
 test('cover letter preserves paragraphs, technical skills and closing',()=>{
  const result=unpack(docx.fromCoverLetterText('Alex Sample\n\nDear Hiring Manager,\n\nI build C++ and C# tools with .NET.\n\nI collaborate with café teams.\n\nSincerely,\nAlex Sample'));

@@ -2388,8 +2388,14 @@ class ATSTailor {
       // Mirrors autofill-core.js. linkedin_autofill_enabled is absent
       // there and must stay absent here; a test asserts the two match.
       'linkedin_autoadvance_enabled',
-      'linkedin_autosubmit_enabled',
-      'followup_enabled',
+      // THE TWO HALVES HAD DRIFTED APART AGAIN. autofill-core.js made
+      // submission and follow-up email opt-in -- both are irreversible
+      // and outward-facing, and go to a real employer -- but this copy
+      // still listed them as default-on. So the popup believed a
+      // follow-up email was enabled on a fresh install while its own
+      // checkbox showed off and the send path refused: three answers to
+      // one question. Submission requires an explicit opt-in.
+      // Follow-up messages require an explicit opt-in.
     ]);
     return new Promise((resolve) => {
       try {

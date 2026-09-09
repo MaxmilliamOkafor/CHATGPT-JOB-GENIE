@@ -127,7 +127,42 @@
   // the /location/ or /state/ rule. Each guard below encodes a real
   // mis-fill observed on a live ATS form.
   // ===================================================================
-  const DEFAULTS = Object.freeze({}); // Unknown personal facts stay unanswered.
+  // AN EMPTY OBJECT IS NOT THE SAME AS AN EMPTY ANSWER.
+  //
+  // Reducing this to Object.freeze({}) was meant to stop the autofill
+  // inventing personal facts, and that part was right. But a dozen
+  // rules downstream read `P.something || DEFAULTS.something`, so each
+  // of them began returning `undefined` rather than '' -- a different
+  // type from the one the contract promises, reaching callers that
+  // expect a string.
+  //
+  // So every key exists, and every key that would be a CLAIM about the
+  // candidate is empty: availability, relocation, remote pattern,
+  // country, phone code, how they heard, work authorisation,
+  // sponsorship. None of those can be known unless the profile says so.
+  //
+  // The four EEO questions are the exception, and not because a value
+  // is guessed for them. Declining is itself one of the answers every
+  // one of those forms offers, it asserts nothing whatsoever about the
+  // candidate, and the questions are frequently required -- so leaving
+  // them blank protects no one, it just blocks the submission. The
+  // old defaults here made real claims ("I am not a protected
+  // veteran", "I do not have a disability"); these do not.
+  const DEFAULTS = Object.freeze({
+    authorized: '', sponsorship: '', relocation: '', remote: '',
+    country: '', phoneCode: '', availability: '', howHeard: '',
+    gender: 'Prefer not to say', ethnicity: 'Prefer not to say',
+    veteran: 'Prefer not to say', disability: 'Prefer not to say',
+  });
+
+  // Every way a form writes "I would rather not say". Treated as one
+  // answer, so "Prefer not to say" finds an option reading "I don't
+  // wish to answer" or "Decline to self-identify".
+  const _DECLINE_RE = /^(i )?(prefer not|would rather not|do ?n(?:o|')t wish|do not wish|decline|choose not|wish not|rather not)\b|^(not disclosed|undisclosed|no answer|n\/a)$/i;
+  function _isDecline(text) {
+    const s = String(text || '').replace(/\s+/g, ' ').trim();
+    return !!s && _DECLINE_RE.test(s);
+  }
 
   const ISO2_NAMES = {
     IE: 'Ireland', US: 'United States', GB: 'United Kingdom', UK: 'United Kingdom',
@@ -212,7 +247,78 @@
     if (Array.isArray(explicit) && explicit.length) {
       return explicit.map(_toIso).filter(Boolean);
     }
-    return []; // Residence or citizenship is not an explicit work-authorization answer.
+    // CITIZENSHIP IS AN EXPLICIT ANSWER. RESIDENCE IS NOT.
+    //
+    // This returned an empty list for everything but a hand-written
+    // country array, which is correct about residence and wrong about
+    // citizenship. Living somewhere proves nothing -- a person on a
+    // study visa lives in Ireland -- but HOLDING a citizenship is a
+    // legal fact the applicant has stated in their own profile, and the
+    // right to work that comes with it is a matter of law, not a guess:
+    // an EU/EEA citizenship carries the whole EEA, and Ireland and the
+    // United Kingdom carry each other under the Common Travel Area.
+    //
+    // Without this, every work-authorisation question on every form
+    // went unanswered -- including "are you authorised to work in
+    // Ireland", from an Irish citizen, where the answer is not in
+    // doubt. An unanswered required question is a rejection too.
+    const claimed = _citizenshipCodes(P);
+    if (!claimed.length) return [];
+    const out = new Set();
+    for (const iso of claimed) {
+      out.add(iso);
+      if (_EEA.indexOf(iso) !== -1) for (const c of _EEA) out.add(c);
+      if (iso === 'IE' || iso === 'GB' || iso === 'UK') { out.add('IE'); out.add('GB'); out.add('UK'); }
+    }
+    return Array.from(out);
+  }
+
+  // Nationality as people write it: "Irish", "EU Citizen", "Ireland",
+  // "IE", "Irish/British". Read ONLY from fields that state citizenship
+  // or right to work -- never from country, city or location.
+  const _NATIONALITY_ADJECTIVES = {
+    IRISH: 'IE', BRITISH: 'GB', ENGLISH: 'GB', SCOTTISH: 'GB', WELSH: 'GB',
+    AMERICAN: 'US', CANADIAN: 'CA', AUSTRALIAN: 'AU', GERMAN: 'DE', FRENCH: 'FR',
+    DUTCH: 'NL', SPANISH: 'ES', ITALIAN: 'IT', PORTUGUESE: 'PT', BELGIAN: 'BE',
+    AUSTRIAN: 'AT', SWEDISH: 'SE', NORWEGIAN: 'NO', DANISH: 'DK', FINNISH: 'FI',
+    POLISH: 'PL', GREEK: 'GR', CZECH: 'CZ', HUNGARIAN: 'HU', ROMANIAN: 'RO',
+    BULGARIAN: 'BG', CROATIAN: 'HR', SLOVAK: 'SK', SLOVENIAN: 'SI',
+    LITHUANIAN: 'LT', LATVIAN: 'LV', ESTONIAN: 'EE', LUXEMBOURGISH: 'LU',
+    MALTESE: 'MT', CYPRIOT: 'CY', ICELANDIC: 'IS', SWISS: 'CH',
+    INDIAN: 'IN', SINGAPOREAN: 'SG', 'NEW ZEALANDER': 'NZ',
+  };
+
+  function _citizenshipCodes(p) {
+    const P = p || {};
+    const raw = [];
+    const push = (v) => {
+      if (!v) return;
+      if (Array.isArray(v)) { v.forEach(push); return; }
+      if (typeof v === 'string') raw.push(v);
+    };
+    push(P.citizenship); push(P.citizenships); push(P.nationality); push(P.nationalities);
+    push(P.citizenship_status); push(P.citizenshipStatus);
+    push(P.right_to_work); push(P.rightToWork);
+    push(P.work_authorization); push(P.workAuthorization);
+    const out = [];
+    for (const entry of raw) {
+      // "Irish and British", "EU Citizen / Irish", "Irish, British"
+      for (const piece of String(entry).split(/[,/;]|\band\b|\bor\b/i)) {
+        const token = piece.replace(/\b(citizen(ship)?|national(ity)?|passport|holder|status|dual)\b/gi, ' ')
+          .replace(/\s+/g, ' ').trim();
+        if (!token) continue;
+        const upper = token.toUpperCase();
+        if (/^(EU|EEA|EUROPEAN UNION|EUROPEAN ECONOMIC AREA|EUROPEAN)$/.test(upper)) {
+          for (const c of _EEA) out.push(c);
+          continue;
+        }
+        const adjective = _NATIONALITY_ADJECTIVES[upper];
+        if (adjective) { out.push(adjective); continue; }
+        const iso = _toIso(token);
+        if (ISO2_NAMES[iso]) out.push(iso);
+      }
+    }
+    return out;
   }
 
   // The country a question is asking about, if it names one.
@@ -376,6 +482,22 @@
     // answer the question, it just fills the box. Stopping there is the
     // correct outcome and this must not take it away.
     if (_isMotivationQuestion(l)) return o.coverLetter || P.cover_letter || P.summary || '';
+
+    // A SCREENING QUESTION PHRASED AS "WHY" IS STILL A SCREENING QUESTION.
+    //
+    // The yes/no router above only fires on questions that OPEN with an
+    // auxiliary verb -- are, do, will, can. "Why do you require
+    // sponsorship?" and "Why do you want to relocate?" open with "why",
+    // so they fell past it, were correctly refused the cover letter by
+    // the rule above, and then reached the end of the function with
+    // nothing: the profile knew the answer and the box stayed empty.
+    // Sponsorship, work authorisation and relocation are the three
+    // polarity-critical fields on any form; an unanswered one is read
+    // as a knockout.
+    if (/sponsor|authoriz|authoris|right to work|eligible to work|relocat|willing to move/.test(l)) {
+      const screened = yesNoFor(raw, P);
+      if (screened) return screened;
+    }
 
     // --- identity ----------------------------------------------------
     if (/first.?name|given.?name|forename/.test(l)) return P.first_name || P.firstName || '';
@@ -669,8 +791,11 @@
     if (/agree|acknowledge|consent|certif|attest|confirm|understand and accept|terms/.test(l)) return '';
     if (/available to start|able to start|can you start|start (?:on|by|immediately)/.test(l)) return '';
     if (/require .{0,20}(?:accommodation|adjustment)/.test(l)) return _pref(P.needs_accommodation, '');
-    if (/veteran|armed forces|military service/.test(l)) return _pref(P.veteran_status, '');
-    if (/disabilit/.test(l)) return _pref(P.disability_status, '');
+    // The EEO pair again, reached through the yes/no path because both
+    // are usually written as questions. Declining is one of the offered
+    // answers on every one of these forms and claims nothing.
+    if (/veteran|armed forces|military service/.test(l)) return _pref(P.veteran_status, DEFAULTS.veteran);
+    if (/disabilit/.test(l)) return _pref(P.disability_status, DEFAULTS.disability);
     if (/willing to|are you able to|can you |comfortable (?:with|working)/.test(l)) return '';
 
     return '';
@@ -878,7 +1003,16 @@
       if (optionMatches(text(o), value)) return o;
     }
     const near = options.filter((o) => optionStartsWith(text(o), value));
-    return near.length === 1 ? near[0] : null;
+    if (near.length === 1) return near[0];
+    // "Prefer not to say" and "I don't wish to answer" are the same
+    // answer written by two different form designers. Matched only when
+    // the form offers exactly one way of declining, so nothing else can
+    // be picked up by it.
+    if (_isDecline(value)) {
+      const declines = options.filter((o) => _isDecline(text(o)));
+      if (declines.length === 1) return declines[0];
+    }
+    return null;
   }
 
   function fillSelect(el, value) {
@@ -1200,9 +1334,9 @@
   global.AutofillCore = {
     __jg: true,
     labelFor, questionFor, answerFor, yesNoFor, isYesNoOptions, fillContainer, loadProfile, isToggleOn, DEFAULT_ON,
-    authorisedCountries, countryInQuestion, authorisedForQuestion,
+    authorisedCountries, countryInQuestion, authorisedForQuestion, _citizenshipCodes,
     setValue, valueFitsField, fillSelect, fillRadioGroup, fillCustomDropdown,
-    isVisible, optionMatches, optionStartsWith, soleMatch, escapeSelector, DEFAULTS,
+    isVisible, optionMatches, optionStartsWith, soleMatch, escapeSelector, DEFAULTS, _isDecline,
     // Exported so the boundary between "motivation" and "claim", and the
     // length clamp, can be asserted directly rather than through a DOM.
     _isMotivationQuestion, _clampToMaxLength, _nationalPhone,
