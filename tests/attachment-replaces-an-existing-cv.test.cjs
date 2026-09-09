@@ -133,14 +133,55 @@ test('a disabled duplicate never wins over the live field', () => {
   assert.equal(attachments.pickTarget([dead, live]), live);
 });
 
-test('an employer that rejects the format still keeps its existing file', async () => {
+// A FIELD THAT WILL NOT TAKE DOCX NO LONGER ENDS THE RUN.
+//
+// "This upload field does not accept DOCX. Download and use a format
+// allowed by the employer." was the whole answer for an accept=".pdf"
+// resume field -- for a document the extension was holding in full.
+// The same reviewed text now travels as a PDF and as plain text behind
+// the DOCX, and the field picks. DOCX is still always tried first.
+test('a PDF-only field gets the same text as a PDF', async () => {
   const f = bareField({existing: 'Maxmilliam_Okafor_CV.pdf'});
   f.input.accept = '.pdf';
+  const pdf = {name: 'Tailored_CV.pdf', size: 4242, lastModified: 42, type: 'application/pdf'};
+  const r = await attachments.replace({doc: f.doc, file: f.file, alternatives: [pdf],
+    kind: 'cv', matches: () => true, timeout: 400});
+  assert.equal(r.success, true, r.message);
+  assert.equal(r.filename, 'Tailored_CV.pdf');
+  assert.equal(r.converted, 'pdf');
+  assert.equal(f.input.files[0], pdf);
+});
+
+test('DOCX is still the first thing tried when the field takes both', async () => {
+  const f = bareField();
+  f.input.accept = '.pdf,.docx';
+  const pdf = {name: 'Tailored_CV.pdf', size: 4242, lastModified: 42, type: 'application/pdf'};
+  const r = await attachments.replace({doc: f.doc, file: f.file, alternatives: [pdf],
+    kind: 'cv', matches: () => true, timeout: 400});
+  assert.equal(r.success, true, r.message);
+  assert.equal(r.filename, 'Tailored_CV.docx');
+  assert.equal(r.converted, undefined);
+});
+
+test('a field that takes nothing we hold keeps its existing file and says what it wants', async () => {
+  const f = bareField({existing: 'Maxmilliam_Okafor_CV.pdf'});
+  f.input.accept = '.rtf';
   const r = await attachments.replace({doc: f.doc, file: f.file, kind: 'cv', matches: () => true, timeout: 200});
   assert.equal(r.success, false);
-  assert.match(r.message, /does not accept DOCX/);
+  assert.match(r.message, /accepts only \.rtf/);
   assert.equal(f.written(), 0);
   assert.equal(f.input.files[0].name, 'Maxmilliam_Okafor_CV.pdf');
+});
+
+test('the order of preference is DOCX, then PDF, then plain text', () => {
+  const field = accept => ({accept});
+  const docx = {name: 'a.docx', type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'};
+  const pdf = {name: 'a.pdf', type: 'application/pdf'};
+  const txt = {name: 'a.txt', type: 'text/plain'};
+  assert.equal(attachments.chooseFile(field(''), docx, [pdf, txt]), docx);
+  assert.equal(attachments.chooseFile(field('.pdf,.txt'), docx, [pdf, txt]), pdf);
+  assert.equal(attachments.chooseFile(field('.txt'), docx, [pdf, txt]), txt);
+  assert.equal(attachments.chooseFile(field('.rtf'), docx, [pdf, txt]), null);
 });
 
 test('an employer that rejects the upload is not reported as attached', async () => {

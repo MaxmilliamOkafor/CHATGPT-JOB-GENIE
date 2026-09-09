@@ -131,6 +131,7 @@ function backgroundAttachmentSetup({cv=true,cover=true,throwCv=false}={}) {
  const start=source.indexOf('  async function attachPreparedDocuments()'),end=source.indexOf('  function loadFilesAndStart()',start);
  const calls=[];
  const ctx={cvFile:cv?{name:'CV.docx'}:null,coverFile:cover?{name:'Letter.docx'}:null,isCVField(){},isCoverField(){},stopAttachLoops(){},document:{},
+ alternativeFiles:()=>[],cvPlainText:'',coverLetterText:'',
  window:{JobGenieAttachments:{async replace({kind}){calls.push(kind);if(kind==='cv'&&throwCv)throw Error('Upload rejected');return {success:true};}}}};
  vm.runInNewContext(source.slice(start,end)+'\nthis.attach=attachPreparedDocuments;',ctx);
  return {ctx,calls};

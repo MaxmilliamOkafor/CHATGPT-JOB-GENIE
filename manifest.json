@@ -308,6 +308,7 @@
         "recruiter-audit.js",
         "application-validator.js",
         "docx-generator.js",
+        "text-pdf.js",
         "workday-handlers.js",
         "autofill-controller.js",
         "document-attachments.js",

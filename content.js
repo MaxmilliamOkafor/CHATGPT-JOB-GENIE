@@ -476,6 +476,10 @@
   let cvFile = null;
   let coverFile = null;
   let coverLetterText = '';
+  // The reviewed plain text behind each file, kept so a field that
+  // refuses DOCX can be given the SAME document as a PDF or as plain
+  // text rather than nothing at all.
+  let cvPlainText = '';
   let hasTriggeredTailor = false;
   let tailoringInProgress = false;
 
@@ -1248,11 +1252,17 @@
           if (!window.JobGenieAttachments) throw new Error('Reload this application page to load the updated attachment engine.');
           window.__JG_FILE_ATTACH_AUTHORISED__ = true;
           try {
-            const result = await window.JobGenieAttachments.replace({
+            let result = await window.JobGenieAttachments.replace({
               doc: document, file, kind: type, matches: type === 'cv' ? isCVField : isCoverField,
+              alternatives: alternativeFiles(text || '', file.name),
             });
+            // No upload field for the cover letter means the form wants
+            // it typed. See pasteCoverLetterText.
+            if (type === 'cover' && !result.success && result.skipped) {
+              result = pasteCoverLetterText(text || coverLetterText) || result;
+            }
             if (result.success) {
-              if (type === 'cv') cvFile = file;
+              if (type === 'cv') { cvFile = file; cvPlainText = text || cvPlainText; }
               else { coverFile = file; coverLetterText = text || ''; }
               filesLoaded = !!cvFile;
             }
@@ -2039,6 +2049,53 @@
       console.warn('[ATS Tailor] on-the-spot DOCX build failed:', e && e.message);
     }
     return null;
+  }
+
+  // ============ WHEN THE FORM WILL NOT TAKE A DOCX ============
+  //
+  // A meaningful number of employers publish accept=".pdf" on the
+  // resume field. Until now that ended the run with "This upload field
+  // does not accept DOCX", and the applicant had to leave the page,
+  // find the file, convert it and come back -- for a document the
+  // extension was already holding in full.
+  //
+  // Both fallbacks are built from the SAME reviewed text as the DOCX,
+  // so nothing can drift between the format the employer takes and the
+  // one that was reviewed. DOCX stays first in every list; these are
+  // only ever reached when the field refuses it.
+  function buildPdfFileFromText(text, name) {
+    try {
+      if (!text || typeof TextPdf === 'undefined') return null;
+      const pdf = TextPdf.build(text);
+      if (!pdf) return null;
+      const bytes = new Uint8Array(pdf.length);
+      for (let i = 0; i < pdf.length; i++) bytes[i] = pdf.charCodeAt(i) & 0xff;
+      const baseName = String(name || 'Document').replace(/\.(pdf|docx|txt)$/i, '');
+      return new File([bytes], baseName + '.pdf', { type: 'application/pdf' });
+    } catch (e) {
+      console.warn('[ATS Tailor] PDF fallback build failed:', e && e.message);
+      return null;
+    }
+  }
+
+  function buildTxtFileFromText(text, name) {
+    try {
+      if (!text || !String(text).trim()) return null;
+      const baseName = String(name || 'Document').replace(/\.(pdf|docx|txt)$/i, '');
+      return new File([String(text)], baseName + '.txt', { type: 'text/plain' });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** DOCX first, then the formats a stricter field might accept instead. */
+  function alternativeFiles(text, name) {
+    const out = [];
+    const pdf = buildPdfFileFromText(text, name);
+    if (pdf) out.push(pdf);
+    const txt = buildTxtFileFromText(text, name);
+    if (txt) out.push(txt);
+    return out;
   }
 
   function createBlobFile(base64, name, mime) {
@@ -3428,6 +3485,46 @@
     return false;
   }
 
+  // ============ A COVER LETTER WITH NOWHERE TO UPLOAD IT ============
+  //
+  // Many forms ask for the cover letter as a textarea and offer no file
+  // input for it at all. The scoped replacement path only knows about
+  // file inputs, so it reported "No matching upload field found" and
+  // stopped -- leaving a written letter in the popup beside the empty
+  // box that was asking for it.
+  //
+  // Only a box the form itself labels as the cover letter is written
+  // to, and only when it is empty or holds a previous letter of ours;
+  // anything the applicant has typed is left alone.
+  function pasteCoverLetterText(text) {
+    const body = String(text || '').trim();
+    if (!body) return null;
+    for (const area of document.querySelectorAll('textarea')) {
+      if (area.disabled || area.readOnly) continue;
+      const label = [
+        area.labels && area.labels[0] ? area.labels[0].textContent : '',
+        area.getAttribute('aria-label') || '', area.name || '', area.id || '',
+        area.placeholder || '',
+      ].join(' ').toLowerCase();
+      if (!/cover\s*letter|why .{0,24}(?:this role|you|interested)|motivation/.test(label)) continue;
+      const current = String(area.value || '').trim();
+      if (current && current !== body) {
+        return { success: false, message: 'A cover letter box already has text in it. Clear it and attach again.' };
+      }
+      if (current === body) return { success: true, filename: 'cover letter text', confirmation: 'textarea' };
+      const setter = Object.getOwnPropertyDescriptor(
+        area.ownerDocument.defaultView.HTMLTextAreaElement.prototype, 'value');
+      if (setter && setter.set) setter.set.call(area, body); else area.value = body;
+      for (const type of ['input', 'change']) {
+        area.dispatchEvent(new Event(type, { bubbles: true }));
+      }
+      if (String(area.value || '').trim() !== body) continue;
+      return { success: true, filename: 'cover letter text', confirmation: 'textarea',
+        message: 'Cover letter pasted into the form (this employer has no upload field for it).' };
+    }
+    return null;
+  }
+
   // ============ LOAD FILES AND START ==========
   async function attachPreparedDocuments() {
     stopAttachLoops();
@@ -3442,11 +3539,29 @@
     const outcomes = {};
     window.__JG_FILE_ATTACH_AUTHORISED__ = true;
     try {
-      for (const [kind, file, matches] of [['cv', cvFile, isCVField], ['cover', coverFile, isCoverField]]) {
+      for (const [kind, file, matches, source] of [
+        ['cv', cvFile, isCVField, cvPlainText],
+        ['cover', coverFile, isCoverField, coverLetterText],
+      ]) {
         try {
           outcomes[kind] = file
-            ? await window.JobGenieAttachments.replace({ doc: document, file, kind, matches })
+            ? await window.JobGenieAttachments.replace({
+              doc: document, file, kind, matches,
+              alternatives: alternativeFiles(source, file.name),
+            })
             : { success: false, message: 'No current DOCX. Tailor this document again.' };
+          // A COVER LETTER WITH NO UPLOAD FIELD IS NOT A DEAD END.
+          //
+          // Plenty of forms take the cover letter as a textarea and
+          // offer no file input for it at all. Reporting "No matching
+          // upload field found" and stopping left a written letter
+          // sitting in the popup beside an empty box that was asking
+          // for exactly it.
+          if (kind === 'cover' && !outcomes.cover.success && outcomes.cover.skipped
+            && typeof pasteCoverLetterText === 'function') {
+            const pasted = pasteCoverLetterText(coverLetterText);
+            if (pasted) outcomes.cover = pasted;
+          }
         } catch (error) { outcomes[kind] = { success: false, message: error.message || 'Attachment failed.' }; }
       }
     } finally { window.__JG_FILE_ATTACH_AUTHORISED__ = false; }
@@ -3466,6 +3581,7 @@
       coverFile = createDocxFile(data.coverDocx, data.coverDocxFileName || 'Tailored_Cover_Letter.docx')
         || buildDocxFileFromText(data.coverLetterText || '', data.coverFileName, 'cover');
       coverLetterText = data.coverLetterText || '';
+      cvPlainText = data.cvText || '';
       filesLoaded = !!cvFile;
       const result = await attachPreparedDocuments();
       updateBanner(result.message, result.success ? 'success' : 'error');

@@ -590,8 +590,19 @@
       // "do you require sponsorship to work in the United States" is a
       // question about the United States, not about the applicant's
       // usual answer.
+      // THE COUNTRY ON THE FORM OUTRANKS THE STORED PREFERENCE.
+      //
+      // "Do you require sponsorship to work in the United States" is a
+      // question about the United States. An applicant with the right
+      // to work in Ireland requires sponsorship there, whatever a
+      // country-less `sponsorship_required` flag says -- and the flag
+      // was the only thing being read, with the country-aware answer
+      // computed and then discarded on the line below it.
       const byCountry = authorisedForQuestion(question, P);
-      const needsSponsor = _pref(P.sponsorship_required, '');
+      const named = countryInQuestion(question);
+      const needsSponsor = byCountry
+        ? (byCountry === 'Yes' ? 'No' : 'Yes')
+        : (named ? '' : _pref(P.sponsorship_required, ''));
       if (!needsSponsor) return '';
       if (/without[a-z ]{0,30}sponsor|not require|dont require|do not need|no sponsor/.test(l)) {
         // Inverted phrasing, so invert the SAME answer rather than
@@ -602,7 +613,20 @@
       return needsSponsor;
     }
     if (/authoriz|authoris|legally (?:able|entitled|permitted|allowed)|right to work|eligible to work|permission to work|permitted to work/.test(l)) {
-      return authorisedForQuestion(question, P) || _pref(P.work_authorized, '');
+      const byCountry = authorisedForQuestion(question, P);
+      if (byCountry) return byCountry;
+      // A COUNTRY-LESS FLAG CANNOT ANSWER A QUESTION ABOUT A COUNTRY.
+      //
+      // "Do you have the unrestricted right to work for any employer in
+      // the United States?" was being answered from `work_authorized`,
+      // a boolean that means "I can work where I live". On a US posting
+      // that produced a confident Yes from an applicant with EU
+      // citizenship and no US status: a false statement on an
+      // application, of the kind that withdraws an offer after it is
+      // made. If the question names a country the saved list does not
+      // cover, it goes unanswered.
+      if (countryInQuestion(question)) return '';
+      return _pref(P.work_authorized, '');
     }
 
     // --- location / working pattern ----------------------------------
@@ -816,16 +840,59 @@
     return false; // Ambiguous partial matches must be reviewed, not guessed.
   }
 
+  // "IRELAND" AND "IRELAND (IE)" ARE THE SAME ANSWER.
+  //
+  // Exact-only matching is right for the general case -- guessing at a
+  // partial overlap is how "Java" ends up selected for "JavaScript".
+  // But a great many dropdowns qualify their labels after a separator:
+  // "Ireland (IE)", "Dublin, County Dublin, Ireland", "Bachelor's
+  // Degree - Honours". Refusing all of those leaves required fields
+  // empty on forms where the right option is sitting in the list.
+  //
+  // So: a match only where the wanted value is the option's LEADING
+  // segment, cut on a real separator. Never a substring in the middle,
+  // never a prefix inside a word -- "United States" cannot claim
+  // "United States Minor Outlying Islands", because no separator
+  // follows. Callers apply it only when exactly one option qualifies,
+  // so "Korea, Republic of" and "Korea, Democratic..." cancel out
+  // rather than one of them being picked at random.
+  function optionStartsWith(optText, want) {
+    // The separator IS the evidence, so this cannot use _norm -- that
+    // strips punctuation to spaces, which is exactly the difference
+    // between "Ireland (IE)" and "United States Minor Outlying
+    // Islands".
+    const flat = (s) => String(s || '').toLowerCase()
+      .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+      .replace(/\s+/g, ' ').trim();
+    const o = flat(optText);
+    const w = flat(want);
+    if (!o || !w || o === w || w.length < 3) return false;
+    if (!o.startsWith(w)) return false;
+    return /^ ?[,(\[\-–—/|:;]/.test(o.slice(w.length));
+  }
+
+  /** The one option that matches, exactly if possible, by leading segment if not. */
+  function soleMatch(options, value, textOf) {
+    const text = textOf || ((o) => o.textContent);
+    for (const o of options) {
+      if (optionMatches(text(o), value)) return o;
+    }
+    const near = options.filter((o) => optionStartsWith(text(o), value));
+    return near.length === 1 ? near[0] : null;
+  }
+
   function fillSelect(el, value) {
     if (!el.options || !el.options.length) return false;
     // Skip if a real (non-placeholder) option is already chosen.
     const cur = el.options[el.selectedIndex];
     if (cur && cur.value && !/select|choose|^--|please/i.test(cur.textContent || '')) return false;
-    let best = null;
-    for (const opt of el.options) {
-      if (opt.disabled || opt.parentElement?.disabled || !opt.value) continue;
-      if (optionMatches(opt.textContent, value) || optionMatches(opt.value, value)) { best = opt; break; }
-    }
+    const choosable = Array.prototype.slice.call(el.options)
+      .filter((opt) => !opt.disabled && !(opt.parentElement && opt.parentElement.disabled) && opt.value);
+    // Exact on the label, then exact on the value, then -- only when
+    // one option qualifies -- the leading-segment rule that lets
+    // "Ireland" select "Ireland (IE)".
+    const best = soleMatch(choosable, value)
+      || soleMatch(choosable, value, (opt) => opt.value);
     if (!best) return false;
     const proto = el.ownerDocument.defaultView.HTMLSelectElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, best.value);
@@ -866,41 +933,86 @@
         el.dispatchEvent(new KeyboardEvent('keydown', { key: value.slice(-1), bubbles: true }));
         el.dispatchEvent(new KeyboardEvent('keyup', { key: value.slice(-1), bubbles: true }));
       }
-      await new Promise((r) => setTimeout(r, 350));
-      if (options.shouldContinue && !options.shouldContinue()) {
-        if (isInput) setValue(el, previous);
-        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-        return false;
-      }
-
+      // THE SUGGESTIONS DO NOT ARRIVE IN 350 MILLISECONDS.
+      //
+      // Greenhouse's Location field, and every other typeahead backed
+      // by a geo or skills API, fetches its list over the network after
+      // the first keystroke. One fixed sleep read the listbox before it
+      // existed, found nothing, and fell through to the revert below --
+      // which is how a required Location came out empty, flagged
+      // "Please enter your location", on a form the extension had
+      // otherwise filled correctly.
+      //
       // The listbox is usually rendered at body level and tied to the
-      // control by aria-controls/aria-owns, so searching the control's
-      // own subtree finds nothing. Prefer the referenced listbox, then
-      // fall back to any option in the document.
+      // control by aria-controls/aria-owns, so the control's own
+      // subtree holds nothing. The referenced box is preferred, but the
+      // document-wide fallback now runs whether or not aria-controls is
+      // present: plenty of widgets name a wrapper that stays empty
+      // until the fetch lands and render the real list in a portal.
+      const listOptions = () => {
+        let found = [];
+        const owns = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
+        if (owns) {
+          for (const id of owns.split(/\s+/)) {
+            const box = doc.getElementById(id);
+            if (box) found.push(...box.querySelectorAll('[role="option"], li, [class*="option" i]'));
+          }
+        }
+        if (!found.length) {
+          found = Array.prototype.slice.call(
+            doc.querySelectorAll('[role="option"], li[role="option"], [class*="option" i][role]'));
+        }
+        return found.filter((o) => isVisible(o) && o.getAttribute('aria-disabled') !== 'true');
+      };
+
       let opts = [];
-      const owns = el.getAttribute('aria-controls') || el.getAttribute('aria-owns');
-      if (owns) {
-        for (const id of owns.split(/\s+/)) {
-          const box = doc.getElementById(id);
-          if (box) opts.push(...box.querySelectorAll('[role="option"], li, [class*="option" i]'));
+      const deadline = Date.now() + 1500;
+      do {
+        await new Promise((r) => setTimeout(r, 120));
+        if (options.shouldContinue && !options.shouldContinue()) {
+          if (isInput) setValue(el, previous);
+          el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+          return false;
         }
-      }
-      if (!owns && !opts.length) {
-        opts = Array.prototype.slice.call(
-          doc.querySelectorAll('[role="option"], li[role="option"], [class*="option" i][role]'));
-      }
-      for (const o of opts) {
-        if (isVisible(o) && o.getAttribute('aria-disabled') !== 'true' && optionMatches(o.textContent, value)) {
-          o.click();
-          await new Promise((r) => setTimeout(r, 80));
-          const selected = o.getAttribute('aria-selected') === 'true' ||
-            (el.getAttribute('aria-expanded') === 'false' && optionMatches(isInput ? el.value : el.textContent, value));
-          if (selected) return true;
-          break;
-        }
+        opts = listOptions();
+        if (soleMatch(opts, value)) break;
+      } while (Date.now() < deadline);
+
+      const chosen = soleMatch(opts, value);
+      if (chosen) {
+        chosen.click();
+        await new Promise((r) => setTimeout(r, 120));
+        // A widget that reports its own state is believed. One that
+        // reports nothing is judged on what the control now shows: a
+        // click that put the value into the box IS the selection, and
+        // demanding aria-selected as well threw those away.
+        const shown = isInput ? el.value : el.textContent;
+        if (chosen.getAttribute('aria-selected') === 'true'
+          || el.getAttribute('aria-expanded') === 'false'
+          || optionMatches(shown, value) || optionStartsWith(shown, value)) return true;
       }
 
-      // Typed filter text is not a committed selection. Leave it for review.
+      // NOTHING MATCHED, AND AN EMPTY REQUIRED FIELD IS NOT THE SAFER ANSWER.
+      //
+      // Wiping the box was meant to stop uncommitted filter text
+      // passing for a selection. On a free-text typeahead -- which is
+      // what a Location field is -- the typed value IS the answer: it
+      // came from the saved profile, it is the applicant's own city,
+      // and blanking it turns a filled form into one that will not
+      // submit. Enter goes first, so a widget holding a highlighted
+      // suggestion commits it; the value is then left in place and the
+      // field blurred.
+      //
+      // A combobox that is not an input has no such answer to leave --
+      // typed text means nothing there -- so it is still reverted, and
+      // so is a box holding anything other than what we typed.
+      if (isInput && String(el.value || '').trim() && optionMatches(el.value, value)) {
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+        return true;
+      }
       if (isInput) setValue(el, previous);
       el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
       return false;
@@ -1090,7 +1202,7 @@
     labelFor, questionFor, answerFor, yesNoFor, isYesNoOptions, fillContainer, loadProfile, isToggleOn, DEFAULT_ON,
     authorisedCountries, countryInQuestion, authorisedForQuestion,
     setValue, valueFitsField, fillSelect, fillRadioGroup, fillCustomDropdown,
-    isVisible, optionMatches, escapeSelector, DEFAULTS,
+    isVisible, optionMatches, optionStartsWith, soleMatch, escapeSelector, DEFAULTS,
     // Exported so the boundary between "motivation" and "claim", and the
     // length clamp, can be asserted directly rather than through a DOM.
     _isMotivationQuestion, _clampToMaxLength, _nationalPhone,

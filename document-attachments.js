@@ -76,7 +76,21 @@
     for (const type of ['input', 'change']) input.dispatchEvent(new doc.defaultView.Event(type, { bubbles: true }));
   }
 
-  async function replace({ doc, file, matches, kind, timeout = 2500 }) {
+  // WHAT THIS FIELD WILL TAKE, IN THE ORDER WE WOULD RATHER SEND IT.
+  //
+  // DOCX is always first: it is the format the document was reviewed
+  // in, it parses cleanly everywhere, and it is what a recruiter can
+  // open and edit. The alternatives are built from the same text and
+  // exist for the one case that used to end the run -- a field
+  // publishing accept=".pdf".
+  function chooseFile(input, file, alternatives) {
+    for (const candidate of [file].concat(alternatives || [])) {
+      if (candidate && accepts(input, candidate)) return candidate;
+    }
+    return null;
+  }
+
+  async function replace({ doc, file, alternatives, matches, kind, timeout = 2500 }) {
     const find = () => Array.from(doc.querySelectorAll('input[type="file"]')).filter(matches);
     let candidates = find();
     if (!candidates.length && (kind === 'cv' || kind === 'cover')) {
@@ -102,8 +116,15 @@
     if (!candidates.length) return { success: false, skipped: true, message: 'No matching upload field found.' };
     let input = pickTarget(candidates);
     if (!input) return { success: false, skipped: true, message: 'No matching upload field found.' };
-    // Check before removing anything. Never destroy a valid attachment for an unsupported format.
-    if (!accepts(input, file)) return { success: false, message: 'This upload field does not accept DOCX. Download and use a format allowed by the employer.' };
+    // Check before removing anything. Never destroy a valid attachment
+    // for a format the field cannot take -- but a field that refuses
+    // DOCX is no longer the end of the run, because the same reviewed
+    // text is also being carried as a PDF and as plain text.
+    const usable = [file].concat(alternatives || []).filter(f => f && accepts(input, f));
+    if (!usable.length) {
+      return { success: false, message: 'This upload field accepts only ' + (input.accept || 'formats it does not name')
+        + '. Download the document and upload it in one of those.' };
+    }
     let scope = fieldScope(input);
     if (!scope) return { success: false, message: 'Cannot safely isolate this upload field.' };
     const previousText = (scope.textContent || '');
@@ -141,41 +162,73 @@
       input.removeAttribute('data-ats-tailor-disabled');
     }
     if (input.disabled) return { success: false, message: 'Upload field is disabled.' };
-    writeFile(doc, input, file);
-    const deadline = Date.now() + timeout;
-    let rewritten = false;
-    await wait(300);
-    do {
-      await wait(100);
-      const error = scope.querySelector('[role="alert"], .field-error, .error-message');
-      if (input.getAttribute('aria-invalid') === 'true' || error?.textContent?.trim()) return { success: false, message: error?.textContent?.trim() || 'The employer rejected the file.' };
-      const current = find();
-      if (current.length) {
-        const next = pickTarget(current);
-        if (next) {
-          // A React ATS re-renders the widget after a write, replacing
-          // the input node. The file went into a node that no longer
-          // exists, so the write is repeated once against the live one
-          // rather than timing out on a field nobody is looking at.
-          if (next !== input && !rewritten && !(next.files && next.files.length)
-            && !(scope.textContent || '').includes(file.name)) {
+
+    /** Write one candidate and wait for the form to confirm or refuse it. */
+    async function attempt(candidate) {
+      writeFile(doc, input, candidate);
+      const deadline = Date.now() + timeout;
+      let rewritten = false;
+      await wait(300);
+      do {
+        await wait(100);
+        const error = scope.querySelector('[role="alert"], .field-error, .error-message');
+        if (input.getAttribute('aria-invalid') === 'true' || error?.textContent?.trim()) {
+          // A REFUSAL IS ABOUT THIS FILE, NOT ABOUT THE APPLICATION.
+          //
+          // Employers reject an upload for reasons a different format
+          // fixes -- a server-side allow-list the accept attribute does
+          // not declare, a converter that chokes on DOCX. Reported as
+          // retryable so the caller can offer the same text as a PDF
+          // before giving up on the field entirely.
+          return { success: false, retryable: true, rejected: true,
+            message: error?.textContent?.trim() || 'The employer rejected the file.' };
+        }
+        const current = find();
+        if (current.length) {
+          const next = pickTarget(current);
+          if (next) {
+            // A React ATS re-renders the widget after a write, replacing
+            // the input node. The file went into a node that no longer
+            // exists, so the write is repeated once against the live one
+            // rather than timing out on a field nobody is looking at.
+            if (next !== input && !rewritten && !(next.files && next.files.length)
+              && !(scope.textContent || '').includes(candidate.name)) {
+              input = next;
+              scope = fieldScope(input) || scope;
+              rewritten = true;
+              if (!input.disabled) writeFile(doc, input, candidate);
+              continue;
+            }
             input = next;
             scope = fieldScope(input) || scope;
-            rewritten = true;
-            if (!input.disabled) writeFile(doc, input, file);
-            continue;
           }
-          input = next;
-          scope = fieldScope(input) || scope;
         }
+        const shown = (scope.textContent || '').includes(candidate.name);
+        const selected = Array.from(input.files || []).some(actual => sameFile(actual, candidate));
+        const busy = scope.querySelector('[aria-busy="true"], [role="progressbar"]');
+        if (!busy && (shown || selected)) {
+          return { success: true, filename: candidate.name, confirmation: shown ? 'filename' : 'file-input' };
+        }
+      } while (Date.now() < deadline);
+      return { success: false, retryable: true,
+        message: 'Upload did not confirm the new file. Check the employer form.' };
+    }
+
+    let last = null;
+    for (const candidate of usable) {
+      last = await attempt(candidate);
+      if (last.success) {
+        if (candidate !== file) {
+          last.converted = candidate.name.split('.').pop().toLowerCase();
+          last.message = 'Attached as ' + last.converted.toUpperCase()
+            + ': this field would not take the DOCX.';
+        }
+        return last;
       }
-      const shown = (scope.textContent || '').includes(file.name);
-      const selected = Array.from(input.files || []).some(actual => sameFile(actual, file));
-      const busy = scope.querySelector('[aria-busy="true"], [role="progressbar"]');
-      if (!busy && (shown || selected)) return { success: true, filename: file.name, confirmation: shown ? 'filename' : 'file-input' };
-    } while (Date.now() < deadline);
-    return { success: false, message: 'Upload did not confirm the new file. Check the employer form.' };
+      if (!last.retryable) break;
+    }
+    return last || { success: false, message: 'Upload did not confirm the new file. Check the employer form.' };
   }
-  global.JobGenieAttachments = { replace, sameFile, fieldScope, accepts, removalControl, pickTarget };
+  global.JobGenieAttachments = { replace, sameFile, fieldScope, accepts, removalControl, pickTarget, chooseFile };
   if (typeof module !== 'undefined') module.exports = global.JobGenieAttachments;
 })(typeof window === 'undefined' ? globalThis : window);
