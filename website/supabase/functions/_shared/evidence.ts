@@ -115,8 +115,19 @@ function mentionIsNegated(text: string, term: string): boolean {
 export function buildEvidenceSources(profile: any): EvidenceSource[] {
   const sources: EvidenceSource[] = [];
   const push = (label: string, text: unknown, kind: EvidenceSource["kind"]) => {
-    const t = (text ?? "").toString().trim();
-    if (t) sources.push({ label, text: t, kind });
+    if (Array.isArray(text)) { text.forEach(item => push(label, item, kind)); return; }
+    if (text && typeof text === "object") {
+      for (const key of ["text", "description", "bullet", "name"]) {
+        if (typeof (text as Record<string, unknown>)[key] === "string") {
+          push(label, (text as Record<string, unknown>)[key], kind);
+          return;
+        }
+      }
+      return;
+    }
+    if (typeof text !== "string") return;
+    const t = text.trim();
+    if (t && !sources.some(source => source.label === label && source.text === t && source.kind === kind)) sources.push({ label, text: t, kind });
   };
 
   // Explicit records: skills, certifications, education, per-role tech lists.
@@ -141,22 +152,19 @@ export function buildEvidenceSources(profile: any): EvidenceSource[] {
     else push("education", [(e as any)?.degree, (e as any)?.field, (e as any)?.institution].filter(Boolean).join(", "), "record");
   }
 
-  // Demonstrations: achievement bullets on real roles, and project work.
-  for (const role of Array.isArray(profile?.professionalExperience) ? profile.professionalExperience : []) {
-    const label = [(role as any)?.title, (role as any)?.company].filter(Boolean).join(" at ") || "experience";
-    for (const b of Array.isArray((role as any)?.bullets) ? (role as any).bullets : []) {
-      push(label, b, "achievement");
-    }
-    const tech = (role as any)?.technologies ?? (role as any)?.techStack;
-    push(`${label} (recorded tools)`, Array.isArray(tech) ? tech.join(", ") : tech, "record");
+  // Both API-normalised and stored-profile shapes contain candidate evidence.
+  const arrays = (...values: unknown[]) => values.flatMap(value => Array.isArray(value) ? value : []);
+  for (const role of arrays(profile?.professionalExperience, profile?.professional_experience)) {
+    const label = [role?.title || role?.jobTitle, role?.company || role?.companyName].filter(Boolean).join(" at ") || "experience";
+    for (const field of ["bullets", "description", "achievements", "responsibilities"]) push(label, role?.[field], "achievement");
+    for (const field of ["technologies", "techStack", "tech_stack", "skills"]) push(`${label} (recorded tools)`, role?.[field], "record");
   }
-  for (const p of Array.isArray(profile?.relevantProjects) ? profile.relevantProjects : []) {
-    const label = (p as any)?.name || "project";
-    const stack = (p as any)?.techStack;
-    push(`${label} (recorded stack)`, Array.isArray(stack) ? stack.join(", ") : stack, "record");
-    push(label, (p as any)?.description, "achievement");
-    for (const b of Array.isArray((p as any)?.bullets) ? (p as any).bullets : []) push(label, b, "achievement");
+  for (const project of arrays(profile?.relevantProjects, profile?.relevant_projects)) {
+    const label = project?.name || project?.title || "project";
+    for (const field of ["techStack", "tech_stack", "technologies", "skills"]) push(`${label} (recorded stack)`, project?.[field], "record");
+    for (const field of ["description", "bullets", "achievements"]) push(label, project?.[field], "achievement");
   }
+  push("saved achievements", profile?.achievements, "achievement");
   return sources;
 }
 
