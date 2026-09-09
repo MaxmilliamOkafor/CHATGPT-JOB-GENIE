@@ -35,7 +35,7 @@ input::placeholder,textarea::placeholder { color:#b4b4ca; }
 .gauge-subtitle,.keyword-description,.panel-subtitle { font-size:12px; color:#cbd5e1; }
 .keyword-chips { display:flex; flex-wrap:wrap; gap:5px; }
 .keyword-chip { display:inline-flex; gap:4px; padding:3px 6px; border-radius:6px; font-size:12px; background:#202039; }
-.keyword-chip.missing { color:#fecaca; }
+.keyword-chip.missing { color:#cbd5e1; background:#202039; }
 .keyword-chip.matched { color:#a7f3d0; }
 .preview-content { color:#f1f5f9; background:#0b0b18; white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.5; max-height:240px; overflow:auto; }
 .preview-tab.active { background:#a5b4fc; color:#10213b; }
@@ -52,3 +52,6 @@ input::placeholder,textarea::placeholder { color:#b4b4ca; }
 input[type=checkbox],input[type=radio] { accent-color:#67e8f9; }
 button:disabled { opacity:.6; cursor:not-allowed; }
 .btn-primary:hover:not(:disabled),.btn-accent:hover:not(:disabled) { filter:brightness(1.08); }
+
+/* Coverage gaps are neutral review items, not error states. */
+.priority-high .section-title,.priority-medium .section-title,.priority-low .section-title { color:var(--text-secondary); }
