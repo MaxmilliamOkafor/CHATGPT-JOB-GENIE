@@ -75,6 +75,8 @@ console.log('\nAND THE RENDERER RUNS WITH NO DOM AT ALL');
       updateKeywordCoverageUI: () => {},
       prepareDocumentText: () => {},
       calculateMatchScore: () => ({ matchScore: 0, matchedKeywords: [], missingKeywords: [] }),
+      canonicaliseKeywords: (list) => (Array.isArray(list) ? list : []),
+      canonicaliseTiers: (obj) => obj || {},
       escapeHtml: (x) => String(x),
       _unevidencedKeywords: [],
     };

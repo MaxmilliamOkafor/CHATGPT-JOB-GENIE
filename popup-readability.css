@@ -33,10 +33,17 @@ input::placeholder,textarea::placeholder { color:#b4b4ca; }
 .gauge-title { font-size:15px; }
 .gauge-percentage { font-size:22px; }
 .gauge-subtitle,.keyword-description,.panel-subtitle { font-size:12px; color:#cbd5e1; }
+/* GREEN IS ON THE CV, RED IS NOT.
+   Both states used the same slate background, so a panel of thirty
+   chips read as one undifferentiated block and the tick and the cross
+   were the only difference -- at 12px, next to each other. Colour
+   carries it now, and the tick and cross stay for anyone who cannot
+   rely on the colour. */
 .keyword-chips { display:flex; flex-wrap:wrap; gap:5px; }
-.keyword-chip { display:inline-flex; gap:4px; padding:3px 6px; border-radius:6px; font-size:12px; background:#202039; }
-.keyword-chip.missing { color:#cbd5e1; background:#202039; }
-.keyword-chip.matched { color:#a7f3d0; }
+.keyword-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 7px; border-radius:6px; font-size:12px; font-weight:500; border:1px solid transparent; background:#202039; color:#cbd5e1; }
+.keyword-chip.matched { color:#6ee7b7; background:rgba(16,185,129,0.14); border-color:rgba(16,185,129,0.45); }
+.keyword-chip.missing { color:#fca5a5; background:rgba(239,68,68,0.12); border-color:rgba(239,68,68,0.40); }
+.keyword-chip .chip-icon { font-weight:700; opacity:.9; }
 .preview-content { color:#f1f5f9; background:#0b0b18; white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.5; max-height:240px; overflow:auto; }
 .preview-tab.active { background:#a5b4fc; color:#10213b; }
 .workspace-guidance,.ats-guidance,.boost-description,.btn-time,.stats-card { display:none; }

@@ -4451,7 +4451,7 @@ class ATSTailor {
       'years', 'year', 'new', 'well', 'high', 'must', 'ideal', 'ideally', 'you',
       'your', 'our', 'we', 'they', 'this', 'that', 'with', 'and', 'for', 'the']);
     const seen = new Set();
-    return (Array.isArray(list) ? list : []).filter((raw) => {
+    const cleaned = (Array.isArray(list) ? list : []).filter((raw) => {
       const k = String(raw == null ? '' : raw).trim();
       if (!k) return false;
       const lc = k.toLowerCase();
@@ -4468,6 +4468,53 @@ class ATSTailor {
       const lc = String(k).toLowerCase();
       return lc.indexOf(' ') !== -1 || lc.length >= 3
         || ['ai', 'ml', 'bi', 'qa', 'ux', 'ui', 'go', 'r', 'c'].indexOf(lc) !== -1;
+    });
+    // ONE ENTRY PER REQUIREMENT, UNDER ITS OWN NAME.
+    //
+    // The list above de-duplicates STRINGS, so a posting that says both
+    // "Linux systems" and "Linux", or "AI" and "AI building", produced
+    // two chips for one requirement and a percentage measured against a
+    // denominator the posting's vocabulary had inflated. The taxonomy
+    // collapses those to one entry and prints the canonical name.
+    return this.canonicaliseKeywords(cleaned);
+  }
+
+  /** Requirements rather than strings: deduped, canonically named. */
+  canonicaliseKeywords(list) {
+    const TX = typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy
+      : (typeof window !== 'undefined' ? window.KeywordTaxonomy : null);
+    if (!TX || typeof TX.dedupe !== 'function') return Array.isArray(list) ? list : [];
+    try {
+      return TX.dedupe(list).map((entry) => entry.label);
+    } catch (e) {
+      console.warn('[ATS Tailor] keyword canonicalisation skipped:', e && e.message);
+      return Array.isArray(list) ? list : [];
+    }
+  }
+
+  /** The same, across priority tiers: a higher tier keeps the requirement. */
+  canonicaliseTiers(keywordsObj) {
+    const TX = typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy
+      : (typeof window !== 'undefined' ? window.KeywordTaxonomy : null);
+    const obj = keywordsObj || {};
+    if (!TX || typeof TX.dedupe !== 'function') return obj;
+    const claimed = new Set();
+    const tier = (list) => {
+      const out = [];
+      for (const entry of TX.dedupe(Array.isArray(list) ? list : [])) {
+        if (claimed.has(entry.key)) continue;      // already shown, higher up
+        claimed.add(entry.key);
+        out.push(entry.label);
+      }
+      return out;
+    };
+    const high = tier(obj.highPriority);
+    const medium = tier(obj.mediumPriority);
+    const low = tier(obj.lowPriority);
+    const all = tier(obj.all);                     // anything in none of the tiers
+    return Object.assign({}, obj, {
+      highPriority: high, mediumPriority: medium, lowPriority: low.concat(all),
+      all: high.concat(medium, low, all),
     });
   }
 
@@ -4611,6 +4658,10 @@ class ATSTailor {
     const matchedSet = new Set((Array.isArray(matchedKeywords) ? matchedKeywords : [])
       .map(k => String(k == null ? '' : k).toLowerCase()));
     
+    // Requirements, not strings: "Linux systems" and "Linux" are one
+    // chip, and a requirement shown as high priority is not repeated
+    // lower down under the posting's other name for it.
+    keywordsObj = this.canonicaliseTiers(keywordsObj);
     const sections = [
       { containerId: 'highPriorityChips', countId: 'highPriorityCount', keywords: keywordsObj.highPriority || [] },
       { containerId: 'mediumPriorityChips', countId: 'mediumPriorityCount', keywords: keywordsObj.mediumPriority || [] },
@@ -4625,12 +4676,19 @@ class ATSTailor {
       // Build HTML string for batch insert
       let matchCount = 0;
       const chipsHtml = keywords.map(kw => {
-        const kwLower = kw.toLowerCase();
-        const isMatched = window.DynamicScore.calculateDynamicMatch(cvTextLower, [kw]).matched.length > 0;
+        // matchedSet carries what the run already established; the
+        // matcher is asked only about the rest. Both now resolve the
+        // term to its requirement, so "PostgreSQL" is satisfied by a CV
+        // that says Postgres.
+        const isMatched = matchedSet.has(String(kw).toLowerCase())
+          || window.DynamicScore.calculateDynamicMatch(cvTextLower, [kw]).matched.length > 0;
         if (isMatched) matchCount++;
-        
+
         const escapedKw = this.escapeHtml(kw);
-        return `<span class="keyword-chip ${isMatched ? 'matched' : 'missing'}"><span class="chip-text">${escapedKw}</span><span class="chip-icon">${isMatched ? '✓' : '✗'}</span></span>`;
+        const state = isMatched ? 'matched' : 'missing';
+        return `<span class="keyword-chip ${state}" title="${isMatched ? 'On your CV' : 'Not on your CV'}">`
+          + `<span class="chip-text">${escapedKw}</span>`
+          + `<span class="chip-icon">${isMatched ? '✓' : '✗'}</span></span>`;
       }).join('');
       
       // Single DOM update
@@ -5852,15 +5910,43 @@ class ATSTailor {
         // Word-bounded dedupe against the WHOLE section, so "SQL"
         // already sitting inside "Programming: Python, SQL" is not
         // added a second time.
-        const hasAlready = (kw) => new RegExp(
-          '\\b' + kw.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(body);
+        const hasAlready = (kw) => {
+          const TX = typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy
+            : (typeof window !== 'undefined' ? window.KeywordTaxonomy : null);
+          if (TX && typeof TX.appearsIn === 'function') return TX.appearsIn(body, kw);
+          return new RegExp(
+            '\\b' + kw.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(body);
+        };
+        // THE POSTING'S OWN WORDING GOES ON THE PAGE.
+        //
+        // The gap list is canonical now -- "PostgreSQL" where the
+        // posting said "Postgres" -- which is right for a chip and
+        // wrong for the document. A screener's keyword search runs
+        // against the words in THEIR advert, so the CV carries those.
+        const asked = (() => {
+          const TX = typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy
+            : (typeof window !== 'undefined' ? window.KeywordTaxonomy : null);
+          const map = new Map();
+          if (!TX || typeof TX.keyOf !== 'function') return map;
+          for (const original of (keywords?.all || [])) {
+            const key = TX.keyOf(original);
+            if (!map.has(key)) map.set(key, String(original).trim());
+          }
+          return map;
+        })();
+        const inPostingsWords = (kw) => {
+          const TX = typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy
+            : (typeof window !== 'undefined' ? window.KeywordTaxonomy : null);
+          if (!TX || typeof TX.keyOf !== 'function') return String(kw).trim();
+          return asked.get(TX.keyOf(kw)) || String(kw).trim();
+        };
         const fresh = [];
         const seen = new Set();
         for (const kw of remaining) {
           const key = String(kw || '').toLowerCase().trim();
           if (!key || seen.has(key)) continue;
           seen.add(key);
-          if (!hasAlready(kw)) fresh.push(String(kw).trim());
+          if (!hasAlready(kw)) fresh.push(inPostingsWords(kw));
         }
         // HIGH PRIORITY GOES IN FIRST.
         //

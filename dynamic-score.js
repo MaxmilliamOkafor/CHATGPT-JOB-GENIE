@@ -23,6 +23,29 @@
       };
     }
 
+    // A REQUIREMENT, NOT A STRING.
+    //
+    // Counting distinct strings made the same requirement count twice
+    // whenever the posting used two words for it -- "Linux systems"
+    // beside "Linux", "AI building" beside "AI", "GitLab CI" beside
+    // "GitHub Actions" -- and marked a CV missing "PostgreSQL" because
+    // it says "Postgres". Both faults are the same one: the string was
+    // being treated as the thing. KeywordTaxonomy resolves each term to
+    // the requirement behind it, so the denominator counts requirements
+    // and the CV is searched for every way of writing each.
+    const TX = (typeof global !== 'undefined' && global.KeywordTaxonomy)
+      || (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
+    if (TX && typeof TX.measure === 'function') {
+      const result = TX.measure(cvText, jobKeywords);
+      return {
+        score: result.percent,
+        matched: result.matched,
+        missing: result.missing,
+        matchCount: result.matched.length,
+        totalKeywords: result.total,
+      };
+    }
+
     const cvLower = cvText.normalize('NFKC').toLowerCase();
     const matched = [];
     const missing = [];
