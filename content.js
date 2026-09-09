@@ -1244,6 +1244,7 @@
           // Manual attach is a fresh replacement, independent of automatic cooldowns.
           if (type !== 'cv' && type !== 'cover') throw new Error('Unknown document type');
           stopAttachLoops();
+          await revealUploadFields();
           if (!window.JobGenieAttachments) throw new Error('Reload this application page to load the updated attachment engine.');
           window.__JG_FILE_ATTACH_AUTHORISED__ = true;
           try {
@@ -3359,9 +3360,84 @@
     }, 4000);
   }
 
+  // ============ REVEAL THE UPLOAD FIELDS ============
+  //
+  // Greenhouse, Workable and Lever render the resume and cover-letter
+  // file inputs only once their "Attach" control is clicked, and
+  // several ATS keep the input permanently display:none behind a styled
+  // button. The old attach path clicked those controls first; when the
+  // retry loop was replaced by a single scoped pass, that step went
+  // with it -- so a form whose input had not been revealed yet reported
+  // "No matching upload field found" and the applicant's previously
+  // uploaded CV stayed exactly where it was.
+  //
+  // Nothing here submits anything or clicks a remove control. It opens
+  // upload widgets and unhides inputs, and it stops as soon as a file
+  // input is present.
+  async function revealUploadFields() {
+    const count = () => document.querySelectorAll('input[type="file"]').length;
+    const before = count();
+    try {
+      document.querySelectorAll('[data-qa-upload], [data-qa="upload"], [data-qa="attach"]').forEach((btn) => {
+        const parent = btn.closest('.field') || btn.closest('[class*="upload"]') || btn.parentElement;
+        const existing = parent && parent.querySelector('input[type="file"]');
+        if (!existing || existing.offsetParent === null) {
+          try { btn.click(); } catch (e) {}
+        }
+      });
+    } catch (e) {}
+    try { clickGreenhouseCoverAttach(); } catch (e) {}
+    try { clickResumeAttach(); } catch (e) {}
+    // Give the page a beat to render whatever those clicks opened.
+    if (count() === before) {
+      for (let i = 0; i < 8 && count() === before; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    // A hidden input still accepts a DataTransfer write, but its own
+    // scope reads as empty to the confirmation check, so unhide it.
+    document.querySelectorAll('input[type="file"]').forEach((input) => {
+      if (input.offsetParent === null) {
+        input.style.cssText = 'display:block !important; visibility:visible !important; opacity:1 !important; position:relative !important;';
+      }
+    });
+    return count();
+  }
+
+  /** The resume half of the same problem: an "Attach" button with no input behind it yet. */
+  function clickResumeAttach() {
+    const nodes = document.querySelectorAll('label, h1, h2, h3, h4, h5, span, div, fieldset');
+    for (const node of nodes) {
+      const t = (node.textContent || '').trim().toLowerCase();
+      if (!t || t.length > 60) continue;
+      if (!/(^|[^a-z])(resume|cv|curriculum vitae)([^a-z]|$)/.test(t)) continue;
+      if (t.includes('cover')) continue;
+      const container = node.closest('fieldset') || node.closest('.field') || node.closest('section') || node.parentElement;
+      if (!container) continue;
+      const existing = container.querySelector('input[type="file"]');
+      if (existing && existing.offsetParent !== null) return true;
+      for (const btn of container.querySelectorAll('button, a[role="button"], [role="button"]')) {
+        const bt = (btn.textContent || '').trim().toLowerCase();
+        // "Attach" and "Upload" only. A "Remove" or "Delete" control in
+        // the same box must never be clicked from here.
+        if (/^(attach|upload|attach file|upload file|choose file|browse)$/.test(bt)) {
+          try { btn.click(); return true; } catch (e) {}
+        }
+      }
+    }
+    return false;
+  }
+
   // ============ LOAD FILES AND START ==========
   async function attachPreparedDocuments() {
     stopAttachLoops();
+    // The field has to exist before it can be replaced. See
+    // revealUploadFields above for why this call is not optional.
+    if (typeof revealUploadFields === 'function') {
+      try { await revealUploadFields(); } catch (e) {
+        console.warn('[ATS Tailor] reveal step skipped:', e && e.message);
+      }
+    }
     if (!window.JobGenieAttachments) return { success: false, message: 'Reload this application page to load the attachment engine.' };
     const outcomes = {};
     window.__JG_FILE_ATTACH_AUTHORISED__ = true;

@@ -4559,7 +4559,23 @@ class ATSTailor {
     }
     const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
     set('matchPercentage', count ? `${coverage}%` : '—');
-    set('matchSubtitle', count ? (coverage >= 90 ? '90–100% coverage target reached. Review the tailored CV.' : `Below 90% target: ${Math.max(0, Math.ceil(count * 0.9) - hits)} more supported keywords needed.`) : 'No keywords available to measure.');
+    // WHY IT IS SHORT, NOT JUST THAT IT IS.
+    //
+    // "8 more supported keywords needed" names a number and no action.
+    // The coverage pass already added everything the saved profile
+    // evidences, so whatever is still missing is missing for one
+    // reason: the profile does not record it. Saying so turns the gauge
+    // into an instruction -- add it to the profile and re-run -- rather
+    // than a score to stare at.
+    const blocked = Array.isArray(this._unevidencedKeywords) ? this._unevidencedKeywords.length : 0;
+    const shortfall = Math.max(0, Math.ceil(count * 0.9) - hits);
+    set('matchSubtitle', count
+      ? (coverage >= 90
+        ? '90-100% coverage target reached. Review the tailored CV.'
+        : (blocked
+          ? `Below 90% target: ${shortfall} more needed. ${blocked} posting term(s) are not in your saved profile -- add any you genuinely have, then tailor again.`
+          : `Below 90% target: ${shortfall} more supported keywords needed.`))
+      : 'No keywords available to measure.');
     set('keywordCountBadge', `${hits} of ${count} keywords matched`);
     set('matchPanelProvider', this.aiProvider === 'kimi' ? 'Kimi K2' : 'OpenAI');
   }
@@ -5507,11 +5523,14 @@ class ATSTailor {
    * Called automatically by tailorDocuments - no separate button needed
    */
   async boostCVTo95Plus(cvText, keywords, updateProgress) {
-    const match = this.calculateMatchScore(cvText, keywords);
+    const before = this.calculateMatchScore(cvText, keywords);
+    const injected = this.fastKeywordInjection(cvText, keywords, before.missingKeywords);
+    const tailoredCV = injected.tailoredCV || cvText;
+    const match = this.calculateMatchScore(tailoredCV, keywords);
     if (updateProgress) updateProgress(100, 'Keyword review complete; check missing requirements against your experience.');
-    return {tailoredCV:cvText, finalScore:match.matchScore,
+    return {tailoredCV, finalScore:match.matchScore,
       matchedKeywords:match.matchedKeywords, missingKeywords:match.missingKeywords,
-      injectedKeywords:[], keywords};
+      injectedKeywords:injected.injectedKeywords || [], keywords};
   }
 
   /**
@@ -5601,9 +5620,305 @@ class ATSTailor {
     return cvText;
   }
 
+  // ██ WORD SHAPES, SO THE POSTING'S WORDING IS NOT A DIFFERENT CLAIM ██
+  //
+  // A profile that says "Software Engineer" evidences "software
+  // engineering"; one that says "collaborated" evidences
+  // "collaboration"; one that says "observable" evidences
+  // "observability". A literal substring test says no to all three, so
+  // a keyword the candidate genuinely owns was refused and the CV
+  // shipped at a quarter coverage.
+  //
+  // What is NOT allowed is the loose overlap that lets Java in on the
+  // strength of JavaScript, or React on Reactive. So: strip only real
+  // INFLECTIONS -- plurals, tenses, -ing/-er/-ion/-ment/-ity/-able --
+  // and compare the roots. 'ive' is deliberately absent from the list
+  // (that is what would conflate React and Reactive), and nothing is
+  // stripped that would leave a root under four characters, which is
+  // what keeps "java" whole beside "javascript".
+  _keywordRoot(word) {
+    let w = String(word || '').toLowerCase().replace(/[^a-z0-9+#.]/g, '');
+    if (!w) return '';
+    // A CV is written in the past tense and a posting in the present,
+    // so the irregular verbs are exactly the ones that fail to line up.
+    // "Led the migration" is the evidence for "leadership".
+    w = ATSTailor._IRREGULAR_VERBS[w] || w;
+    const SUFFIXES = ['ibilities', 'abilities', 'ibility', 'ability', 'ilities', 'ility',
+      'ements', 'ement', 'ations', 'ation', 'ities', 'ings', 'ship', 'ical', 'ible',
+      'able', 'ment', 'ions', 'ion', 'ing', 'ate', 'ies', 'ied', 'ers', 'ics',
+      'ity', 'er', 'ic', 'at', 'es', 'ed', 'ly', 's'];
+    // Suffix and silent-e are stripped in ONE loop, not one after the
+    // other: "services" reaches serv only through -es then -ic, while
+    // "service" needs the e dropped first to reach the same -ic. Run
+    // separately they end up at serv and servic and never match.
+    for (let guard = 0; guard < 8; guard++) {
+      let cut = '';
+      for (const s of SUFFIXES) {
+        // Four characters of root, except for a bare plural: "APIs"
+        // has to reach "api" or a CV that says "payment APIs" fails to
+        // evidence the posting's "API".
+        const floor = s === 's' ? 3 : 4;
+        if (w.length - s.length >= floor && w.endsWith(s) && s.length > cut.length) cut = s;
+      }
+      if (cut) { w = w.slice(0, -cut.length); continue; }
+      if (w.length > 4 && w.endsWith('e')) { w = w.slice(0, -1); continue; }
+      break;
+    }
+    return w;
+  }
+
+  static get _IRREGULAR_VERBS() {
+    return {
+      led: 'lead', ran: 'run', built: 'build', wrote: 'write', written: 'write',
+      drove: 'drive', driven: 'drive', taught: 'teach', spoke: 'speak', grew: 'grow',
+      grown: 'grow', made: 'make', took: 'take', taken: 'take', gave: 'give',
+      given: 'give', brought: 'bring', held: 'hold', kept: 'keep', sold: 'sell',
+      spent: 'spend', won: 'win', shipped: 'ship', chose: 'choose', chosen: 'choose',
+      began: 'begin', begun: 'begin', found: 'find',
+    };
+  }
+
+  /** Every root the candidate's own profile evidences. */
+  _profileRootSet(evidence) {
+    if (this._rootSetSource === evidence && this._rootSet) return this._rootSet;
+    const set = new Set();
+    for (const word of String(evidence || '').split(/[^a-z0-9+#.]+/i)) {
+      const root = this._keywordRoot(word);
+      if (root) set.add(root);
+    }
+    this._rootSetSource = evidence;
+    this._rootSet = set;
+    return set;
+  }
+
+  // Words that carry no claim of their own, so a keyword is judged on
+  // the words that do.
+  static get _KEYWORD_STOPWORDS() {
+    return new Set(['and', 'or', 'of', 'the', 'a', 'an', 'to', 'for', 'with', 'in',
+      'on', 'at', 'by', 'from', 'as', 'is', 'are', 'be', 'via', 'using', 'strong',
+      'excellent', 'good', 'proven', 'solid', 'deep', 'plus', 'related', 'other']);
+  }
+
+  /**
+   * True when the candidate's saved profile evidences this keyword.
+   *
+   * Every content word in the keyword must have a root the profile
+   * contains. Adjacency is not required: a profile that records
+   * "technical design reviews" and "evaluated vendors" evidences
+   * "technical evaluation". A profile that records neither does not,
+   * and the keyword stays off the page.
+   */
+  _profileEvidences(keyword, evidence) {
+    const k = String(keyword || '').toLowerCase().trim();
+    if (!k || !evidence) return false;
+    if (evidence.indexOf(k) !== -1) return true;
+    const stop = ATSTailor._KEYWORD_STOPWORDS;
+    const words = k.split(/[^a-z0-9+#.]+/).filter((w) => w && !stop.has(w));
+    if (!words.length) return false;
+    const roots = this._profileRootSet(evidence);
+    return words.every((w) => {
+      const root = this._keywordRoot(w);
+      return !!root && roots.has(root);
+    });
+  }
+
   fastKeywordInjection(cvText, keywords, missingKeywords) {
-    // Missing requirements are review items, never evidence of experience.
-    return {tailoredCV:cvText, injectedKeywords:[], reviewKeywords:missingKeywords || []};
+    if (!missingKeywords || missingKeywords.length === 0) {
+      return { tailoredCV: cvText, injectedKeywords: [], reviewKeywords: [] };
+    }
+
+    // ██ JUNK KEYWORD FILTER ██
+    // Terms a job description carries as furniture. They cost a line of
+    // the skills section and win nothing in an ATS.
+    const JUNK_KEYWORDS = new Set([
+      'customer service', 'high school diploma', 'commission', 'customer-facing',
+      'independent work', 'motivated', 'benefits', 'fast-paced',
+      'work environment', 'motivation', 'self-motivated',
+      'go-getter', 'passion', 'passionate', 'enthusiasm', 'enthusiastic',
+      'dedicated', 'dedication', 'driven', 'dynamic', 'proactive',
+      'synergy', 'paradigm', 'robust', 'commitment', 'reliable', 'reliability',
+      'integrity', 'professionalism', 'multitasking', 'positive attitude',
+      'work ethic', 'goal-oriented', 'results-oriented', 'mission',
+      'equal opportunity', 'competitive salary', 'full-time', 'part-time',
+      'base salary', 'bonus', 'stock options', 'health insurance',
+      'dental', 'vision', '401k', 'pto', 'paid time off', 'remote work',
+      'hybrid', 'on-site', 'office', 'headquarters', 'location',
+      'apply now', 'submit resume', 'cover letter', 'interview',
+      'can-do attitude', 'people person', 'go above and beyond',
+      'think outside the box', 'hit the ground running', 'wear many hats',
+    ]);
+
+    const cleanMissing = missingKeywords.filter((kw) => {
+      const k = String(kw || '').toLowerCase().trim();
+      if (!k) return false;
+      if (JUNK_KEYWORDS.has(k)) return false;
+      if (k.length > 60) return false;
+      // AI, ML, BI, QA, UX, R, Go, C#, C++ are the shortest keywords a
+      // posting carries and among the most valuable. A flat "under
+      // three characters is noise" rule threw every one of them away.
+      // Keep a short term when it is written as an acronym or carries
+      // language punctuation; a bare lower-case fragment still goes.
+      if (k.length < 3 && !/[A-Z]/.test(String(kw)) && !/[+#.]/.test(k)) return false;
+      return true;
+    });
+    if (cleanMissing.length === 0) {
+      return { tailoredCV: cvText, injectedKeywords: [], reviewKeywords: [] };
+    }
+
+    // ██ ONLY WHAT THE PROFILE ACTUALLY EVIDENCES ██
+    //
+    // "Missing" here means "the posting asked for it and the generated
+    // CV does not contain it". That is two different situations wearing
+    // one label:
+    //
+    //   a) the candidate HAS it and the tailoring dropped it -- true,
+    //      worth restoring, and the whole point of this pass
+    //   b) the candidate has never touched it -- and adding it is a
+    //      lie that a single interview question exposes
+    //
+    // The saved profile is what tells them apart: it is the candidate's
+    // own record of what they have done. With no profile to check
+    // against, nothing is added. That is the safe direction -- a
+    // keyword left off a CV costs a match, a keyword invented onto one
+    // costs the application.
+    const evidence = (() => {
+      try {
+        return typeof this._profileEvidenceBlob === 'function'
+          ? this._profileEvidenceBlob() : '';
+      } catch (e) {
+        console.warn('[ATS Tailor] profile evidence unavailable, adding no keywords:',
+          e && e.message);
+        return '';
+      }
+    })();
+    const unevidenced = [];
+    let remaining = cleanMissing.filter((kw) => {
+      if (this._profileEvidences(kw, evidence)) return true;
+      unevidenced.push(kw);
+      return false;
+    });
+    this._unevidencedKeywords = unevidenced;
+    if (unevidenced.length) {
+      console.warn('[ATS Tailor] ' + unevidenced.length + ' posting keyword(s) left OFF the CV '
+        + 'because your profile does not evidence them: ' + unevidenced.join(', ')
+        + '. If you do have any of these, add them to your profile and re-run.');
+    }
+
+    // ██ NOTHING IS EVER APPENDED TO A BULLET ██
+    //
+    // A bullet is a claim about a specific piece of work, so a tool
+    // appended to it claims the tool was used FOR THAT WORK. Bolting
+    // ", using Salesforce." onto a real credit-risk rebuild is not
+    // keyword optimisation, it is writing fiction onto a true
+    // accomplishment -- and three bullets ending that way on one page
+    // is a recognised stuffing pattern. Weaving a keyword into a bullet
+    // truthfully needs the source material and judgement about what the
+    // work involved; that is the tailoring model's job, with the
+    // profile in hand.
+    //
+    // The skills section is the one place a keyword is a statement
+    // about the CANDIDATE rather than about a piece of work, so it is
+    // the only place anything lands.
+    let tailoredCV = cvText;
+    const injectedKeywords = [];
+    let overflow = [];
+    if (remaining.length > 0) {
+      const cvLines = tailoredCV.split('\n');
+      const SKILLS_HEAD = /^(SKILLS|TECHNICAL SKILLS|CORE COMPETENCIES|KEY SKILLS|TECHNICAL PROFICIENCIES):?$/i;
+      let head = -1;
+      for (let li = 0; li < cvLines.length; li++) {
+        if (SKILLS_HEAD.test(cvLines[li].trim())) { head = li; break; }
+      }
+      if (head !== -1) {
+        // The section runs to the first blank line or the next ALL-CAPS
+        // heading, checked case-sensitively.
+        let end = cvLines.length;
+        for (let li = head + 1; li < cvLines.length; li++) {
+          const s = cvLines[li].trim();
+          if (!s) { end = li; break; }
+          if (s === s.toUpperCase() && /^[A-Z][A-Z &/]{2,}$/.test(s)) { end = li; break; }
+        }
+        const body = cvLines.slice(head + 1, end).join('\n');
+        // Word-bounded dedupe against the WHOLE section, so "SQL"
+        // already sitting inside "Programming: Python, SQL" is not
+        // added a second time.
+        const hasAlready = (kw) => new RegExp(
+          '\\b' + kw.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i').test(body);
+        const fresh = [];
+        const seen = new Set();
+        for (const kw of remaining) {
+          const key = String(kw || '').toLowerCase().trim();
+          if (!key || seen.has(key)) continue;
+          seen.add(key);
+          if (!hasAlready(kw)) fresh.push(String(kw).trim());
+        }
+        // HIGH PRIORITY GOES IN FIRST.
+        //
+        // Two labelled lines hold twenty terms and a posting can ask
+        // for more. Whatever falls off the end should be the term the
+        // extractor ranked lowest, not whichever one happened to sort
+        // last -- a run once dropped Kafka, a named requirement, while
+        // keeping a low-priority noun ahead of it.
+        const rankOf = (kw) => {
+          const k = String(kw).toLowerCase();
+          const at = (list) => (Array.isArray(list) ? list : [])
+            .findIndex((x) => String(x).toLowerCase() === k);
+          const hi = at(keywords?.highPriority);
+          if (hi !== -1) return hi;
+          const med = at(keywords?.mediumPriority);
+          if (med !== -1) return 1000 + med;
+          const all = at(keywords?.all);
+          return 2000 + (all === -1 ? 999 : all);
+        };
+        fresh.sort((a, b) => rankOf(a) - rankOf(b));
+
+        if (fresh.length > 0) {
+          // THE GROUPED FORMAT SURVIVES. Every existing line stays
+          // byte-identical and the section gains labelled lines of its
+          // own; only a flat single-line section is extended in place.
+          // Ten per line is the recruiter audit's own group cap -- a
+          // longer line is trimmed there anyway, so writing one would
+          // silently lose the overflow.
+          const grouped = body.indexOf('\n') !== -1
+            || /^[A-Z][A-Za-z &/]{1,28}:\s/.test(body.trim());
+          const PER_LINE = 10;
+          const placed = fresh.slice(0, PER_LINE * 2);
+          // Twenty is where a skills section stops being read. Anything
+          // past it is reported rather than dropped in silence, so a
+          // term the profile DOES evidence never disappears without the
+          // user being told it ran out of room.
+          overflow = fresh.slice(PER_LINE * 2);
+          if (!body.trim()) {
+            cvLines.splice(head + 1, 0, placed.join(', '));
+          } else if (grouped) {
+            // Mixed-case labels, so neither the audit's all-caps heading
+            // detector nor the renderer's section list reads them as a
+            // new section -- they render as further bold-labelled group
+            // lines.
+            const extra = [];
+            extra.push('Additional Skills: ' + placed.slice(0, PER_LINE).join(', '));
+            if (placed.length > PER_LINE) {
+              extra.push('Additional Domain Knowledge: ' + placed.slice(PER_LINE).join(', '));
+            }
+            cvLines.splice(end, 0, ...extra);
+          } else {
+            cvLines[head + 1] = body.trim() + ', ' + placed.join(', ');
+          }
+          tailoredCV = cvLines.join('\n');
+          injectedKeywords.push(...placed);
+        }
+        remaining = [];
+      }
+      // No skills section -> nothing is created and nothing is added:
+      // inventing a section here is how the duplicate-SKILLS bug began.
+    }
+
+    return {
+      tailoredCV, injectedKeywords,
+      reviewKeywords: unevidenced.concat(remaining),
+      // Evidenced, but the section had no room left.
+      overflowKeywords: overflow,
+    };
   }
 
   /**
@@ -6232,6 +6547,35 @@ class ATSTailor {
 
       // Recover relevant skills the first tailoring response omitted from the saved profile.
       this.generatedDocuments.cv = this.recoverOmittedProfileSkills(this.generatedDocuments.cv, keywords, p);
+
+      // CLOSE THE COVERAGE GAP WITH THINGS THE PROFILE ALREADY PROVES.
+      //
+      // recoverOmittedProfileSkills only ever extends a FLAT skills
+      // list, and it walks past any line carrying a colon -- which is
+      // every line of a grouped section, the format this CV actually
+      // uses. On a real document it therefore added nothing, and a run
+      // could finish at a quarter of the posting's terms with a profile
+      // that evidenced most of them.
+      //
+      // This pass reads the same saved profile and writes the posting's
+      // own wording for anything the profile evidences. Nothing that
+      // the profile cannot support is added, and nothing is appended to
+      // a bullet.
+      if (keywords.all?.length && this.generatedDocuments.cv) {
+        this._cachedProfile = p || this._cachedProfile;
+        const gap = this.calculateMatchScore(this.generatedDocuments.cv, keywords);
+        const closed = this.fastKeywordInjection(
+          this.generatedDocuments.cv, keywords, gap.missingKeywords);
+        if (closed.injectedKeywords?.length) {
+          this.generatedDocuments.cv = closed.tailoredCV;
+          console.log('[ATS Tailor] Coverage pass added', closed.injectedKeywords.length,
+            'profile-evidenced keyword(s):', closed.injectedKeywords.join(', '));
+        }
+        if (closed.overflowKeywords?.length) {
+          console.warn('[ATS Tailor] The skills section ran out of room before these '
+            + 'profile-evidenced terms: ' + closed.overflowKeywords.join(', '));
+        }
+      }
 
       // Review actual coverage after the evidence-backed recovery.
       updateStep(3, 'working');
