@@ -326,6 +326,32 @@
     return out;
   }
 
+
+  // Sub-national names that identify a country on a work-authorisation
+  // question. Written out rather than fetched: it is a short, stable
+  // list of facts, and a form asking about "Ontario" cannot wait for a
+  // network call.
+  const _REGION_COUNTRY = (() => {
+    const map = {};
+    const add = (iso, names) => { for (const n of names) map[n.toLowerCase()] = iso; };
+    add('US', ['alabama', 'alaska', 'arizona', 'arkansas', 'california', 'colorado',
+      'connecticut', 'delaware', 'district of columbia', 'florida', 'hawaii', 'idaho',
+      'illinois', 'indiana', 'iowa', 'kansas', 'kentucky', 'louisiana', 'maine',
+      'maryland', 'massachusetts', 'michigan', 'minnesota', 'mississippi', 'missouri',
+      'montana', 'nebraska', 'nevada', 'new hampshire', 'new jersey', 'new mexico',
+      'new york', 'north carolina', 'north dakota', 'ohio', 'oklahoma', 'oregon',
+      'pennsylvania', 'rhode island', 'south carolina', 'south dakota', 'tennessee',
+      'texas', 'utah', 'vermont', 'virginia', 'washington', 'west virginia',
+      'wisconsin', 'wyoming', 'puerto rico']);
+    add('CA', ['alberta', 'british columbia', 'manitoba', 'new brunswick',
+      'newfoundland', 'newfoundland and labrador', 'nova scotia', 'northwest territories',
+      'nunavut', 'ontario', 'prince edward island', 'quebec', 'saskatchewan', 'yukon']);
+    add('GB', ['england', 'scotland', 'wales', 'northern ireland', 'great britain']);
+    add('AU', ['new south wales', 'victoria', 'queensland', 'western australia',
+      'south australia', 'tasmania', 'northern territory']);
+    return map;
+  })();
+
   // The country a question is asking about, if it names one.
   function countryInQuestion(question) {
     // Punctuation stripped to spaces first. Matching on " australia "
@@ -338,6 +364,21 @@
     for (const iso of Object.keys(ISO2_NAMES)) {
       const name = ISO2_NAMES[iso].toLowerCase();
       if (l.indexOf(' ' + name + ' ') !== -1) return iso;
+    }
+    // A STATE, A PROVINCE OR A HOME NATION NAMES ITS COUNTRY.
+    //
+    // "Are you authorized to work in California?" is a question about
+    // the United States, and "the right to work in England" is one
+    // about the United Kingdom. Neither matched, so both went
+    // unanswered -- on a required field, from an applicant whose answer
+    // was not in doubt either way. American forms name the state far
+    // more often than the country.
+    //
+    // Georgia is deliberately absent: it is a country as well as a
+    // state, and guessing wrong on a work-authorisation question is the
+    // one place a guess costs the application.
+    for (const region of Object.keys(_REGION_COUNTRY)) {
+      if (l.indexOf(' ' + region + ' ') !== -1) return _REGION_COUNTRY[region];
     }
     for (const [re, iso] of [[/\b(the )?u\.?s\.?a?\b/, 'US'], [/\bunited states\b/, 'US'],
       [/\bu\.?k\.?\b/, 'GB'], [/\bbrazil|brasil\b/, 'BR'], [/\bcanada\b/, 'CA'],
@@ -443,12 +484,99 @@
     return c || DEFAULTS.country;
   }
 
+
+  // ===================================================================
+  // THE PROFILE THE WEBSITE STORES IS NOT THE PROFILE THE RULES READ
+  // -------------------------------------------------------------------
+  // An audit of eighty label rules against the profile table found
+  // fifty-three keys being read that the row never carries -- and, worse
+  // than the harmless aliases among them, a dozen where the CANONICAL
+  // key was the one missing:
+  //
+  //   the rules read      the profile stores
+  //   postal_code, zip    zip_code
+  //   degree              highest_education
+  //   ethnicity, race     race_ethnicity
+  //   drivers_license     driving_license
+  //   sponsorship_required visa_required
+  //   years               total_experience
+  //   school, major,      inside education[]
+  //     graduation_year
+  //   current_company,    inside professional_experience[]
+  //     current_title
+  //
+  // Every one of those fields came out BLANK on a real form while the
+  // data sat in the profile. Postal code, degree, field of study and
+  // current employer are required on most applications.
+  //
+  // Fixed in one place rather than by sprinkling "|| P.other_name"
+  // through eighty rules: the row is adapted once into the flat shape
+  // the rules expect, and the adapter is the single list of what maps
+  // to what. Nothing is invented -- every derived value is copied or
+  // read out of a structure the user filled in themselves.
+  // ===================================================================
+  const _adapted = new WeakMap();
+
+  function _firstOf(list, keys) {
+    for (const item of (Array.isArray(list) ? list : [])) {
+      if (!item || typeof item !== 'object') continue;
+      for (const key of keys) {
+        const v = item[key];
+        if (typeof v === 'string' && v.trim()) return v.trim();
+      }
+    }
+    return '';
+  }
+
+  /** True when a role in the history has no end date. */
+  function _stillEmployed(list) {
+    for (const job of (Array.isArray(list) ? list : [])) {
+      if (!job || typeof job !== 'object') continue;
+      if (job.current === true || job.is_current === true) return true;
+      const text = [job.dates, job.end_date, job.endDate, job.period]
+        .filter((v) => typeof v === 'string').join(' ');
+      if (/\b(present|current|now|ongoing|to date)\b/i.test(text)) return true;
+    }
+    return false;
+  }
+
+  function normaliseProfile(p) {
+    if (!p || typeof p !== 'object') return p || {};
+    if (_adapted.has(p)) return _adapted.get(p);
+    const out = Object.assign({}, p);
+    const take = (target, ...sources) => {
+      if (out[target] !== undefined && out[target] !== null && out[target] !== '') return;
+      for (const src of sources) {
+        if (src !== undefined && src !== null && src !== '') { out[target] = src; return; }
+      }
+    };
+    take('postal_code', p.zip_code, p.zipCode, p.zip, p.eircode);
+    take('zip', p.zip_code, p.zipCode, p.postal_code);
+    take('degree', p.highest_education, p.highestEducation,
+      _firstOf(p.education, ['degree', 'qualification', 'level']));
+    take('ethnicity', p.race_ethnicity, p.raceEthnicity, p.race);
+    take('drivers_license', p.driving_license, p.drivingLicense, p.drivers_licence);
+    take('sponsorship_required', p.visa_required, p.visaRequired);
+    take('years', p.total_experience, p.totalExperience, p.years_experience);
+    take('school', _firstOf(p.education, ['school', 'institution', 'university', 'college', 'name']));
+    take('university', out.school);
+    take('major', p.field_of_study, p.fieldOfStudy,
+      _firstOf(p.education, ['field_of_study', 'fieldOfStudy', 'major', 'subject', 'discipline']));
+    take('graduation_year', _firstOf(p.education, ['graduation_year', 'graduationYear', 'end_year', 'year', 'dates']));
+    const exp = p.professional_experience || p.professionalExperience;
+    take('current_company', _firstOf(exp, ['company', 'employer', 'organisation', 'organization']));
+    take('current_title', _firstOf(exp, ['title', 'role', 'position', 'job_title']));
+    if (out.currently_employed === undefined && _stillEmployed(exp)) out.currently_employed = true;
+    _adapted.set(p, out);
+    return out;
+  }
+
   function answerFor(label, p, opts) {
     const o = { ...(opts || {}) };
     const raw = String(label || '');
     const l = raw.toLowerCase().replace(/[^a-z0-9/ ]/g, ' ').replace(/\s+/g, ' ').trim();
     if (!l) return '';
-    const P = p || {};
+    const P = normaliseProfile(p);
     const saved = P.application_answers?.[raw];
     if (saved !== undefined && saved !== null) return String(saved);
     if (/^(are|do|did|have|has|will|would|can|could|is)\b/.test(l) && !/years/.test(l)) return yesNoFor(raw, P);
@@ -509,11 +637,27 @@
     if (/last.?name|family.?name|surname/.test(l)) return P.last_name || P.lastName || '';
     if (/middle.?name/.test(l)) return P.middle_name || '';
     if (/preferred.?name|nick.?name/.test(l)) return P.preferred_name || P.first_name || P.firstName || '';
-    if (/full.?name|your name|^name$/.test(l) && !/company|user|referr|employee/.test(l)) {
+    if (/full.?name|your name|legal.?name|^name$/.test(l) && !/company|user|referr|employee/.test(l)) {
       return ((P.first_name || P.firstName || '') + ' ' + (P.last_name || P.lastName || '')).trim();
     }
     if (/\bemail\b/.test(l)) return P.email || '';
-    if (/country.?code|phone.?code|dial.?code|calling.?code/.test(l)) return P.phoneCountryCode || DEFAULTS.phoneCode;
+    // A PHONE NUMBER IS NOT A PHONE TYPE.
+    //
+    // "Phone Type" is a dropdown offering Mobile, Home and Work, and it
+    // was matching the /phone/ rule below -- so a live Workday form got
+    // "+353 874 261 508" written into it, which is visibly wrong on a
+    // submitted application. Checked before the number rule, and only
+    // answered when the profile says which kind of number it is.
+    if (/phone.?type|type of phone|number type/.test(l)) return P.phone_type || 'Mobile';
+    if (/country.?code|phone.?code|dial.?code|calling.?code/.test(l)) {
+      // Derived from the number itself when the profile has no separate
+      // field for it. A required country-code select left empty blocks
+      // the form, and the code is sitting in front of the number.
+      const stored = P.phoneCountryCode || P.phone_country_code || DEFAULTS.phoneCode;
+      if (stored) return stored;
+      const m = String(P.phone || '').match(/^\s*\+(\d{1,3})/);
+      return m ? '+' + m[1] : '';
+    }
     if (/phone|mobile|cell|telephone/.test(l)) {
       // National when the form carries the country code separately, or
       // it arrives twice and the field is rejected. See fillContainer.
@@ -538,7 +682,7 @@
     if (/country/.test(l) && !/code|phone|dial/.test(l)) return _country(P);
     if (/address|street/.test(l) && !/email/.test(l)) return P.address || '';
     // Location FIELDS only -- not eligibility questions mentioning "location".
-    if (/location|where .*(you|do you) (live|based)|based in/.test(l) && !/authoriz|authoris|sponsor|relocat|eligib|stated|willing/.test(l)) {
+    if (/location|where .*(you|do you) (live|based|located|reside)|where are you|based in|current.?residence/.test(l) && !/authoriz|authoris|sponsor|relocat|eligib|stated|willing/.test(l)) {
       return P.city ? (P.city + (P.state ? ', ' + P.state : '')) : '';
     }
 
@@ -547,7 +691,9 @@
     if (/github/.test(l)) return P.github || P.github_url || '';
     if (/website|portfolio|personal.?url|personal.?site/.test(l)) return P.website || P.portfolio || P.website_url || '';
     if (/university|school|college|institution|alma.?mater/.test(l)) return P.school || P.university || '';
-    if (/\bdegree\b|qualification level/.test(l)) return P.degree || '';
+    // "Highest level of education completed" is the same question as
+    // "Degree" and was matching neither.
+    if (/\bdegree\b|qualification level|level of education|education level|highest.*education/.test(l)) return P.degree || '';
     if (/major|field.?of.?study|discipline|concentration/.test(l)) return P.major || '';
     if (/\bgpa\b|grade.?point/.test(l)) return P.gpa || '';
     if (/graduation|grad.?year|grad.?date/.test(l)) return P.graduation_year || P.grad_year || '';
@@ -598,8 +744,13 @@
       return P.notice_period || DEFAULTS.availability;
     }
     if (/salary|compensation|desired pay|expected pay|rate/.test(l)) return P.expected_salary || '';
-    if (/how .*hear|where .*(find|learn|discover)|source of|\breferred\b/.test(l)) return P.how_heard || DEFAULTS.howHeard;
+    if (/how .*hear|where .*(find|learn|discover)|source of|^source$|\bsource\b|\breferred\b/.test(l) && !/open source/.test(l)) return P.how_heard || DEFAULTS.howHeard;
     if (/gender|\bsex\b|pronoun/.test(l)) return P.gender || DEFAULTS.gender;
+    // The other two EEO questions. Same reasoning as gender and
+    // ethnicity: declining is one of the answers the form itself
+    // offers, it asserts nothing, and the question is often required.
+    if (/hispanic|latino|latinx/.test(l)) return P.hispanic_latino === true ? 'Yes' : DEFAULTS.ethnicity;
+    if (/lgbt|sexual orientation|transgender/.test(l)) return P.lgbtq || DEFAULTS.gender;
     if (/ethnic|\brace\b|racial|heritage/.test(l)) return P.ethnicity || P.race || DEFAULTS.ethnicity;
     if (/veteran|military|armed forces/.test(l)) return P.veteran || DEFAULTS.veteran;
     if (/disabilit/.test(l)) return P.disability || DEFAULTS.disability;
@@ -702,7 +853,7 @@
   }
 
   function yesNoFor(question, p) {
-    const P = p || {};
+    const P = normaliseProfile(p);
     const l = String(question || '').toLowerCase().replace(/[^a-z0-9/ ]/g, ' ').replace(/\s+/g, ' ').trim();
     if (!l) return '';
 
@@ -801,6 +952,12 @@
     // answers on every one of these forms and claims nothing.
     if (/veteran|armed forces|military service/.test(l)) return _pref(P.veteran_status, DEFAULTS.veteran);
     if (/disabilit/.test(l)) return _pref(P.disability_status, DEFAULTS.disability);
+    // Reached through this path because both are usually written as
+    // questions -- "Are you Hispanic or Latino?", "Do you identify as
+    // LGBTQ+?" -- and both were falling to the end and answering
+    // nothing on a required EEO block.
+    if (/hispanic|latino|latinx/.test(l)) return _pref(P.hispanic_latino, DEFAULTS.ethnicity);
+    if (/lgbt|sexual orientation|transgender/.test(l)) return P.lgbtq || DEFAULTS.gender;
     if (/willing to|are you able to|can you |comfortable (?:with|working)/.test(l)) return '';
 
     return '';
@@ -1340,6 +1497,7 @@
     __jg: true,
     labelFor, questionFor, answerFor, yesNoFor, isYesNoOptions, fillContainer, loadProfile, isToggleOn, DEFAULT_ON,
     authorisedCountries, countryInQuestion, authorisedForQuestion, _citizenshipCodes,
+    normaliseProfile,
     setValue, valueFitsField, fillSelect, fillRadioGroup, fillCustomDropdown,
     isVisible, optionMatches, optionStartsWith, soleMatch, escapeSelector, DEFAULTS, _isDecline,
     // Exported so the boundary between "motivation" and "claim", and the
