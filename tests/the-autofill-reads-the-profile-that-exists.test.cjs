@@ -56,14 +56,26 @@ const ROW = {
   linkedin: 'https://linkedin.com/in/example', github: 'https://github.com/example',
   portfolio: 'https://example.invalid',
   expected_salary: '85000', notice_period: '1 month',
-  total_experience: '8', highest_education: "Bachelor's Degree",
+  // highest_education is left empty on purpose: the level has to be
+  // derivable from the qualification line, because that is the state a
+  // real profile is in until someone fills the column in.
+  total_experience: '8', highest_education: '',
   willing_to_relocate: true, driving_license: true, visa_required: false,
   work_authorized_countries: ['IE'],
-  education: [{ school: 'Trinity College Dublin', field_of_study: 'Computer Science',
-    graduation_year: '2018' }],
+  // THE SHAPES THE PROFILE ACTUALLY USES, not the ones this code hoped
+  // for. There is no field_of_study: the subject sits inside the degree
+  // line, after "in" and before the grade. There is no graduation_year
+  // either -- it is end_year. And an experience entry has no `dates`:
+  // the current role is marked by endDate "Present" and by dateRange.
+  education: [{ degree: 'Master of Science in Artificial Intelligence and Machine Learning'
+      + ' - Distinction (3.90/4.00)',
+    institution: 'Trinity College Dublin', school: 'Trinity College Dublin',
+    start_year: '2017', end_year: '2018' }],
   professional_experience: [
-    { company: 'Stripe', title: 'Staff Software Engineer', dates: 'January 2022 - Present' },
-    { company: 'Revolut', title: 'Software Engineer', dates: '2018 - 2022' }],
+    { company: 'Stripe', title: 'Staff Software Engineer',
+      dateRange: 'January 2022 - Present', endDate: 'Present' },
+    { company: 'Revolut', title: 'Software Engineer',
+      dateRange: '2018 - 2022', endDate: '2022' }],
   cover_letter: 'Dear Hiring Manager, I build payment systems.',
 };
 
@@ -71,10 +83,10 @@ console.log('THE COLUMN NAMES THE PROFILE ACTUALLY USES');
 for (const [label, want] of [
   ['Postal Code', 'D02 X285'],
   ['Zip Code', 'D02 X285'],
-  ['Highest level of education completed', "Bachelor's Degree"],
-  ['Degree', "Bachelor's Degree"],
-  ['Field of Study', 'Computer Science'],
-  ['Major', 'Computer Science'],
+  ['Highest level of education completed', "Master's Degree"],
+  ['Degree', "Master's Degree"],
+  ['Field of Study', 'Artificial Intelligence and Machine Learning'],
+  ['Major', 'Artificial Intelligence and Machine Learning'],
   ['School', 'Trinity College Dublin'],
   ['University', 'Trinity College Dublin'],
   ['Graduation Year', '2018'],
@@ -144,6 +156,58 @@ console.log('\nWHAT THE HISTORY ITSELF PROVES');
     C.yesNoFor('Are you currently employed?', past));
 }
 
+console.log('\nTHE SUBJECT IS INSIDE THE DEGREE LINE');
+for (const [line, subject, level] of [
+  ['Master of Science in Artificial Intelligence and Machine Learning - Distinction (3.90/4.00)',
+    'Artificial Intelligence and Machine Learning', "Master's Degree"],
+  ['BSc Computer Science', 'Computer Science', "Bachelor's Degree"],
+  ['Bachelor of Arts, Economics', 'Economics', "Bachelor's Degree"],
+  ['PhD in Statistics', 'Statistics', 'PhD'],
+  ['Higher Diploma in Data Analytics', 'Data Analytics', 'Higher Diploma'],
+]) {
+  t('  "' + line.slice(0, 44) + '" -> ' + subject,
+    C._fieldOfStudy(line) === subject, JSON.stringify(C._fieldOfStudy(line)));
+  t('    ...and reads as ' + level, C._degreeLevel(line) === level,
+    JSON.stringify(C._degreeLevel(line)));
+}
+{
+  // A LEVEL BOX IS A SELECT. Seventy characters of degree title and
+  // grade match none of its options and fail validation.
+  const got = C.answerFor('Highest level of education completed', ROW);
+  t('  a level box gets the level, not the whole line',
+    got === "Master's Degree", JSON.stringify(got));
+  t('  ...with no grade in it', !/distinction|3\.90/i.test(String(got)), JSON.stringify(got));
+}
+
+console.log('\nAND AN EMPTY YEAR IS LEFT EMPTY, NOT GUESSED');
+{
+  const noYears = Object.assign({}, ROW, {
+    education: [{ degree: 'BSc Computer Science', school: 'DCU', start_year: '', end_year: '' }],
+  });
+  t('  graduation year stays blank when the profile has none',
+    C.answerFor('Graduation Year', noYears) === '',
+    JSON.stringify(C.answerFor('Graduation Year', noYears)));
+  t('  ...and end_year fills it when it is there',
+    C.answerFor('Graduation Year', ROW) === '2018', C.answerFor('Graduation Year', ROW));
+}
+
+console.log('\nTHE CURRENT ROLE IS MARKED BY endDate, NOT BY dates');
+{
+  const byEndDate = { professional_experience: [
+    { company: 'Stripe', title: 'Engineer', endDate: 'Present' }] };
+  const byRange = { professional_experience: [
+    { company: 'Stripe', title: 'Engineer', dateRange: 'January 2023 - Present' }] };
+  t('  endDate "Present" says currently employed',
+    C.yesNoFor('Are you currently employed?', byEndDate) === 'Yes',
+    C.yesNoFor('Are you currently employed?', byEndDate));
+  t('  ...and so does dateRange on its own',
+    C.yesNoFor('Are you currently employed?', byRange) === 'Yes',
+    C.yesNoFor('Are you currently employed?', byRange));
+  t('  and years of experience reads dateRange too',
+    Number(C.answerFor('Years of experience', byRange)) >= 1,
+    JSON.stringify(C.answerFor('Years of experience', byRange)));
+}
+
 console.log('\nAND THE TRAPS STILL CATCH');
 for (const [label, why] of [
   ['Name of referring employee', 'asks for a person we do not have'],
@@ -172,9 +236,10 @@ console.log('\nAND THE ADAPTER NEVER MUTATES THE CALLER\'S ROW');
     'the adapter wrote back into the stored profile');
   const adapted = C.normaliseProfile(ROW);
   t('  ...and the adapted copy carries the derived keys',
-    adapted.postal_code === 'D02 X285' && adapted.degree === "Bachelor's Degree"
-      && adapted.major === 'Computer Science' && adapted.current_company === 'Stripe',
-    JSON.stringify({ postal_code: adapted.postal_code, degree: adapted.degree,
+    adapted.postal_code === 'D02 X285' && adapted.degree_level === "Master's Degree"
+      && adapted.major === 'Artificial Intelligence and Machine Learning'
+      && adapted.current_company === 'Stripe',
+    JSON.stringify({ postal_code: adapted.postal_code, degree_level: adapted.degree_level,
       major: adapted.major, current_company: adapted.current_company }));
   t('  ...and adapting twice gives the same object',
     C.normaliseProfile(ROW) === adapted, 'the adapter re-runs on every field');

@@ -439,7 +439,11 @@
     const now = new Date();
     const spans = [];
     for (const job of exp) {
-      const text = [job.dates, job.startDate, job.start_date, job.endDate, job.end_date]
+      // dateRange is what the profile actually stores; `dates` is what
+      // this code was written against. Both are read rather than one
+      // being renamed, because the row is edited in a separate app.
+      const text = [job.dates, job.dateRange, job.date_range, job.period,
+        job.startDate, job.start_date, job.endDate, job.end_date]
         .filter(Boolean).join(' ');
       if (!text) continue;
       const ongoing = /present|current|now|ongoing/i.test(text);
@@ -515,6 +519,53 @@
   // to what. Nothing is invented -- every derived value is copied or
   // read out of a structure the user filled in themselves.
   // ===================================================================
+
+  // THE SUBJECT IS INSIDE THE DEGREE STRING, NOT BESIDE IT.
+  //
+  // The profile stores one line per qualification --
+  //
+  //   "Master of Science in Artificial Intelligence and Machine
+  //    Learning - Distinction (3.90/4.00)"
+  //
+  // -- and there is no separate field for the subject. So "Field of
+  // Study" and "Major", which are required on most graduate forms, had
+  // nothing to read and came back blank. The subject is the part after
+  // "in", cut before the grade; where the line has no "in", it is
+  // whatever is left once the qualification itself is removed.
+  const _QUALIFICATION = /^\s*(?:ph\.?d|doctor(?:ate)?(?: of \w+)?|master(?:'?s)?(?: of [\w ]+?)?|m\.?sc|m\.?eng|m\.?b\.?a|m\.?a|bachelor(?:'?s)?(?: of [\w ]+?)?|b\.?sc|b\.?eng|b\.?a|b\.?s|associate(?:'?s)?(?: degree)?|diploma|certificate|higher diploma)\b[\s,:-]*/i;
+
+  function _fieldOfStudy(degree) {
+    let text = String(degree || '').trim();
+    if (!text) return '';
+    // Cut the grade and anything parenthetical off the end first, so
+    // "- Distinction (3.90/4.00)" never becomes part of the subject.
+    text = text.split(/\s+[-–—]\s+/)[0].replace(/\([^)]*\)/g, '').trim();
+    const at = text.toLowerCase().indexOf(' in ');
+    if (at !== -1) return text.slice(at + 4).replace(/[,;]+$/, '').trim();
+    const stripped = text.replace(_QUALIFICATION, '').trim();
+    // "Bachelor of Arts, Economics" -- the subject after the comma.
+    if (stripped.indexOf(',') !== -1) return stripped.split(',').pop().trim();
+    return stripped === text ? '' : stripped;
+  }
+
+  // A "highest level of education" box is a SELECT offering Bachelor's,
+  // Master's and so on. Writing seventy characters of degree title and
+  // grade into it matches no option and fails validation, so the level
+  // is derived from the same line.
+  function _degreeLevel(degree) {
+    const t = String(degree || '').toLowerCase();
+    if (!t.trim()) return '';
+    if (/\bph\.?d\b|doctor/.test(t)) return 'PhD';
+    if (/\bmaster|\bm\.?sc\b|\bm\.?eng\b|\bm\.?b\.?a\b|\bm\.?a\b|\bmres\b/.test(t)) return "Master's Degree";
+    if (/\bbachelor|\bb\.?sc\b|\bb\.?eng\b|\bb\.?a\b|\bb\.?s\b/.test(t)) return "Bachelor's Degree";
+    if (/\bassociate/.test(t)) return 'Associate Degree';
+    if (/higher diploma|\bhdip\b/.test(t)) return 'Higher Diploma';
+    if (/\bdiploma\b/.test(t)) return 'Diploma';
+    if (/certificate/.test(t)) return 'Certificate';
+    if (/high school|secondary school|leaving cert/.test(t)) return 'High School';
+    return '';
+  }
+
   const _adapted = new WeakMap();
 
   function _firstOf(list, keys) {
@@ -533,7 +584,7 @@
     for (const job of (Array.isArray(list) ? list : [])) {
       if (!job || typeof job !== 'object') continue;
       if (job.current === true || job.is_current === true) return true;
-      const text = [job.dates, job.end_date, job.endDate, job.period]
+      const text = [job.dates, job.dateRange, job.date_range, job.end_date, job.endDate, job.period]
         .filter((v) => typeof v === 'string').join(' ');
       if (/\b(present|current|now|ongoing|to date)\b/i.test(text)) return true;
     }
@@ -561,8 +612,11 @@
     take('school', _firstOf(p.education, ['school', 'institution', 'university', 'college', 'name']));
     take('university', out.school);
     take('major', p.field_of_study, p.fieldOfStudy,
-      _firstOf(p.education, ['field_of_study', 'fieldOfStudy', 'major', 'subject', 'discipline']));
-    take('graduation_year', _firstOf(p.education, ['graduation_year', 'graduationYear', 'end_year', 'year', 'dates']));
+      _firstOf(p.education, ['field_of_study', 'fieldOfStudy', 'major', 'subject', 'discipline']),
+      _fieldOfStudy(_firstOf(p.education, ['degree', 'qualification'])));
+    take('degree_level', p.degree_level, _degreeLevel(out.degree),
+      _degreeLevel(_firstOf(p.education, ['degree', 'qualification'])));
+    take('graduation_year', _firstOf(p.education, ['graduation_year', 'graduationYear', 'end_year', 'endYear', 'year', 'dates']));
     const exp = p.professional_experience || p.professionalExperience;
     take('current_company', _firstOf(exp, ['company', 'employer', 'organisation', 'organization']));
     take('current_title', _firstOf(exp, ['title', 'role', 'position', 'job_title']));
@@ -693,7 +747,13 @@
     if (/university|school|college|institution|alma.?mater/.test(l)) return P.school || P.university || '';
     // "Highest level of education completed" is the same question as
     // "Degree" and was matching neither.
-    if (/\bdegree\b|qualification level|level of education|education level|highest.*education/.test(l)) return P.degree || '';
+    // Both of these are dropdowns on nearly every form, so both get the
+    // LEVEL. The full qualification line, grade and all, belongs on the
+    // CV; typed into a select it matches nothing.
+    if (/qualification level|level of education|education level|highest.*education/.test(l)) {
+      return P.degree_level || P.degree || '';
+    }
+    if (/\bdegree\b/.test(l)) return P.degree_level || P.degree || '';
     if (/major|field.?of.?study|discipline|concentration/.test(l)) return P.major || '';
     if (/\bgpa\b|grade.?point/.test(l)) return P.gpa || '';
     if (/graduation|grad.?year|grad.?date/.test(l)) return P.graduation_year || P.grad_year || '';
@@ -1497,7 +1557,7 @@
     __jg: true,
     labelFor, questionFor, answerFor, yesNoFor, isYesNoOptions, fillContainer, loadProfile, isToggleOn, DEFAULT_ON,
     authorisedCountries, countryInQuestion, authorisedForQuestion, _citizenshipCodes,
-    normaliseProfile,
+    normaliseProfile, _fieldOfStudy, _degreeLevel,
     setValue, valueFitsField, fillSelect, fillRadioGroup, fillCustomDropdown,
     isVisible, optionMatches, optionStartsWith, soleMatch, escapeSelector, DEFAULTS, _isDecline,
     // Exported so the boundary between "motivation" and "claim", and the
