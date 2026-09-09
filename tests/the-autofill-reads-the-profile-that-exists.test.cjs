@@ -208,6 +208,36 @@ console.log('\nTHE CURRENT ROLE IS MARKED BY endDate, NOT BY dates');
     JSON.stringify(C.answerFor('Years of experience', byRange)));
 }
 
+console.log('\nA REAL COLUMN BEATS THE PARSER, AND THE PARSER COVERS THE GAP');
+{
+  // The profile now stores field_of_study and graduation_year as their
+  // own fields. Parsing a subject out of a prose degree line works but
+  // is guesswork on unusual phrasing, so a stated value always wins --
+  // and the parser stays, because a column that exists is not the same
+  // as a column that is filled in.
+  const stated = { education: [{
+    degree: 'Master of Science in Artificial Intelligence and Machine Learning'
+      + ' - Distinction (3.90/4.00)',
+    field_of_study: 'Machine Learning',        // deliberately not what the parser would say
+    graduation_year: '2024', school: 'Imperial College London',
+    start_year: '2023', end_year: '2024' }] };
+  t('  the stated field of study wins over the parsed one',
+    C.answerFor('Field of Study', stated) === 'Machine Learning',
+    JSON.stringify(C.answerFor('Field of Study', stated)));
+  t('  ...and the stated graduation year is used',
+    C.answerFor('Graduation Year', stated) === '2024',
+    JSON.stringify(C.answerFor('Graduation Year', stated)));
+
+  const unfilled = { education: [{ degree: 'BSc Computer Science',
+    field_of_study: '', graduation_year: '', school: 'University of Derby' }] };
+  t('  an empty column falls back to the degree line',
+    C.answerFor('Field of Study', unfilled) === 'Computer Science',
+    JSON.stringify(C.answerFor('Field of Study', unfilled)));
+  t('  ...but an empty year is still left empty, never guessed',
+    C.answerFor('Graduation Year', unfilled) === '',
+    JSON.stringify(C.answerFor('Graduation Year', unfilled)));
+}
+
 console.log('\nAND THE TRAPS STILL CATCH');
 for (const [label, why] of [
   ['Name of referring employee', 'asks for a person we do not have'],
