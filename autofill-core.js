@@ -244,9 +244,17 @@
     const explicit = P.work_authorized_countries || P.workAuthorizedCountries
       || P.authorised_countries || P.authorized_countries
       || P.work_authorized_country_names || P.workAuthorizedCountryNames;
-    if (Array.isArray(explicit) && explicit.length) {
-      return explicit.map(_toIso).filter(Boolean);
-    }
+    // BOTH ARE THE USER'S OWN STATEMENT, SO BOTH COUNT.
+    //
+    // The country list used to win outright and stop here. The website
+    // seeds that list with ['IE'], so a profile that also said "EU
+    // Citizen" answered No to Germany -- a default silently overriding
+    // a stated citizenship. They are unioned instead: a picked country
+    // adds a US work permit the citizenship cannot imply, and a stated
+    // citizenship adds the EEA the picker was never going to enumerate.
+    // Neither invents anything; both were typed in by the applicant.
+    const out = new Set((Array.isArray(explicit) ? explicit : []).map(_toIso).filter(Boolean));
+
     // CITIZENSHIP IS AN EXPLICIT ANSWER. RESIDENCE IS NOT.
     //
     // This returned an empty list for everything but a hand-written
@@ -262,10 +270,7 @@
     // went unanswered -- including "are you authorised to work in
     // Ireland", from an Irish citizen, where the answer is not in
     // doubt. An unanswered required question is a rejection too.
-    const claimed = _citizenshipCodes(P);
-    if (!claimed.length) return [];
-    const out = new Set();
-    for (const iso of claimed) {
+    for (const iso of _citizenshipCodes(P)) {
       out.add(iso);
       if (_EEA.indexOf(iso) !== -1) for (const c of _EEA) out.add(c);
       if (iso === 'IE' || iso === 'GB' || iso === 'UK') { out.add('IE'); out.add('GB'); out.add('UK'); }

@@ -566,7 +566,11 @@ class ATSTailor {
         
         // Try to fetch the parsed CV content (cached from parse-cv function)
         const parsedCVRes = await fetch(
-          `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.session.user.id}&select=professional_experience,relevant_projects,education,skills,certifications,achievements`,
+          // ats_profile is what the AUTOFILL reads, and the autofill
+          // needs the contact fields, the citizenship and the
+          // authorised-country list -- none of which were in this list.
+          // Same rule as the tailoring fetch above: take the row.
+          `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.session.user.id}&select=*`,
           {
             headers: {
               apikey: SUPABASE_ANON_KEY,
@@ -6156,7 +6160,23 @@ class ATSTailor {
 
       // Fetch user profile (API call) - includes CV file info
       const profileRes = await fetch(
-        `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.session.user.id}&select=first_name,last_name,email,phone,linkedin,github,portfolio,cover_letter,professional_experience,relevant_projects,education,skills,certifications,achievements,ats_strategy,city,country,address,state,zip_code,cv_file_path,cv_file_name,cv_uploaded_at,preferred_ai_provider`,
+        // EVERY COLUMN, BECAUSE A HAND-WRITTEN LIST DRIFTS AND GOES QUIET.
+        //
+        // This named twenty-six columns, and the code reading the result
+        // asked for eight more that were not among them:
+        // certifications_hidden, citizenship, languages,
+        // work_authorized_countries, nationality, show_certifications.
+        // Every one of those came back undefined, so the certifications
+        // switch did nothing, the citizenship line fell through to a
+        // hard-coded default, and the work-authorisation answer had no
+        // country list to check. It presents as randomness -- the
+        // section appearing or not depending on which fetch ran last --
+        // which is exactly how it was reported.
+        //
+        // A profile row is small and it is the user's own. Selecting all
+        // of it costs nothing and removes a whole class of silent
+        // mismatch between this line and the code below it.
+        `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.session.user.id}&select=*`,
         {
           headers: {
             apikey: SUPABASE_ANON_KEY,
@@ -7239,7 +7259,9 @@ class ATSTailor {
       try {
         if (this.session?.access_token && this.session?.user?.id) {
           const profileRes = await fetch(
-            `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.session.user.id}&select=first_name,last_name,email,phone,linkedin,github,portfolio,professional_experience,relevant_projects,education,skills,certifications,ats_strategy`,
+            // Same rule as the other two: the row, not a list that has
+            // to be kept in step with every reader by hand.
+            `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.session.user.id}&select=*`,
             {
               headers: {
                 apikey: SUPABASE_ANON_KEY,
