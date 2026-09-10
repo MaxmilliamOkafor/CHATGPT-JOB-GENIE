@@ -265,6 +265,63 @@ console.log('\nAND A REBUILD IS NEVER WORSE THAN WHAT IT REPLACES');
     JSON.stringify(out.report.warnings.map((w) => w.kind)));
 }
 
+console.log('\nAND A CONFORMING SERVER SUMMARY IS NOT TORN DOWN AND REBUILT');
+{
+  // The tailoring service now enforces this same shape before it
+  // responds. That makes this pass a VERIFIER, not a second author --
+  // and a verifier that fails good input is worse than none, because it
+  // replaces a sentence a language model wrote with one this file
+  // assembled.
+  //
+  // Two ways it used to do exactly that. It counted an EMPLOYER NAME as
+  // evidence of substance, so a summary that correctly carried none
+  // looked hollow for the very reason it was right. And it demanded a
+  // DIGIT, so "from nine working days to three" -- the strongest shape
+  // there is, and one a conforming summary will often use -- read as
+  // empty.
+  for (const [why, conforming] of [
+    ['the service\'s own worked example',
+      'Solutions Architect working across regulatory reporting, process improvement and '
+      + 'stakeholder management. Rebuilt a credit risk reporting suite for a GBP 2.6bn '
+      + 'portfolio; cut month-end close from nine working days to three.'],
+    ['figures spelled out, no numeral anywhere',
+      'Solutions Architect working across regulatory reporting and process improvement. '
+      + 'Cut month-end close from nine working days to three; cleared a two-year backlog.'],
+    ['one outcome, no employer, no years',
+      'Solutions Architect working across regulatory reporting and process improvement. Rebuilt a '
+      + 'credit risk reporting suite for a GBP 2.6bn consumer lending portfolio.'],
+  ]) {
+    const cv = ['Maxmilliam Okafor', 'Manager, Payroll Operations', 'Dublin | max@example.invalid', '',
+      'PROFESSIONAL SUMMARY', conforming, '',
+      'PROFESSIONAL EXPERIENCE', 'Citigroup August 2017 - March 2021', 'Solutions Architect',
+      '- Rebuilt a credit risk reporting suite for a GBP 2.6bn portfolio.',
+      '- Cut month-end close from nine working days to three.',
+      '', 'TECHNICAL SKILLS', 'Programming: SQL', '', 'EDUCATION', 'Imperial'].join('\n');
+    const r = RA.repairSummary(cv, { jdTitle: 'Manager, Payroll Operations',
+      jobKeywords: { all: ['regulatory reporting', 'process improvement'] } });
+    t('  ' + why + ' survives', r.rebuilt !== true, JSON.stringify(r.now || '(rebuilt)'));
+  }
+}
+{
+  // ...and the verifier still catches the two things it exists for.
+  const cv = (summary) => ['Maxmilliam Okafor', 'Manager, Payroll Operations',
+    'Dublin | max@example.invalid', '', 'PROFESSIONAL SUMMARY', summary, '',
+    'PROFESSIONAL EXPERIENCE', 'Citigroup August 2017 - March 2021', 'Solutions Architect',
+    '- Rebuilt a credit risk reporting suite for a GBP 2.6bn portfolio.',
+    '- Cut month-end close from nine working days to three.',
+    '', 'TECHNICAL SKILLS', 'Programming: SQL', '', 'EDUCATION', 'Imperial'].join('\n');
+  const untrue = RA.repairSummary(
+    cv('Manager of Payroll Operations working across regulatory reporting and process improvement. '
+      + 'Rebuilt a suite for a GBP 2.6bn portfolio; cut close from nine days to three.'),
+    { jdTitle: 'Manager, Payroll Operations', jobKeywords: { all: [] } });
+  t('  an unheld title is still caught', untrue.rebuilt === true, JSON.stringify(untrue.now));
+  const hollow = RA.repairSummary(
+    cv('Solutions Architect with a strong background in operational excellence and delivery.'),
+    { jdTitle: 'Manager, Payroll Operations', jobKeywords: { all: [] } });
+  t('  a summary with no figure at all is still caught',
+    hollow.rebuilt === true, JSON.stringify(hollow.now));
+}
+
 console.log('\nAND THE FIX IS REPORTED, NOT SLIPPED IN');
 {
   const bad = 'Manager of Payroll Operations with a strong background in operational excellence.';

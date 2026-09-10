@@ -3193,8 +3193,28 @@
   // Operations with...", "Accomplished Software Engineer who...".
   function _openingProfession(sentence) {
     const opening = String(sentence || '').split(/\s+/).slice(0, 14).join(' ');
-    const m = opening.match(_PROFESSIONS);
-    return m ? m[0] : '';
+    const known = opening.match(_PROFESSIONS);
+    if (known) return known[0];
+    // A CLOSED LIST CANNOT CATCH THE TITLE THAT WAS ACTUALLY INVENTED.
+    //
+    // _PROFESSIONS names twenty-odd disciplines, and the fabrication
+    // that prompted all of this -- "Manager of Payroll Operations" --
+    // is in none of them. So the check that exists to catch an unheld
+    // title did not fire on the clearest example of one, and it was
+    // only the separate "says nothing checkable" test that caught the
+    // sentence at all. Give the same summary one figure and it would
+    // have shipped.
+    //
+    // The generic reading takes whatever sits before the first "with",
+    // "working", "who" or comma, provided it contains a title noun --
+    // the same detector used to read titles out of the employment
+    // block, so both halves of the comparison are found the same way.
+    const head = opening.split(/\s+(?:with|working|who|that|bringing|delivering|specialis|specializ)/i)[0]
+      .replace(/[,.;:].*$/, '')
+      .replace(/^(?:an?|the|accomplished|experienced|seasoned|senior|highly|proven|results[- ]driven|dynamic|motivated)\s+/i, '')
+      .trim();
+    if (!head || head.split(/\s+/).length > 6) return '';
+    return _TITLE_WORD.test(head) ? head : '';
   }
 
 
@@ -3304,10 +3324,26 @@
       if (!contained) untrue = claimed;
     }
 
-    // (b) Does it say anything a screener can check? A number, or an
-    // employer the history names. Adjectives are not substance.
-    const namesEmployer = facts.companies.some((c) => c && current.toLowerCase().indexOf(c.toLowerCase()) !== -1);
-    const hollow = !/\d/.test(current) && !namesEmployer;
+    // (b) Does it say anything a screener can check? A figure. Adjectives
+    // are not substance.
+    //
+    // TWO THINGS THIS TEST USED TO GET WRONG, BOTH OF WHICH WOULD NOW
+    // DESTROY A GOOD SUMMARY RATHER THAN A BAD ONE.
+    //
+    // It counted an EMPLOYER NAME as substance. That was written before
+    // employer names were understood as a prestige signal to keep OUT
+    // of the summary, so the test was rewarding the very thing the
+    // rebuild removes -- and a correctly written summary, carrying no
+    // employer, looked hollow for exactly the reason it was right.
+    //
+    // And it demanded a DIGIT. "Cut the month-end close from nine
+    // working days to three" is the strongest sentence on the page and
+    // contains no numeral at all. With the tailoring service now
+    // enforcing this same shape before it responds, a spelled-out
+    // figure is what a conforming summary will often carry -- so a
+    // digits-only test would have this pass tearing down good server
+    // output and rebuilding it from scratch, every time.
+    const hollow = !/\d/.test(current) && !_SPELLED_NUMBER.test(current);
 
     if (!untrue && !hollow) return { text, rebuilt: false };
 

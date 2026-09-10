@@ -6638,8 +6638,21 @@ class ATSTailor {
             result.extractedSummary ||
             window.quantumhireStructuredCv?.summary?.text ||
             (typeof window.quantumhireStructuredCv?.summary === 'string' ? window.quantumhireStructuredCv.summary : '')
-        )
+        ),
+        // WHAT THE SERVICE SAYS IT DID TO THE SUMMARY.
+        //
+        // The tailoring service enforces the summary contract before it
+        // responds, and reports whether it had to rebuild and why. The
+        // audit here does the same checks again as a verifier -- two
+        // independent passes over one sentence -- so this is recorded
+        // to make a disagreement between them visible in the debug
+        // export rather than showing up as a summary that changes for
+        // no apparent reason.
+        summaryShape: result.summaryShape || null,
       };
+      if (result.summaryShape) {
+        console.log('[ATS Tailor] Service summary shape:', JSON.stringify(result.summaryShape));
+      }
       
       // WIRE UP DEBUG PANELS: Log input data after profile load
       if (window.PDFDebugPanel) {
