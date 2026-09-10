@@ -5780,6 +5780,23 @@ class ATSTailor {
     const k = String(keyword || '').toLowerCase().trim();
     if (!k || !evidence) return false;
     if (evidence.indexOf(k) !== -1) return true;
+    // THE SAME REQUIREMENT, WHICHEVER WORD THE PROFILE USED FOR IT.
+    //
+    // The gate tested the posting's exact phrasing, so a profile
+    // recording "process improvement" did not evidence a posting asking
+    // for "continuous improvement" -- one requirement, two industry
+    // words for it, and the term was withheld from a CV that had every
+    // right to it. The matcher already treats a group as one thing;
+    // the gate now does too, and the group is the same table both read.
+    const TX = typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy
+      : (typeof window !== 'undefined' ? window.KeywordTaxonomy : null);
+    if (TX && typeof TX.variantsOf === 'function') {
+      try {
+        for (const form of TX.variantsOf(keyword)) {
+          if (TX.appearsIn(evidence, form)) return true;
+        }
+      } catch (e) { /* fall through to the word-shape test below */ }
+    }
     const stop = ATSTailor._KEYWORD_STOPWORDS;
     const words = k.split(/[^a-z0-9+#.]+/).filter((w) => w && !stop.has(w));
     if (!words.length) return false;
@@ -6783,11 +6800,25 @@ class ATSTailor {
       // in the extension rather than the prompt so it does not wait on
       // an edge-function deploy.
       if (this.generatedDocuments.cv) {
-        const rawTitle = String(this.currentJob?.title || '')
+        // ONE CLEANER, NOT TWO.
+        //
+        // This carried its own copy of the title-tidying rules while
+        // the recruiter audit used normaliseJobTitle, and the two
+        // disagreed -- so a CV went out with the audit's spelling on
+        // one line and this one's on the line below, neither
+        // recognising the other as the same title. The audit's cleaner
+        // is the one that also strips page-title furniture, so it wins;
+        // the local rules stay only as the fallback for a page where
+        // the audit module failed to load.
+        const _clean = (t) => String(t || '')
           .replace(/\([^)]*\)/g, ' ')                 // "(Remote)", "(m/f/d)"
           .replace(/\s*[-–—|]\s*(remote|hybrid|onsite|contract|permanent|full[- ]time|part[- ]time)\b.*$/i, '')
           .replace(/\s{2,}/g, ' ')
           .trim();
+        const rawTitle = (typeof RecruiterAudit !== 'undefined'
+          && typeof RecruiterAudit.normaliseJobTitle === 'function')
+          ? _clean(RecruiterAudit.normaliseJobTitle(this.currentJob?.title || ''))
+          : _clean(this.currentJob?.title || '');
         const lines = this.generatedDocuments.cv.split('\n');
         const nameIdx = lines.findIndex((l) => l.trim());
         const next = lines[nameIdx + 1] || '';

@@ -1299,10 +1299,46 @@
     }
     if (!headline) return { text, added: false };
 
+    // TWO WRITERS, TWO SPELLINGS, TWO LINES.
+    //
+    // A live CV went out reading
+    //
+    //   Maxmilliam Okafor
+    //   Manager, Payroll Operations - Sub Saharan
+    //   Manager, Payroll Operations
+    //
+    // because the tailoring model writes the target title on the line
+    // under the name (the prompt tells it to) AND the extension inserts
+    // its own copy above it. The two cleaned the scraped title
+    // differently, so neither recognised the other, and every check
+    // here only ever looked at ONE line -- nameAt + 1 -- so the second
+    // copy was never examined.
+    //
+    // The line after the headline is swept for a restatement of it: a
+    // short title-ish line that is a prefix of the headline, or that
+    // the headline is a prefix of. A contact line, a summary heading
+    // and an unrelated title are all left exactly where they are.
+    const _dropEcho = () => {
+      const settled = (lines[nameAt + 1] || '').trim().toLowerCase();
+      const after = (lines[nameAt + 2] || '').trim();
+      if (!settled || !after) return;
+      const a = after.toLowerCase();
+      if (after.indexOf('|') !== -1 || after.indexOf('@') !== -1) return;   // contact line
+      if (_ANY_HEAD.test(after)) return;                                    // a section heading
+      if (after.split(/\s+/).length > 8) return;
+      if (!_TITLE_WORD.test(after)) return;
+      if (a === settled || settled.indexOf(a) === 0 || a.indexOf(settled) === 0) {
+        lines.splice(nameAt + 2, 1);
+      }
+    };
+
     // Already there, in any form? Adding a second one would read as a
     // stutter directly under the name.
     const next = (lines[nameAt + 1] || '').trim();
-    if (next && next.toLowerCase() === headline.toLowerCase()) return { text, added: false };
+    if (next && next.toLowerCase() === headline.toLowerCase()) {
+      _dropEcho();
+      return { text: lines.join('\n'), added: false };
+    }
     // A DIRTY COPY OF THE SAME HEADLINE IS A HEADLINE, NOT A CONTACT
     // LINE. The model writes the raw scraped title ("... | Datadog
     // Careers"); the branch below rejects any line containing a pipe as
@@ -1310,6 +1346,7 @@
     // dirty one and the CV carried both. Same role, so replace.
     if (next && headline && next.toLowerCase().indexOf(headline.toLowerCase()) === 0) {
       lines[nameAt + 1] = headline;
+      _dropEcho();
       return { text: lines.join('\n'), added: false, replaced: true, headline, was: next };
     }
     if (next && _TITLE_WORD.test(next) && next.indexOf('|') === -1
@@ -1349,11 +1386,13 @@
       // none, an existing line the history contains is left alone.
       if (!title && blob.indexOf(next.toLowerCase()) !== -1) return { text, added: false };
       lines[nameAt + 1] = headline;
+      _dropEcho();
       return { text: lines.join('\n'), added: false, replaced: true,
         headline, was: next };
     }
 
     lines.splice(nameAt + 1, 0, headline);
+    _dropEcho();
     return { text: lines.join('\n'), added: true, headline };
   }
 
@@ -3115,6 +3154,258 @@
     }
     if (!better) return null;                   // nothing closer to suggest
     return { claimed, title, better };
+  }
+
+
+  // ===================================================================
+  // A SUMMARY THAT IS TRUE, SPECIFIC, AND ABOUT THIS APPLICATION
+  // -------------------------------------------------------------------
+  // A generated CV opened:
+  //
+  //   "Manager of Payroll Operations with a strong background in team
+  //    leadership and operational excellence, ensuring compliance and
+  //    accuracy in payroll delivery across multi-country environments."
+  //
+  // Two separate faults in twenty-eight words.
+  //
+  // IT IS NOT TRUE. The employment block underneath reads Software
+  // Engineer, AI Product Manager, Solutions Architect, Data Analyst.
+  // The candidate has never managed payroll operations. Every resume
+  // parser reads the first line of a summary as a claim about the
+  // person, and a recruiter who reads both sees someone describing a
+  // job they have not held.
+  //
+  // AND IT SAYS NOTHING. "Strong background", "operational excellence",
+  // "ensuring compliance and accuracy" -- no employer, no number, no
+  // year, nothing a screener can check or remember. It is the shape of
+  // a summary with the content removed, and it reads as generated,
+  // which is its own penalty.
+  //
+  // So the summary is judged on both, and rebuilt from FACTS when it
+  // fails either: the titles the history contains, the years it spans,
+  // the employers in it, the requirements of this posting the CV
+  // genuinely satisfies, and the strongest quantified thing the
+  // candidate has actually done. Nothing in the rebuilt sentence comes
+  // from anywhere but the document it is summarising.
+  // ===================================================================
+
+  // A profession named in an opening clause, e.g. "Manager of Payroll
+  // Operations with...", "Accomplished Software Engineer who...".
+  function _openingProfession(sentence) {
+    const opening = String(sentence || '').split(/\s+/).slice(0, 14).join(' ');
+    const m = opening.match(_PROFESSIONS);
+    return m ? m[0] : '';
+  }
+
+
+  const _MONTHS_RE = '(?:January|February|March|April|May|June|July|August|September'
+    + '|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)';
+  const _STARTS_WITH_DATE = new RegExp('^\\s*(?:' + _MONTHS_RE + '\\b|\\d{1,2}[/-]|(?:19|20)\\d{2}\\b)', 'i');
+  const _DATE_START = new RegExp('\\s+(?:' + _MONTHS_RE + '\\b|\\d{2}/|(?:19|20)\\d{2}\\b)', 'i');
+  const _MONTH_ONLY = new RegExp('^\\s*' + _MONTHS_RE + '\\s*$', 'i');
+
+  /** Titles, employers and the span the experience block actually states. */
+  function _historyFacts(cvText) {
+    const lines = String(cvText || '').split('\n');
+    const titles = [], companies = [], years = [], achievements = [];
+    let inExp = false, ongoing = false, pending = '';
+    for (const raw of lines) {
+      const l = raw.trim();
+      if (_EXP_HEAD.test(l)) { inExp = true; continue; }
+      if (_ANY_HEAD.test(l)) { inExp = false; continue; }
+      if (!inExp || !l) continue;
+      if (/^[-•*]/.test(l)) {
+        if (/\d/.test(l)) achievements.push(l.replace(/^[-•*]\s*/, '').trim());
+        continue;
+      }
+      const found = l.match(/\b(19|20)\d{2}\b/g);
+      if (found) {
+        for (const y of found) years.push(parseInt(y, 10));
+        if (/present|current/i.test(l)) ongoing = true;
+        // "Meta January 2023 - Present" -- the employer is whatever sits
+        // in front of the first month or year. A line that STARTS with
+        // one is a bare date line and names no employer: taking the
+        // text before the date there produced companies called "August"
+        // and "January", which then appeared in the summary as places
+        // this person had worked.
+        if (_STARTS_WITH_DATE.test(l)) {
+          if (pending && !_MONTH_ONLY.test(pending) && companies.indexOf(pending) === -1) {
+            companies.push(pending);
+          }
+          pending = '';
+          continue;
+        }
+        const company = l.split(_DATE_START)[0].replace(/\s*[|,]\s*$/, '').trim();
+        if (company && !_MONTH_ONLY.test(company)
+          && company.split(/\s+/).length <= 5 && companies.indexOf(company) === -1) {
+          companies.push(company);
+        }
+        pending = '';
+        continue;
+      }
+      if (_TITLE_WORD.test(l) && l.split(/\s+/).length <= 7) {
+        const clean = l.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        if (clean && titles.indexOf(clean) === -1) titles.push(clean);
+        continue;
+      }
+      // A plain line inside the experience block, before a date line:
+      // the layout where the employer sits on its own row. Held until
+      // the date line confirms it, so a stray sentence is not banked.
+      if (l.split(/\s+/).length <= 5) pending = l.replace(/\s*[|,]\s*$/, '').trim();
+    }
+    let span = 0;
+    if (years.length) {
+      const from = Math.min.apply(null, years);
+      const to = ongoing ? new Date().getFullYear() : Math.max.apply(null, years);
+      span = Math.max(0, to - from);
+    }
+    return { titles, companies, years: span, achievements };
+  }
+
+  function _spellNumber(n) {
+    const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven',
+      'eight', 'nine', 'ten', 'eleven', 'twelve'];
+    return words[n] || String(n);
+  }
+
+  /**
+   * Judge the summary, and rebuild it from the document's own facts
+   * when it is untrue or empty. Returns the unchanged text otherwise.
+   */
+  function repairSummary(cvText, opts) {
+    const o = opts || {};
+    const text = String(cvText || '');
+    const lines = text.split('\n');
+    const at = lines.findIndex((l) => SUMMARY_HEADER_RE.test(l.trim()));
+    if (at === -1) return { text, rebuilt: false };
+    const current = String(lines[at + 1] || '').trim();
+    if (!current || _ANY_HEAD.test(current)) return { text, rebuilt: false };
+
+    const facts = _historyFacts(text);
+    if (!facts.titles.length) return { text, rebuilt: false };
+
+    const wordsOf = (s) => String(s).toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3);
+    const held = facts.titles;
+    const heldBlob = held.join(' | ').toLowerCase();
+
+    // (a) Does the opening claim a profession the history does not contain?
+    const claimed = _openingProfession(current);
+    let untrue = '';
+    if (claimed) {
+      const cw = wordsOf(claimed);
+      const contained = cw.length > 0 && cw.every((w) => heldBlob.indexOf(w) !== -1);
+      if (!contained) untrue = claimed;
+    }
+
+    // (b) Does it say anything a screener can check? A number, or an
+    // employer the history names. Adjectives are not substance.
+    const namesEmployer = facts.companies.some((c) => c && current.toLowerCase().indexOf(c.toLowerCase()) !== -1);
+    const hollow = !/\d/.test(current) && !namesEmployer;
+
+    if (!untrue && !hollow) return { text, rebuilt: false };
+
+    // ---- rebuild, from this document and nothing else ---------------
+    const target = normaliseJobTitle(o.jdTitle || '');
+    const targetWords = wordsOf(target);
+    const overlap = (s) => wordsOf(s).filter((w) => targetWords.indexOf(w) !== -1).length;
+    let lead = held[0];
+    let best = 0;
+    for (const h of held) {
+      const score = overlap(h);
+      if (score > best) { best = score; lead = h; }
+    }
+
+    const parts = [];
+    let opener = lead;
+    if (facts.years >= 2) opener += ' with ' + _spellNumber(facts.years) + ' years';
+    const employers = facts.companies.slice(0, 3);
+    if (employers.length >= 2) {
+      opener += ' across ' + employers.slice(0, -1).join(', ') + ' and ' + employers[employers.length - 1];
+    } else if (employers.length === 1) {
+      opener += ' at ' + employers[0];
+    }
+
+    // THE SKILLS LINE IS NOT EVIDENCE OF DOING THE WORK.
+    //
+    // A first version tested the whole document, so "payroll" -- which
+    // the coverage pass had just written into the skills section --
+    // came back as something this candidate "covers", and the rebuilt
+    // summary reintroduced exactly the claim it had been written to
+    // remove. A term earns a place in the summary only if the
+    // EXPERIENCE does it: the roles, the employers and the bullets. The
+    // skills section is a list of words; the experience is the work.
+    // Excluding everything except the experience block was not enough:
+    // the HEADLINE under the name carries the posting's title, so
+    // "payroll" was still found -- in the line whose whole purpose is
+    // to name the job being applied for. Only the experience counts.
+    const evidence = (() => {
+      const src = text.split('\n');
+      const out = [];
+      let inExp = false;
+      for (const raw of src) {
+        const l = raw.trim();
+        if (_EXP_HEAD.test(l)) { inExp = true; continue; }
+        if (_ANY_HEAD.test(l)) { inExp = false; continue; }
+        if (inExp) out.push(raw);
+      }
+      return out.join('\n');
+    })();
+
+    // The posting's own requirements that this CV genuinely satisfies,
+    // in the posting's words. Never a requirement it does not.
+    const asked = (o.jobKeywords && (o.jobKeywords.all || o.jobKeywords)) || [];
+    const TX = (typeof global !== 'undefined' && global.KeywordTaxonomy)
+      || (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
+    const covered = [];
+    for (const term of (Array.isArray(asked) ? asked : [])) {
+      const label = TX && TX.canonical ? TX.canonical(term) : String(term);
+      if (covered.length >= 3) break;
+      if (!label || covered.indexOf(label) !== -1) continue;
+      const present = TX && TX.appearsIn ? TX.appearsIn(evidence, term)
+        : evidence.toLowerCase().indexOf(String(term).toLowerCase()) !== -1;
+      if (present) covered.push(label.toLowerCase());
+    }
+    if (covered.length >= 2) {
+      opener += ', covering ' + covered.slice(0, -1).join(', ') + ' and ' + covered[covered.length - 1];
+    }
+    parts.push(opener.replace(/\s+/g, ' ').trim() + '.');
+
+    // One thing that actually happened, with the number attached.
+    const achievement = facts.achievements
+      .slice().sort((a, b) => a.length - b.length)
+      .find((a) => a.length >= 40 && a.length <= 170);
+    if (achievement) {
+      parts.push(achievement.replace(/\s*\.\s*$/, '') + '.');
+    }
+
+    const rebuilt = parts.join(' ').replace(/\s+/g, ' ').trim();
+
+    // NEVER REPLACE A SENTENCE WITH A WORSE ONE.
+    //
+    // A false claim has to go whatever replaces it. But "says nothing
+    // checkable" is a quality judgement, and on a CV with one employer
+    // and no quantified bullet the rebuild came out at forty-two
+    // characters -- shorter and thinner than the sentence it was
+    // deleting. So the hollow path has to earn the swap: the
+    // replacement must be a real summary, and must actually carry the
+    // substance the original was missing.
+    // This holds for the untrue path too. A false opening has to go --
+    // but swapping "Experienced Software Engineer..." for a
+    // forty-two-character line naming one employer and no achievement
+    // trades one bad summary for another, and the CV is no better off.
+    // Where the document cannot supply a stronger sentence, the
+    // separate summary-names-another-profession warning names the
+    // closer true title and leaves the writing to its author.
+    const substantial = rebuilt.length >= 100
+      && (/\d/.test(rebuilt) || facts.companies.length >= 2);
+    if (!substantial) return { text, rebuilt: false, couldNotImprove: true };
+
+    lines[at + 1] = rebuilt;
+    return {
+      text: lines.join('\n'), rebuilt: true,
+      reason: untrue ? 'untrue' : 'hollow',
+      claimed: untrue, was: current, now: rebuilt,
+    };
   }
 
   function scoreSevenFilters({ cvText, jdText, jdTitle, jobKeywords, warnings }) {
@@ -5905,8 +6196,17 @@
     if (outCV) {
       try {
         const hl = ensureHeadline(outCV, jdTitle);
+        // THE TEXT COMES BACK WHETHER OR NOT A HEADLINE WAS ADDED.
+        //
+        // This used to take hl.text only inside the `added` and
+        // `replaced` branches, so any other repair the pass made was
+        // computed and then thrown away -- which is how a CV kept
+        // BOTH "Manager, Payroll Operations - Sub Saharan" and
+        // "Manager, Payroll Operations" after the duplicate had
+        // already been removed. Every early return carries the
+        // original text unchanged, so this is safe on all of them.
+        outCV = hl.text || outCV;
         if (hl.added) {
-          outCV = hl.text;
           // Same correction as the replace path below: this line is the
           // role being APPLIED for, so a message promising "only ever a
           // title your history contains" describes the old rule.
@@ -5915,7 +6215,6 @@
             + 'reads, and the one a search indexes. Every real title stays stated '
             + 'with its dates in the employment block below.');
         } else if (hl.replaced) {
-          outCV = hl.text;
           // THE MESSAGE HAS TO MATCH WHAT THE CODE DOES.
           //
           // This said the opposite: "X is a title your history does not
@@ -6421,6 +6720,28 @@
     // "looking to..." sentences)
     if (f.summaryClamp && outCV) {
       try {
+        // BEFORE the clamp, so a rebuilt summary is cut to two lines
+        // like any other -- and after the role headers are repaired, so
+        // the held titles and employers are readable as their own lines.
+        const sr = repairSummary(outCV, { jdTitle, jobKeywords });
+        if (sr.rebuilt) {
+          outCV = sr.text;
+          report.fixes.push(sr.reason === 'untrue'
+            ? 'Rewrote the professional summary: it opened "' + sr.claimed
+              + '", which is not a role your employment block contains. It now '
+              + 'leads with the closest title you have actually held and states '
+              + 'the years, the employers and one thing you did with a number on it.'
+            : 'Rewrote the professional summary: it carried no employer, no number '
+              + 'and no year -- nothing a screener can check or remember. It now '
+              + 'states the years, the employers and one quantified achievement, '
+              + 'all taken from the CV itself.');
+          report.warnings.push({
+            kind: 'summary-rebuilt-from-facts', severity: 'info',
+            was: sr.was, now: sr.now, reason: sr.reason,
+            note: 'Read it before you send: it is assembled from your own history, '
+              + 'and a sentence you write yourself will always beat one assembled.',
+          });
+        }
         const c = clampSummary(outCV, { maxChars: 220 });
         if (c.clamped || c.removedSentences > 0) {
           outCV = c.text;
@@ -6809,7 +7130,7 @@
     ensureCitizenshipLine,
     normaliseSkillLabels,
     sanitiseSkillsSection,
-    echoJobTitle, normaliseJobTitle, scrubRawTitle, scoreSevenFilters, summaryNamesAnotherProfession, sortExperienceByStartDate,
+    echoJobTitle, normaliseJobTitle, scrubRawTitle, repairSummary, _historyFacts, scoreSevenFilters, summaryNamesAnotherProfession, sortExperienceByStartDate,
     firstSixSecondsCheck,
     // v2
     stripFillers,

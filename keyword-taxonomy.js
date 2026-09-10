@@ -189,6 +189,43 @@
     ['Technical Evaluation', 'Vendor Evaluation', 'Technical Assessment'],
     ['Innovation'],
 
+    // --- payroll, HR and operations -----------------------------------
+    //
+    // The table was tech-heavy, so an operations posting produced three
+    // chips for one requirement -- "payroll", "global payroll" and
+    // "payroll management" -- and counted them as three, which is what
+    // held a 50% reading down.
+    ['Payroll', 'Global Payroll', 'Payroll Operations', 'Payroll Management',
+      'Payroll Delivery', 'Payroll Processing', 'Payroll Administration'],
+    ['Multi-country', 'Multi Country', 'Multinational', 'Cross-border', 'International'],
+    ['HRIS', 'HR Information System', 'Core HR'],
+    ['Benefits Administration', 'Benefits'], ['Compensation', 'Comp & Ben', 'Total Rewards'],
+    ['Time and Attendance', 'Timekeeping'],
+    ['Statutory Reporting', 'Regulatory Reporting', 'Statutory Filings'],
+    ['Compliance', 'Regulatory Compliance', 'Statutory Compliance'],
+    ['Audit', 'Internal Audit', 'Audit Readiness', 'Controls'],
+    ['Reconciliation', 'Account Reconciliation', 'Payroll Reconciliation'],
+    ['Vendor Management', 'Supplier Management', 'Third Party Management'],
+    ['SLA Management', 'Service Levels', 'Service Level Agreements'],
+    ['KPI', 'KPIs', 'Key Performance Indicators', 'Metrics', 'Performance Metrics'],
+    ['Continuous Improvement', 'Process Improvement', 'Operational Excellence',
+      'Process Optimisation', 'Process Optimization', 'Lean', 'Six Sigma'],
+    ['Escalation Management', 'Issue Resolution', 'Operational Resolution',
+      'Query Resolution', 'Case Management'],
+    ['Performance Management', 'Performance Reviews', 'Performance Feedback',
+      'Performance Actions', 'Appraisals'],
+    ['Remote-first', 'Remote First', 'Remote-first Teams', 'Distributed Teams',
+      'Remote Teams', 'Fully Remote'],
+    ['Languages', 'Additional Languages', 'Multilingual', 'Language Skills'],
+    ['Zendesk'], ['ServiceNow'], ['Deel'], ['Remote.com'], ['ADP'], ['Ceridian'],
+    ['Payroll Software', 'Payroll Systems', 'Payroll Platform'],
+    ['Onboarding'], ['Offboarding'], ['Employee Relations'],
+    ['People Leadership', 'People Management', 'Line Management',
+      'Team Leadership', 'Managing a Team'],
+    ['Stakeholder Communication', 'Stakeholder Updates'],
+    ['SOP', 'Standard Operating Procedures', 'Process Documentation'],
+    ['Data Accuracy', 'Accuracy', 'Quality Control'],
+
     // --- people -------------------------------------------------------
     ['Leadership', 'Team Leadership', 'Technical Leadership'],
     ['Mentorship', 'Mentoring', 'Coaching'],
