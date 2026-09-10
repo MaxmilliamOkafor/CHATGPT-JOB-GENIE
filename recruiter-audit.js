@@ -3203,6 +3203,7 @@
   const _STARTS_WITH_DATE = new RegExp('^\\s*(?:' + _MONTHS_RE + '\\b|\\d{1,2}[/-]|(?:19|20)\\d{2}\\b)', 'i');
   const _DATE_START = new RegExp('\\s+(?:' + _MONTHS_RE + '\\b|\\d{2}/|(?:19|20)\\d{2}\\b)', 'i');
   const _MONTH_ONLY = new RegExp('^\\s*' + _MONTHS_RE + '\\s*$', 'i');
+  const _SPELLED_NUMBER = /\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|hundred|thousand|million|billion)\b/i;
 
   /** Titles, employers and the span the experience block actually states. */
   function _historyFacts(cvText) {
@@ -3215,7 +3216,13 @@
       if (_ANY_HEAD.test(l)) { inExp = false; continue; }
       if (!inExp || !l) continue;
       if (/^[-•*]/.test(l)) {
-        if (/\d/.test(l)) achievements.push(l.replace(/^[-•*]\s*/, '').trim());
+        // A NUMBER SPELLED OUT IS STILL A NUMBER. "Cut the month-end
+        // cycle from nine working days to three" is the strongest
+        // sentence on some CVs and carries no digit at all, so a
+        // digits-only test threw it away before it could be considered.
+        if (/\d/.test(l) || _SPELLED_NUMBER.test(l)) {
+          achievements.push(l.replace(/^[-•*]\s*/, '').trim());
+        }
         continue;
       }
       const found = l.match(/\b(19|20)\d{2}\b/g);
@@ -3383,16 +3390,13 @@
       if (!label || covered.indexOf(label) !== -1) continue;
       const present = TX && TX.appearsIn ? TX.appearsIn(evidence, term)
         : evidence.toLowerCase().indexOf(String(term).toLowerCase()) !== -1;
-      if (present) covered.push(label.toLowerCase());
+      // The label's own casing: "SQL" and "Power BI" are not "sql" and
+      // "power bi", and a summary that lower-cases them looks careless
+      // in the line that is supposed to look most deliberate.
+      if (present) covered.push(label);
     }
-    if (covered.length >= 2) {
-      opener += ' working across ' + covered.slice(0, -1).join(', ')
-        + ' and ' + covered[covered.length - 1];
-    }
-    // One term reads worse than none -- "AI Product Manager working in
-    // audit." names a scope narrower than the job and invites the
-    // question of what else there is. Two or more reads as a remit.
-    parts.push(opener.replace(/\s+/g, ' ').trim() + '.');
+    // The opener is assembled at the end, once the outcomes are known:
+    // see below.
 
     // WHAT HAPPENED, WITH THE NUMBER ON IT.
     //
@@ -3426,21 +3430,87 @@
     // could not win. A bullet is written to be read whole on its own
     // line; its opening clause is the claim, and the rest is the
     // supporting detail the employment block already carries.
-    const shorten = (a) => {
-      if (a.length <= 170) return a;
-      const head = a.slice(0, 170);
-      const cut = Math.max(head.lastIndexOf(', '), head.lastIndexOf('; '));
-      return cut >= 45 ? head.slice(0, cut) : '';
+    // Clause boundaries, in the order a sentence actually breaks at. A
+    // comma is the cleanest, but plenty of strong bullets carry their
+    // supporting detail after "by", "which" or "replacing" with no
+    // punctuation at all -- and a bullet that cannot be cut is a bullet
+    // that loses its place to a shorter, weaker one.
+    const _CUTS = [', ', '; ', ' by ', ' which ', ' that ', ' replacing ', ' while ', ' after '];
+    const shorten = (a, limit) => {
+      const max = limit || 170;
+      if (a.length <= max) return a;
+      const head = a.slice(0, max);
+      let cut = -1;
+      for (const mark of _CUTS) {
+        const at = head.lastIndexOf(mark);
+        if (at > cut) cut = at;
+      }
+      if (cut < 45) return '';
+      // " by replacing a manual rebuild" cuts at " replacing ", which
+      // leaves the sentence ending on "by". Any function word left
+      // dangling at the cut goes with it.
+      return head.slice(0, cut)
+        .replace(/[\s,;:-]+$/, '')
+        .replace(/\s+(?:by|which|that|while|after|and|with|for|to|in|on|of|from|a|an|the)$/i, '')
+        .trim();
     };
+    // A TIGHT VERSION OF EACH, FOR WHEN TWO HAVE TO FIT.
+    //
+    // Two outcomes read as a pattern and one reads as an anecdote, but
+    // two full-length bullets do not fit two rendered lines. So each
+    // outcome also has a first-clause form: the claim without the
+    // supporting detail the employment block already carries. The pair
+    // is preferred whenever the tight forms fit, because the second
+    // figure is worth more than the first one's trailing clause.
+    const tight = (a) => {
+      // The FIRST clause boundary, searched across the whole sentence
+      // rather than inside the first ninety characters. A bullet whose
+      // opening claim runs to ninety-nine characters -- "...for a GBP
+      // 2.6bn consumer lending portfolio" -- had no boundary in the
+      // window, so it kept its full length, could not fit beside a
+      // second outcome, and lost its place to a shorter sentence
+      // carrying a far smaller number. The magnitude is the thing worth
+      // keeping; the trailing clause is not.
+      let at = -1;
+      for (const mark of _CUTS) {
+        const found = a.indexOf(mark);
+        if (found >= 45 && found <= 110 && (at === -1 || found < at)) at = found;
+      }
+      if (at !== -1) {
+        return a.slice(0, at).replace(/[\s,;:-]+$/, '')
+          .replace(/\s+(?:by|which|that|while|after|and|with|for|to|in|on|of|from|a|an|the)$/i, '')
+          .trim();
+      }
+      const cut = shorten(a, 92);
+      return (cut && cut.length >= 45) ? cut : a;
+    };
+    const weigh = (a) => (
+        // SCALE IS THE DIFFERENTIATOR.
+        //
+        // Everyone applying has done things. What separates a shortlist
+        // from a pile is the SIZE of what somebody operated on -- a
+        // GBP 2.6bn portfolio, billions of requests a day, 47 services,
+        // 24 analysts. A screener remembers a magnitude; they do not
+        // remember "improved efficiency". So a bullet carrying scale
+        // outranks one carrying a bare two-digit count, and a bullet
+        // carrying a DELTA -- from nine days to three -- outranks both,
+        // because it states the before as well as the after.
+      relevance(a)
+        + (/\bfrom\b[^.]{0,40}\bto\b/i.test(a)
+          && (/\d/.test(a) || _SPELLED_NUMBER.test(a)) ? 4 : 0)
+        + (/[£$€]\s?\d|\b\d+(?:\.\d+)?\s?(?:bn|billion|m\b|million|k\b)/i.test(a) ? 3 : 0)
+        + (/\b(?:billions|millions|thousands)\b/i.test(a) ? 3 : 0)
+        + (/\d+\s?%/.test(a) ? 2 : 0)
+        + (/\b\d{2,}\b/.test(a) ? 1 : 0)
+    );
     const scored = facts.achievements
-      .map(shorten)
-      .filter((a) => a && a.length >= 40 && a.length <= 170 && /\d/.test(a))
-      .map((a) => ({
-        text: a,
-        weight: relevance(a)
-          + (/[£$€]\s?\d/.test(a) ? 3 : 0) + (/\d+\s?%/.test(a) ? 2 : 0)
-          + (/\b\d{2,}\b/.test(a) ? 1 : 0),
-      }))
+      // NOT .map(shorten): map passes the INDEX as the second argument,
+      // which arrived as the character limit and truncated every bullet
+      // to nothing.
+      .map((a) => shorten(a))
+      .filter((a) => a && a.length >= 40 && a.length <= 170
+        && (/\d/.test(a) || _SPELLED_NUMBER.test(a)))
+      .map((a) => ({ text: a, weight: weigh(a) }))
       .sort((a, b) => (b.weight - a.weight) || (a.text.length - b.text.length));
     // A PAIR BEATS ONE LONG ONE.
     //
@@ -3449,25 +3519,98 @@
     // a second. Two outcomes read as a pattern; one reads as the one
     // good thing that happened. So the best-scoring COMBINATION that
     // fits is chosen, rather than the best-scoring first item.
-    const budget = 215 - parts.join(' ').length;
-    const top = scored.slice(0, 6);
-    const asSentence = (a) => a.replace(/\s*\.\s*$/, '') + '.';
-    let bestPick = [], bestScore = -1;
+    // Reserve exactly what the opening line will take. Where the
+    // posting's requirements supply the scope the sentence is already
+    // known; only the fallback path below is unknown at this point, and
+    // it is bounded by the same shape.
+    const openerLen = covered.length >= 2
+      ? (lead + ' working across ' + covered.slice(0, 3).join(', ')).length + 6
+      : lead.length + 46;
+    const budget = 215 - openerLen;
+    const top = scored.slice(0, 8);
+    const lower = (a) => a.charAt(0).toLowerCase() + a.slice(1);
+    // TWO OUTCOMES, ONE SENTENCE.
+    //
+    // Written as two full stops the pair reads as bullets that escaped
+    // into the summary. Joined with a semicolon it reads as one claim
+    // with two pieces of evidence, which is how a strong summary is
+    // actually written -- and it costs three characters instead of two
+    // sentence openings.
+    const join = (picks) => picks.length === 2
+      ? tight(picks[0].text).replace(/\s*\.\s*$/, '') + '; '
+        + lower(tight(picks[1].text).replace(/\s*\.\s*$/, '')) + '.'
+      : picks[0].text.replace(/\s*\.\s*$/, '') + '.';
+    // Different work, not the same story twice. Two bullets that share
+    // most of their words are one outcome told twice, and the second
+    // spends the budget for nothing.
+    const distinct = (a, b) => {
+      const wa = new Set(String(a).toLowerCase().match(/[a-z]{5,}/g) || []);
+      const wb = String(b).toLowerCase().match(/[a-z]{5,}/g) || [];
+      const shared = wb.filter((w) => wa.has(w)).length;
+      return shared < Math.max(2, Math.min(wa.size, wb.length) * 0.5);
+    };
+    let bestPick = null, bestScore = -1;
     for (let i = 0; i < top.length; i++) {
-      const one = [top[i]];
-      const oneLen = asSentence(top[i].text).length + 1;
-      if (oneLen <= budget && top[i].weight > bestScore) { bestPick = one; bestScore = top[i].weight; }
-      for (let j = i + 1; j < top.length; j++) {
-        const len = oneLen + asSentence(top[j].text).length + 1;
-        // A pair is worth more than either alone, so it wins any tie.
-        const score = top[i].weight + top[j].weight + 1;
-        if (len <= budget && score > bestScore) {
-          bestPick = [top[i], top[j]];
-          bestScore = score;
+      // Full first; the tight form when the full will not fit. Without
+      // this a 168-character bullet carrying "GBP 2.6bn" lost outright
+      // to a 65-character one about twelve dashboards, purely on length.
+      const full = join([top[i]]);
+      if (full.length + 1 <= budget && top[i].weight > bestScore) {
+        bestPick = [top[i]]; bestScore = top[i].weight;
+      } else {
+        const cut = { text: tight(top[i].text), weight: weigh(tight(top[i].text)) };
+        if (join([cut]).length + 1 <= budget && cut.weight > bestScore) {
+          bestPick = [cut]; bestScore = cut.weight;
+        }
+      }
+      for (let j = 0; j < top.length; j++) {
+        if (j === i || !distinct(top[i].text, top[j].text)) continue;
+        const pair = join([top[i], top[j]]);
+        // SCORED ON WHAT IS ACTUALLY EMITTED. The pair is written in
+        // its tight form, and tightening can cut the very figure the
+        // bullet was chosen for -- so a pair was once picked on the
+        // strength of a "£2.6bn" that the trimmed sentence no longer
+        // contained. Both halves are weighed as they will appear.
+        const score = weigh(tight(top[i].text)) + weigh(tight(top[j].text)) + 1;
+        if (pair.length + 1 <= budget && score > bestScore) {
+          bestPick = [top[i], top[j]]; bestScore = score;
         }
       }
     }
-    for (const pick of bestPick) parts.push(asSentence(pick.text));
+    // ── THE OPENING LINE IS THE ONE THAT DECIDES ─────────────────────
+    //
+    // A screener gives a summary a few seconds. "AI Product Manager."
+    // on its own is a category label -- it says what to file this under
+    // and gives no reason to read the next line, which is the
+    // definition of a summary that gets skimmed past.
+    //
+    // Where the posting's own requirements are evidenced by the
+    // experience, those are the scope: they are what this reader is
+    // looking for, in their words, and they are true. Where NONE are --
+    // which is what happens on a role outside the candidate's field --
+    // the scope is taken from the outcomes themselves rather than left
+    // blank, so the line still says what this person works on.
+    // WHERE THE POSTING'S REQUIREMENTS ARE NOT EVIDENCED, SAY NOTHING.
+    //
+    // A version of this filled the gap by lifting noun phrases out of
+    // the chosen bullets, and produced "AI Product Manager working
+    // across Audit, PySpark and Presto pipeline and behind impression
+    // reporting." Every fragment came from the CV and the sentence was
+    // gibberish -- worse than the bare title it was written to improve,
+    // and exactly the kind of line a reader stops at for the wrong
+    // reason. A scope clause is only written when the posting's own
+    // requirements supply it; otherwise the outcomes carry the sentence
+    // on their own, which they do perfectly well.
+    const scope = covered.slice(0, 3);
+    if (scope.length >= 2) {
+      opener += ' working across ' + scope.slice(0, -1).join(', ')
+        + ' and ' + scope[scope.length - 1];
+    }
+    // One term reads worse than none -- "AI Product Manager working in
+    // audit" names a scope narrower than the job and invites the
+    // question of what else there is. Two or more reads as a remit.
+    parts.push(opener.replace(/\s+/g, ' ').trim() + '.');
+    if (bestPick) parts.push(join(bestPick));
 
     const rebuilt = parts.join(' ').replace(/\s+/g, ' ').trim();
 
@@ -3487,7 +3630,11 @@
     // Where the document cannot supply a stronger sentence, the
     // separate summary-names-another-profession warning names the
     // closer true title and leaves the writing to its author.
-    const substantial = rebuilt.length >= 100 && /\d/.test(rebuilt);
+    // "from six hours to under one" is a quantified outcome with no
+    // digit in it. Requiring a numeral here threw away a perfectly good
+    // rebuild and left the empty sentence standing.
+    const substantial = rebuilt.length >= 100
+      && (/\d/.test(rebuilt) || _SPELLED_NUMBER.test(rebuilt));
     if (!substantial) return { text, rebuilt: false, couldNotImprove: true };
 
     lines[at + 1] = rebuilt;
