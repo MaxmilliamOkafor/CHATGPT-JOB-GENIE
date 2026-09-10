@@ -121,9 +121,19 @@ console.log('\nTHE SUMMARY DOES NOT CLAIM A JOB THE HISTORY DOES NOT CONTAIN');
     !/manager of payroll operations/i.test(summary), JSON.stringify(summary));
   t('  it leads with a title the history contains',
     /Software Engineer|Solutions Architect|Data Analyst/.test(summary), JSON.stringify(summary));
-  t('  it names real employers', /Meta|Accenture|Citigroup/.test(summary), JSON.stringify(summary));
-  t('  ...and none of them is a month',
-    !/\b(January|February|August|April|July|March)\b/.test(summary), JSON.stringify(summary));
+  // AND IT NAMES NO EMPLOYER AT ALL. An employer in the first line is a
+  // prestige signal: it invites a judgement about where someone has
+  // worked before any judgement about what they did, and it is already
+  // in the employment block two inches below. Same for total years,
+  // which is an age proxy, and for place names.
+  t('  no employer name in the summary',
+    !/Meta|Accenture|Citigroup|SolimHealth/.test(summary), JSON.stringify(summary));
+  t('  no total-years claim', !/\b(five|six|seven|eight|nine|ten|\d+)\s+years\b/i.test(summary),
+    JSON.stringify(summary));
+  t('  no place names', !/London|Belfast|Dublin|Ireland/.test(summary), JSON.stringify(summary));
+  t('  and no adjective about the person',
+    !/\b(accomplished|seasoned|passionate|dynamic|results.driven|strong background|proven|highly)\b/i
+      .test(summary), JSON.stringify(summary));
   t('  it carries a number a screener can check', /\d/.test(summary), JSON.stringify(summary));
   t('  and it is a real summary, not a stub',
     summary.length >= 100 && summary.length <= 220, summary.length + ' chars');

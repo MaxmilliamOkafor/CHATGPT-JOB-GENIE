@@ -3315,15 +3315,35 @@
       if (score > best) { best = score; lead = h; }
     }
 
+    // ── WHAT THE SUMMARY DELIBERATELY LEAVES OUT ──────────────────────
+    //
+    // A first version of this built "Software Engineer with nine years
+    // across Meta, SolimHealth and Accenture." Everything in it was
+    // true and three of its four ingredients were bias levers.
+    //
+    //   EMPLOYER NAMES are a prestige signal. Meta triggers a halo,
+    //   SolimHealth means nothing to anyone, and putting them in the
+    //   first line invites a judgement about where someone has worked
+    //   before any judgement about what they did. They are already in
+    //   the employment block two inches below, so nothing is lost by
+    //   leaving them out of the sentence that frames everything.
+    //
+    //   TOTAL YEARS is an age proxy, and age is among the most
+    //   documented biases in hiring. It is also redundant: the dates
+    //   are on the page.
+    //
+    //   PLACE NAMES carry nationality and relocation assumptions.
+    //
+    // The mechanism underneath all three is the same. Bias operates on
+    // AMBIGUITY -- wherever a reader has to infer, they infer from what
+    // they already believe. A summary that hands over verifiable work
+    // leaves less room to fill in. So this one carries the discipline,
+    // the scope of the work, and outcomes with numbers on them, and it
+    // carries no adjective about the person at all: no "accomplished",
+    // no "strong background", no "results-driven". Those are where a
+    // reader's priors do the writing.
     const parts = [];
     let opener = lead;
-    if (facts.years >= 2) opener += ' with ' + _spellNumber(facts.years) + ' years';
-    const employers = facts.companies.slice(0, 3);
-    if (employers.length >= 2) {
-      opener += ' across ' + employers.slice(0, -1).join(', ') + ' and ' + employers[employers.length - 1];
-    } else if (employers.length === 1) {
-      opener += ' at ' + employers[0];
-    }
 
     // THE SKILLS LINE IS NOT EVIDENCE OF DOING THE WORK.
     //
@@ -3366,17 +3386,88 @@
       if (present) covered.push(label.toLowerCase());
     }
     if (covered.length >= 2) {
-      opener += ', covering ' + covered.slice(0, -1).join(', ') + ' and ' + covered[covered.length - 1];
+      opener += ' working across ' + covered.slice(0, -1).join(', ')
+        + ' and ' + covered[covered.length - 1];
     }
+    // One term reads worse than none -- "AI Product Manager working in
+    // audit." names a scope narrower than the job and invites the
+    // question of what else there is. Two or more reads as a remit.
     parts.push(opener.replace(/\s+/g, ' ').trim() + '.');
 
-    // One thing that actually happened, with the number attached.
-    const achievement = facts.achievements
-      .slice().sort((a, b) => a.length - b.length)
-      .find((a) => a.length >= 40 && a.length <= 170);
-    if (achievement) {
-      parts.push(achievement.replace(/\s*\.\s*$/, '') + '.');
+    // WHAT HAPPENED, WITH THE NUMBER ON IT.
+    //
+    // Two outcomes rather than one where the space allows, because a
+    // single figure reads as the one good thing and a pair reads as a
+    // pattern. Preferred by magnitude -- a bullet carrying a currency
+    // amount, a percentage or a multi-digit count says more than one
+    // that happens to contain a 3.
+    // RELEVANCE OUTRANKS SIZE.
+    //
+    // Scoring on the figure alone put "Trained 24 analysts across the
+    // London and Belfast offices in SQL and Power BI" on a Staff
+    // Software Engineer application -- true, quantified, and about a
+    // different job. A summary whose two halves are about different
+    // disciplines reads as assembled, which is what it is. A bullet
+    // that touches something the POSTING asked for is worth more than a
+    // bigger number about something it did not.
+    const relevance = (a) => {
+      let hits = 0;
+      for (const term of (Array.isArray(asked) ? asked : [])) {
+        const present = TX && TX.appearsIn ? TX.appearsIn(a, term)
+          : a.toLowerCase().indexOf(String(term).toLowerCase()) !== -1;
+        if (present) hits++;
+      }
+      return Math.min(hits, 2) * 4;
+    };
+    // A LONG BULLET STILL HAS A GOOD FIRST CLAUSE IN IT.
+    //
+    // Only two of this CV's seven quantified bullets were short enough
+    // to use, so the choice was made from a pool of two and relevance
+    // could not win. A bullet is written to be read whole on its own
+    // line; its opening clause is the claim, and the rest is the
+    // supporting detail the employment block already carries.
+    const shorten = (a) => {
+      if (a.length <= 170) return a;
+      const head = a.slice(0, 170);
+      const cut = Math.max(head.lastIndexOf(', '), head.lastIndexOf('; '));
+      return cut >= 45 ? head.slice(0, cut) : '';
+    };
+    const scored = facts.achievements
+      .map(shorten)
+      .filter((a) => a && a.length >= 40 && a.length <= 170 && /\d/.test(a))
+      .map((a) => ({
+        text: a,
+        weight: relevance(a)
+          + (/[£$€]\s?\d/.test(a) ? 3 : 0) + (/\d+\s?%/.test(a) ? 2 : 0)
+          + (/\b\d{2,}\b/.test(a) ? 1 : 0),
+      }))
+      .sort((a, b) => (b.weight - a.weight) || (a.text.length - b.text.length));
+    // A PAIR BEATS ONE LONG ONE.
+    //
+    // Greedily taking the highest-weighted bullet first filled the
+    // budget with a single 168-character sentence and left no room for
+    // a second. Two outcomes read as a pattern; one reads as the one
+    // good thing that happened. So the best-scoring COMBINATION that
+    // fits is chosen, rather than the best-scoring first item.
+    const budget = 215 - parts.join(' ').length;
+    const top = scored.slice(0, 6);
+    const asSentence = (a) => a.replace(/\s*\.\s*$/, '') + '.';
+    let bestPick = [], bestScore = -1;
+    for (let i = 0; i < top.length; i++) {
+      const one = [top[i]];
+      const oneLen = asSentence(top[i].text).length + 1;
+      if (oneLen <= budget && top[i].weight > bestScore) { bestPick = one; bestScore = top[i].weight; }
+      for (let j = i + 1; j < top.length; j++) {
+        const len = oneLen + asSentence(top[j].text).length + 1;
+        // A pair is worth more than either alone, so it wins any tie.
+        const score = top[i].weight + top[j].weight + 1;
+        if (len <= budget && score > bestScore) {
+          bestPick = [top[i], top[j]];
+          bestScore = score;
+        }
+      }
     }
+    for (const pick of bestPick) parts.push(asSentence(pick.text));
 
     const rebuilt = parts.join(' ').replace(/\s+/g, ' ').trim();
 
@@ -3396,8 +3487,7 @@
     // Where the document cannot supply a stronger sentence, the
     // separate summary-names-another-profession warning names the
     // closer true title and leaves the writing to its author.
-    const substantial = rebuilt.length >= 100
-      && (/\d/.test(rebuilt) || facts.companies.length >= 2);
+    const substantial = rebuilt.length >= 100 && /\d/.test(rebuilt);
     if (!substantial) return { text, rebuilt: false, couldNotImprove: true };
 
     lines[at + 1] = rebuilt;
@@ -6731,10 +6821,13 @@
               + '", which is not a role your employment block contains. It now '
               + 'leads with the closest title you have actually held and states '
               + 'the years, the employers and one thing you did with a number on it.'
-            : 'Rewrote the professional summary: it carried no employer, no number '
-              + 'and no year -- nothing a screener can check or remember. It now '
-              + 'states the years, the employers and one quantified achievement, '
-              + 'all taken from the CV itself.');
+            : 'Rewrote the professional summary: it carried nothing a screener can '
+              + 'check -- no scope, no number, only adjectives. It now states the '
+              + 'discipline, the remit and what actually happened with the figures '
+              + 'attached, all taken from the CV itself. Employer names, total years '
+              + 'and place names are left out on purpose: they are the levers a '
+              + 'reader judges on before reading the work, and they are already in '
+              + 'the employment block below.');
           report.warnings.push({
             kind: 'summary-rebuilt-from-facts', severity: 'info',
             was: sr.was, now: sr.now, reason: sr.reason,
