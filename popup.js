@@ -4670,7 +4670,10 @@ class ATSTailor {
       .map((k) => String(k == null ? '' : k).trim().toLowerCase()));
     const gap = (Array.isArray(this._unevidencedKeywords) ? this._unevidencedKeywords : [])
       .map((k) => String(k == null ? '' : k).trim())
-      .filter((k) => k && (!stillMissing.size || stillMissing.has(k.toLowerCase())));
+      // "7+ years" is not something to tick and save as a skill. The
+      // dates in the experience section answer it already.
+      .filter((k) => k && !ATSTailor.isCriterion(k))
+      .filter((k) => !stillMissing.size || stillMissing.has(k.toLowerCase()));
     if (!gap.length) { section.classList.add('hidden'); return; }
 
     section.classList.remove('hidden');
@@ -4690,6 +4693,11 @@ class ATSTailor {
         const term = el.getAttribute('data-gap-term');
         if (this._claimedGapTerms.has(term)) this._claimedGapTerms.delete(term);
         else this._claimedGapTerms.add(term);
+        // The confirmation of the LAST save described a different set of
+        // terms: leaving it up while a new selection is being made read
+        // as "Added 2" above a button offering to add 1.
+        const stale = document.getElementById('profileGapStatus');
+        if (stale) stale.textContent = '';
         this.renderProfileGap();
       });
     });
@@ -5748,12 +5756,40 @@ class ATSTailor {
     return this.__junkKeywords;
   }
 
+  // A SCREENING CRITERION IS NOT A KEYWORD.
+  //
+  // "7+ years" arrived as a chip and was offered as a skill to claim.
+  // It is a real requirement and it is not a thing that can be written
+  // into a skills list: "Python, Kubernetes, 7+ years" is nonsense on a
+  // CV, and counting it in the denominator makes it a permanent miss
+  // however well the CV is written. The dates in the experience section
+  // are what answer it, and they are already there.
+  //
+  // Same for a degree requirement, which the education section answers.
+  static get _CRITERION_PATTERNS() {
+    return [
+      /^\d+\s*\+?\s*(?:-\s*\d+\s*)?(?:years?|yrs?)\b/i,
+      /^(?:minimum|min\.?|at least|over|more than)\s+\d+\s*(?:years?|yrs?)\b/i,
+      /\b\d+\s*\+?\s*(?:years?|yrs?)\s+(?:of\s+)?(?:relevant\s+|professional\s+|proven\s+)?experience\b/i,
+      /^(?:bachelor|master|doctorate|phd|mba|degree)('?s)?(?:\s+degree)?$/i,
+      /^(?:bachelor|master)('?s)?\s+degree\s+in\b/i,
+    ];
+  }
+
+  /** Is this a thing a person can list as a skill, or a screening rule? */
+  static isCriterion(keyword) {
+    const k = String(keyword == null ? '' : keyword).trim();
+    if (!k) return false;
+    return this._CRITERION_PATTERNS.some((re) => re.test(k));
+  }
+
   /** The posting's requirements, with the furniture taken out. */
   static requirementsOnly(list) {
     const junk = this._JUNK_KEYWORDS;
     return (Array.isArray(list) ? list : []).filter((kw) => {
       const k = String(kw == null ? '' : kw).toLowerCase().trim();
-      return k && !junk.has(k);
+      if (!k || junk.has(k)) return false;
+      return !this.isCriterion(kw);
     });
   }
 
@@ -5914,6 +5950,71 @@ class ATSTailor {
     console.warn('[ATS Tailor] The tailored CV had no EDUCATION section; rebuilt '
       + rows.length + ' entry(ies) from your saved profile.');
     return text.replace(/\s*$/, '') + '\n\nEDUCATION\n' + lines.join('\n') + '\n';
+  }
+
+  /**
+   * Put each term on the existing skills line its peers are already on.
+   *
+   * Mutates cvLines in place between head and end. Returns the terms it
+   * could not place, which keep the labelled line they always had.
+   *
+   * A line is identified by WHAT IS ON IT, never by its label: a CV can
+   * call its infrastructure line "Cloud & DevOps", "Infrastructure" or
+   * "Platform", and reading the label would mean guessing at all three.
+   * Counting how many of its current members share the new term's
+   * category does not.
+   */
+  _placeInSkillGroups(cvLines, head, end, terms, perLine) {
+    const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
+    if (!TX || typeof TX.categoryOf !== 'function') return terms.slice();
+
+    // Every labelled group line in the section, with the categories of
+    // the terms already on it.
+    const lines = [];
+    for (let i = head + 1; i < end; i++) {
+      const raw = String(cvLines[i] == null ? '' : cvLines[i]);
+      const m = /^([A-Z][A-Za-z &/'-]{1,32}):\s*(.*)$/.exec(raw.trim());
+      if (!m) continue;
+      const members = m[2].split(',').map((s) => s.trim()).filter(Boolean);
+      const tally = new Map();
+      for (const member of members) {
+        const c = TX.categoryOf(member);
+        if (c) tally.set(c, (tally.get(c) || 0) + 1);
+      }
+      lines.push({ index: i, label: m[1], members, tally });
+    }
+    if (!lines.length) return terms.slice();
+
+    const leftover = [];
+    const additions = new Map();
+    for (const term of terms) {
+      const category = TX.categoryOf(term);
+      if (!category) { leftover.push(term); continue; }
+      // The best line is chosen on fit alone. If it turns out to be
+      // full, the term goes to the labelled line rather than to the
+      // second-best group: "platform engineering" listed under Data
+      // Engineering because Cloud & DevOps had run out of room is worse
+      // than listing it separately, and a reader notices.
+      let best = null, bestScore = 0;
+      for (const line of lines) {
+        const score = line.tally.get(category) || 0;
+        if (score > bestScore) { best = line; bestScore = score; }
+      }
+      if (!best) { leftover.push(term); continue; }
+      const room = perLine - (best.members.length + (additions.get(best.index) || []).length);
+      if (room <= 0) { leftover.push(term); continue; }
+      if (!additions.has(best.index)) additions.set(best.index, []);
+      additions.get(best.index).push(term);
+    }
+
+    for (const [index, added] of additions) {
+      const raw = String(cvLines[index]);
+      const trailing = raw.endsWith(';') || raw.endsWith('.') ? raw.slice(-1) : '';
+      const body = trailing ? raw.slice(0, -1) : raw;
+      cvLines[index] = body.replace(/\s*,\s*$/, '').trimEnd()
+        + ', ' + added.join(', ') + trailing;
+    }
+    return leftover;
   }
 
   recoverOmittedProfileSkills(cvText, keywords, profile) {
@@ -6254,16 +6355,47 @@ class ATSTailor {
           if (!body.trim()) {
             cvLines.splice(head + 1, 0, placed.join(', '));
           } else if (grouped) {
-            // Mixed-case labels, so neither the audit's all-caps heading
-            // detector nor the renderer's section list reads them as a
-            // new section -- they render as further bold-labelled group
-            // lines.
-            const extra = [];
-            extra.push('Additional Skills: ' + placed.slice(0, PER_LINE).join(', '));
-            if (placed.length > PER_LINE) {
-              extra.push('Additional Domain Knowledge: ' + placed.slice(PER_LINE).join(', '));
+            // ON THE LINE ITS PEERS ARE ALREADY ON.
+            //
+            // These used to land on a line of their own, "Additional
+            // Skills:", which reads as exactly what it is -- a list
+            // bolted to the end of the section. A person writing the
+            // same CV puts Kubernetes with the other infrastructure and
+            // Kafka with the other data tools, so that is what happens
+            // here: each term goes to the existing group line whose
+            // current members share its category.
+            //
+            // The line's LABEL is never parsed. A CV can call the line
+            // anything; what identifies it is what is already on it.
+            const leftover = this._placeInSkillGroups(cvLines, head, end, placed, PER_LINE);
+            if (leftover.length) {
+              // Nowhere sensible to put these, so they keep the labelled
+              // line they always had. Mixed-case, so neither the audit's
+              // all-caps heading detector nor the renderer's section
+              // list reads it as a new section.
+              //
+              // If the CV ALREADY carries an "Additional Skills" line --
+              // a previous run wrote one, or he keeps one himself --
+              // extend it. Two lines under one label is a formatting
+              // fault a reader sees immediately.
+              let existing = -1;
+              for (let i = head + 1; i < end; i++) {
+                if (/^Additional Skills\s*:/i.test(String(cvLines[i] || '').trim())) {
+                  existing = i;
+                  break;
+                }
+              }
+              if (existing !== -1) {
+                cvLines[existing] = String(cvLines[existing]).replace(/\s*,\s*$/, '').trimEnd()
+                  + ', ' + leftover.join(', ');
+              } else {
+                const extra = ['Additional Skills: ' + leftover.slice(0, PER_LINE).join(', ')];
+                if (leftover.length > PER_LINE) {
+                  extra.push('Additional Domain Knowledge: ' + leftover.slice(PER_LINE).join(', '));
+                }
+                cvLines.splice(end, 0, ...extra);
+              }
             }
-            cvLines.splice(end, 0, ...extra);
           } else {
             cvLines[head + 1] = body.trim() + ', ' + placed.join(', ');
           }

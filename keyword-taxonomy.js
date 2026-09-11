@@ -607,9 +607,74 @@
     return false;
   }
 
+  // ── WHICH LINE OF THE SKILLS BLOCK A TERM BELONGS ON ─────────────────
+  //
+  // Tailored terms were appended to a line of their own, "Additional
+  // Skills:", which reads as exactly what it is: a list bolted onto the
+  // end. A person writing the same CV would put Kubernetes with the
+  // other infrastructure and Kafka with the other data tools.
+  //
+  // The category is only ever used to CHOOSE A LINE. It never decides
+  // whether a term may be written at all -- that stays with the
+  // evidence gate -- and it never affects the coverage measurement.
+  const CATEGORIES = {
+    'Programming': ['Python', 'Java', 'JavaScript', 'TypeScript', 'C++', 'C#', 'Go', 'Rust',
+      'Ruby', 'PHP', 'Swift', 'Kotlin', 'Scala', 'R', 'MATLAB', 'Perl', 'Bash', 'PowerShell',
+      'SQL', 'HTML', 'CSS', '.NET', 'Node.js', 'React', 'Angular', 'Vue', 'Next.js',
+      'Django', 'Flask', 'Spring', 'Express', 'FastAPI', 'GraphQL', 'REST APIs',
+      'Frontend', 'Backend', 'Full Stack', 'Object Oriented Programming', 'Design Patterns'],
+    'Cloud & DevOps': ['AWS', 'Azure', 'GCP', 'Kubernetes', 'Docker', 'Terraform', 'Helm',
+      'Ansible', 'Jenkins', 'GitHub Actions', 'GitLab CI', 'ArgoCD', 'CI/CD', 'Linux',
+      'Infrastructure as Code', 'Cloud Infrastructure', 'Platform Engineering', 'SRE',
+      'Observability', 'Monitoring', 'Prometheus', 'Grafana', 'Datadog', 'Microservices',
+      'Networking', 'Serverless', 'Automation', 'Reliability', 'Scalability',
+      'Cloud Cost Management', 'Git', 'GitHub', 'GitLab', 'Multi-tenant'],
+    'Data Engineering': ['Apache Spark', 'Airflow', 'Kafka', 'Snowflake', 'ETL', 'ELT',
+      'dbt', 'Data Engineering', 'Data Pipelines', 'Data Warehousing', 'Data Modelling',
+      'Data Quality', 'Hadoop', 'Databricks', 'Redshift', 'BigQuery', 'PostgreSQL',
+      'MySQL', 'MongoDB', 'Redis', 'Elasticsearch', 'Cassandra', 'NoSQL'],
+    'Machine Learning': ['Machine Learning', 'Deep Learning', 'AI', 'PyTorch', 'TensorFlow',
+      'scikit-learn', 'XGBoost', 'NLP', 'Computer Vision', 'MLOps', 'Feature Engineering',
+      'Statistics', 'LLM', 'RAG', 'Model Deployment'],
+    'Analytics & Reporting': ['Power BI', 'Tableau', 'Looker', 'Excel', 'Data Analysis',
+      'Data Visualisation', 'Business Analysis', 'Financial Reporting', 'Forecasting',
+      'KPI', 'Regulatory Reporting', 'Dashboards'],
+    'Tools & Platforms': ['Jira', 'Confluence', 'Salesforce', 'Workday', 'SAP', 'NetSuite',
+      'Zendesk', 'ServiceNow', 'ADP', 'Ceridian', 'Deel', 'HRIS', 'Payroll Software',
+      'Oracle EBS', 'Asana', 'Notion'],
+    'Soft Skills': ['Communication', 'Collaboration', 'Problem Solving', 'Adaptability',
+      'Time Management', 'Attention to Detail', 'Critical Thinking', 'Negotiation',
+      'Presentation', 'Written Communication', 'Self-organised'],
+    'Domain Expertise': ['Leadership', 'People Leadership', 'Mentorship', 'Coaching',
+      'Stakeholder Management', 'Project Management', 'Programme Management',
+      'Product Management', 'Agile', 'Performance Management', 'Escalation Management',
+      'Continuous Improvement', 'Operational Excellence', 'Compliance', 'Payroll',
+      'Vendor Management', 'SLA Management', 'Multi-country', 'Risk Management',
+      'Change Management', 'Hiring', 'Policy', 'Remote-first', 'System Design',
+      'Code Review', 'Testing', 'Security', 'Documentation', 'Training'],
+  };
+  const _CATEGORY_OF = new Map();
+  for (const category of Object.keys(CATEGORIES)) {
+    for (const label of CATEGORIES[category]) {
+      // Through the group, so any surface form of a listed requirement
+      // resolves to the same category its canonical name does.
+      const group = groupOf(label);
+      const key = tight(group ? group[0] : label);
+      if (key && !_CATEGORY_OF.has(key)) _CATEGORY_OF.set(key, category);
+    }
+  }
+
+  /** The skills-block category this term belongs to, or null. */
+  function categoryOf(term) {
+    const group = groupOf(term);
+    const label = group ? group[0] : String(term == null ? '' : term);
+    return _CATEGORY_OF.get(tight(label)) || null;
+  }
+
   global.KeywordTaxonomy = {
     norm, tight, canonical, keyOf, groupOf, variantsOf, appearsIn, dedupe,
     measure, stripQualifiers, GROUPS, impliedIn, IMPLIED_BY,
+    categoryOf, CATEGORIES,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.KeywordTaxonomy;
 })(typeof window !== 'undefined' ? window : globalThis);

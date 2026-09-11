@@ -46,11 +46,14 @@ const CV = ['Maxmilliam Okafor', 'Manager, Payroll Operations', 'Dublin, Ireland
   'PROJECTS', 'SignalDesk Python, FastAPI',
   '- Streams live financial news through an LLM.'].join('\n');
 
-// His profile: one degree with no years saved at all, one with both.
+// A profile with one degree that has no years saved at all and one
+// that has both. The names here are invented: a test fixture must never
+// be mistaken for anybody's real record, and reading one back as though
+// it were is exactly the confusion to avoid.
 const PROFILE = { education: [
-  { institution: 'Imperial College London', degree: 'MSc Computing',
+  { institution: 'Northgate University', degree: 'MSc Computing',
     field_of_study: 'Computer Science', start_year: '', end_year: '' },
-  { institution: 'University of Manchester', degree: 'BSc Computer Science',
+  { institution: 'Riverside College', degree: 'BSc Computer Science',
     field_of_study: 'Computer Science', start_year: '2014', end_year: '2017' }] };
 
 const fixed = popup.ensureEducationSection(CV, PROFILE);
@@ -59,11 +62,11 @@ console.log('THE SECTION COMES BACK');
 {
   t('  the shipped CV really had none', !/^EDUCATION$/m.test(CV), 'the premise is wrong');
   t('  ...and now it does', /^EDUCATION$/m.test(fixed), 'still missing');
-  for (const want of ['Imperial College London', 'MSc Computing',
-    'University of Manchester', 'BSc Computer Science']) {
+  for (const want of ['Northgate University', 'MSc Computing',
+    'Riverside College', 'BSc Computer Science']) {
     t('    ' + want.padEnd(26) + ' is on the page', fixed.indexOf(want) !== -1, 'dropped');
   }
-  t('  the years that exist are shown', /University of Manchester 2014 - 2017/.test(fixed),
+  t('  the years that exist are shown', /Riverside College 2014 - 2017/.test(fixed),
     'dates lost');
 }
 
@@ -74,10 +77,10 @@ console.log('\nAND A DEGREE WITH NO YEARS IS STILL A DEGREE');
   t('  no undefined reaches the document', !/undefined|null|NaN/.test(fixed),
     fixed.slice(fixed.indexOf('EDUCATION')));
   t('  ...and the entry is kept anyway',
-    /Imperial College London\s*\n\s*MSc Computing/.test(fixed),
+    /Northgate University\s*\n\s*MSc Computing/.test(fixed),
     fixed.slice(fixed.indexOf('EDUCATION')));
   t('  ...with no empty date separator left behind',
-    !/Imperial College London\s+-\s*$/m.test(fixed), 'a dangling dash');
+    !/Northgate University\s+-\s*$/m.test(fixed), 'a dangling dash');
 }
 
 console.log('\nTHE SUBJECT IS NOT NAMED TWICE');
@@ -103,7 +106,7 @@ console.log('\nIT NEVER RUNS TWICE, AND NEVER INVENTS');
     popup.ensureEducationSection(fixed, PROFILE) === fixed, 'a second section was added');
   t('  ...including one written as ACADEMIC QUALIFICATIONS',
     popup.ensureEducationSection(CV + '\n\nACADEMIC QUALIFICATIONS\nUCD\nBSc Physics',
-      PROFILE).indexOf('Imperial') === -1, 'duplicated under a second heading');
+      PROFILE).indexOf('Northgate') === -1, 'duplicated under a second heading');
   t('  a profile with no education adds nothing',
     popup.ensureEducationSection(CV, { education: [] }) === CV, 'something was invented');
   t('  ...and neither does a missing profile',
@@ -118,21 +121,28 @@ console.log('\nAND A DEGREE IS NOT READ AS A SECOND UNIVERSITY');
   // made every other line its own entry, so a CV written the ordinary
   // way rendered as two schools with no qualification between them.
   const parsed = OR.parseEducationText(
-    'Imperial College London\nMSc Computing\n\nUniversity of Manchester 2014 - 2017\n'
+    'Northgate University\nMSc Computing\n\nRiverside College 2014 - 2017\n'
     + 'BSc Computer Science');
   t('  four lines are two degrees', parsed.length === 2,
     parsed.length + ': ' + JSON.stringify(parsed));
-  t('  ...each with its institution', parsed[0].institution === 'Imperial College London'
-    && parsed[1].institution === 'University of Manchester',
+  t('  ...each with its institution', parsed[0].institution === 'Northgate University'
+    && parsed[1].institution === 'Riverside College',
     JSON.stringify(parsed.map((e) => e.institution)));
   t('  ...and its qualification', parsed[0].degree === 'MSc Computing'
     && parsed[1].degree === 'BSc Computer Science',
     JSON.stringify(parsed.map((e) => e.degree)));
   t('  the trailing years become dates, not part of the name',
     parsed[1].dates === '2014 - 2017', JSON.stringify(parsed[1]));
+  // Allowing any capitalised word in front of the year turned
+  // "Riverside College 2014 - 2017" into the institution "Riverside"
+  // with the dates "College 2014 - 2017". Only an actual month counts.
   t('  ...and a place name is not mistaken for a month',
-    parsed[1].institution.indexOf('Manchester') !== -1,
-    'the institution was truncated at a capitalised word');
+    parsed[1].institution === 'Riverside College', JSON.stringify(parsed[1].institution));
+  const monthly = OR.parseEducationText('Northgate University August 2020 - June 2021\n'
+    + 'MSc Artificial Intelligence and Machine Learning');
+  t('  ...while a real month-year range still parses',
+    monthly.length === 1 && monthly[0].institution === 'Northgate University'
+      && monthly[0].dates === 'August 2020 - June 2021', JSON.stringify(monthly));
 
   const piped = OR.parseEducationText('Trinity College Dublin | BA History | 2010 - 2013 | 2:1');
   t('  the pipe form still works', piped.length === 1 && piped[0].degree === 'BA History'
@@ -152,7 +162,7 @@ console.log('\nAND IT SURVIVES THE PDF PIPELINE');
   const rendered = OR.generateCVText(structured);
   t('  the delivered document has an education section',
     /\nEDUCATION\n/.test(rendered), 'lost between the CV text and the PDF');
-  for (const want of ['Imperial College London', 'University of Manchester',
+  for (const want of ['Northgate University', 'Riverside College',
     'BSc Computer Science']) {
     t('    ' + want.padEnd(26) + ' reaches the file', rendered.indexOf(want) !== -1, 'dropped');
   }

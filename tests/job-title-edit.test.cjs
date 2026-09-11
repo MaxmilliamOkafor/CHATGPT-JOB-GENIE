@@ -33,7 +33,12 @@ for (const f of files) {
   if (!called.size) continue;
   const defined = new Set();
   // class / object-literal shorthand, `name: function(`, and `this.name =`
-  for (const m of src.matchAll(/^\s{2,8}(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) defined.add(m[1]);
+  //
+  // `static` has to be allowed here. Inside one static method `this` is
+  // the CLASS, so `this.otherStatic()` is an ordinary call -- and with
+  // the prefix unmatched, every such method read as undefined while the
+  // real definition sat a few lines above it.
+  for (const m of src.matchAll(/^\s{2,8}(?:static\s+)?(?:async\s+)?([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/gm)) defined.add(m[1]);
   for (const m of src.matchAll(/^\s{2,8}([A-Za-z_$][\w$]*)\s*:\s*(?:async\s*)?(?:function)?\s*[(a-zA-Z]/gm)) defined.add(m[1]);
   for (const m of src.matchAll(/(?:this|[A-Za-z_$][\w$]*\.prototype)\.([A-Za-z_$][\w$]*)\s*=/g)) defined.add(m[1]);
   const missing = [...called].filter((n) => !defined.has(n));
