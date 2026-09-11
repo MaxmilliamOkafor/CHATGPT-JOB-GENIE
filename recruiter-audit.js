@@ -3218,6 +3218,84 @@
   }
 
 
+  // ── A SUMMARY THAT IS TRUE, CHECKABLE, AND STILL NOT ENGLISH ────────
+  //
+  // The two tests in repairSummary judge CONTENT: does it claim a
+  // profession the history does not hold, and does it say anything a
+  // screener can check. A sentence can pass both and still be
+  // unreadable, and one did, on a live application:
+  //
+  //   "AI Product Manager working across compliance and end-to-end.
+  //    Impression reporting, cutting the overnight run from six hours
+  //    to under one hour; replaced a 40-tab Excel reporting pack with
+  //    a Power BI and Tableau suite."
+  //
+  // Every fact in it is true and it carries three figures, so neither
+  // test fired. It is still the first thing a recruiter reads, and
+  // "working across compliance and end-to-end" has no object while
+  // "Impression reporting, cutting the overnight run" has no verb.
+  //
+  // The checks below are deliberately narrow, because the accepted CV
+  // voice IS elliptical. "Software engineer with nine years across
+  // three employers." has no finite verb and is correct. "Trained 24
+  // analysts in SQL and Power BI." has no subject and is correct. Only
+  // these three shapes are faults.
+
+  // A modifier standing where a noun is required: "across compliance
+  // and end-to-end", "with day-to-day". Closed and dull on purpose --
+  // these are the words this generator actually reaches for.
+  const _DANGLING_MODIFIER = /\b(?:and|across|with|in|on|for|through|of)\s+(?:the\s+)?(?:end[-\s]?to[-\s]?end|day[-\s]?to[-\s]?day|cross[-\s]?functional|best[-\s]?in[-\s]?class|hands[-\s]?on|fast[-\s]?paced|high[-\s]?level|full[-\s]?stack|end[-\s]?user)\s*(?=[.,;:]|$)/i;
+
+  // Verbs a CV summary actually uses in a finite form. A clause with a
+  // gerund and none of these has no verb at all.
+  //
+  // The present-tense entries are -s FORMS ONLY. "Run", "lead", "build",
+  // "hold", "cover" and "drive" are all ordinary nouns, and accepting
+  // the bare form meant "cutting the overnight run" contained a verb:
+  // the verbless test then passed the exact sentence it was written
+  // for. A bare present-tense verb needs a plural subject, which this
+  // elliptical voice almost never has.
+  const _FINITE_VERB = /\b(?:is|are|was|were|has|have|had|will|would|can|could|does|do|did|brings|holds|leads|runs|owns|builds|delivers|manages|supports|drives|spans|covers|combines|specialises|specializes|built|led|ran|delivered|rebuilt|replaced|trained|automated|reduced|raised|designed|developed|managed|owned|established|authored|chaired|mentored|integrated|defined|collected|redesigned|architected|acted|held|rewrote|shipped|launched|migrated|introduced|negotiated|resolved|improved|created|produced|maintained|coordinated|oversaw)\b/i;
+
+  /**
+   * A clause whose only verb is a participle: "Impression reporting,
+   * cutting the overnight run from six hours to under one hour".
+   *
+   * Requires the noun-phrase-then-participle shape AND the absence of
+   * any finite verb, so an ordinary sentence that merely contains a
+   * gerund is untouched.
+   */
+  function _isVerbless(clause) {
+    const s = String(clause || '').trim();
+    if (!s) return false;
+    if (_FINITE_VERB.test(s)) return false;
+    return /^[A-Z][A-Za-z]*(?:\s+[A-Za-z]+){0,4},\s+\w+ing\b/.test(s);
+  }
+
+  /**
+   * Is this summary ungrammatical in one of the ways that recur?
+   *
+   * Clauses are split on semicolons as well as sentence ends, because
+   * the fault in the reported summary was the half BEFORE the
+   * semicolon: "Impression reporting, cutting the overnight run ...;
+   * replaced a 40-tab Excel pack". The second half is a fine CV clause
+   * and carried a finite verb, which hid the fragment in front of it.
+   *
+   * A semicolon is NOT itself a fault. "Cut the month-end close from
+   * nine working days to three; rebuilt the credit risk suite" is
+   * parallel ellipsis, which is how a strong summary is written, and is
+   * exactly what the rebuilder below composes on purpose.
+   */
+  function summaryReadsBroken(sentence) {
+    const s = String(sentence || '').trim();
+    if (!s) return '';
+    if (_DANGLING_MODIFIER.test(s)) return 'dangling';
+    for (const clause of s.split(/(?<=[.!?])\s+|;\s+/)) {
+      if (_isVerbless(clause)) return 'verbless';
+    }
+    return '';
+  }
+
   const _MONTHS_RE = '(?:January|February|March|April|May|June|July|August|September'
     + '|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)';
   const _STARTS_WITH_DATE = new RegExp('^\\s*(?:' + _MONTHS_RE + '\\b|\\d{1,2}[/-]|(?:19|20)\\d{2}\\b)', 'i');
@@ -3345,11 +3423,31 @@
     // output and rebuilding it from scratch, every time.
     const hollow = !/\d/.test(current) && !_SPELLED_NUMBER.test(current);
 
-    if (!untrue && !hollow) return { text, rebuilt: false };
+    // (c) Is it English? True and checkable is not the same as readable,
+    // and the summary that prompted this was both and neither.
+    const broken = summaryReadsBroken(current);
+
+    if (!untrue && !hollow && !broken) return { text, rebuilt: false };
 
     // ---- rebuild, from this document and nothing else ---------------
+    // THE OVERLAP HAS TO BE ON A WORD THAT MEANS SOMETHING.
+    //
+    // A payroll posting is "Manager, Payroll Operations", and the only
+    // held title sharing a word with it was "AI Product Manager" --
+    // matched on "manager", which half the job titles in the world
+    // contain. The summary then opened by calling an engineer an AI
+    // product manager on a payroll application, and paired it with an
+    // achievement from a different role entirely.
+    //
+    // A rank word is not evidence of a match. With none left to match
+    // on, the lead stays the CURRENT role, which is the conventional
+    // choice and the one a reader expects.
+    const GENERIC_TITLE_WORD = new Set(['manager', 'senior', 'junior', 'lead', 'principal',
+      'staff', 'head', 'chief', 'director', 'officer', 'specialist', 'associate',
+      'assistant', 'executive', 'consultant', 'analyst', 'engineer', 'coordinator',
+      'administrator', 'supervisor', 'team', 'global', 'group', 'deputy']);
     const target = normaliseJobTitle(o.jdTitle || '');
-    const targetWords = wordsOf(target);
+    const targetWords = wordsOf(target).filter((w) => !GENERIC_TITLE_WORD.has(w));
     const overlap = (s) => wordsOf(s).filter((w) => targetWords.indexOf(w) !== -1).length;
     let lead = held[0];
     let best = 0;
@@ -3672,11 +3770,17 @@
     const substantial = rebuilt.length >= 100
       && (/\d/.test(rebuilt) || _SPELLED_NUMBER.test(rebuilt));
     if (!substantial) return { text, rebuilt: false, couldNotImprove: true };
+    // And the replacement has to be English itself. A rebuild that
+    // trips the same reading tests is not an improvement on a sentence
+    // that trips them, however true its facts are.
+    if (summaryReadsBroken(rebuilt)) {
+      return { text, rebuilt: false, couldNotImprove: true };
+    }
 
     lines[at + 1] = rebuilt;
     return {
       text: lines.join('\n'), rebuilt: true,
-      reason: untrue ? 'untrue' : 'hollow',
+      reason: untrue ? 'untrue' : (broken || 'hollow'),
       claimed: untrue, was: current, now: rebuilt,
     };
   }
@@ -7406,7 +7510,7 @@
     ensureCitizenshipLine,
     normaliseSkillLabels,
     sanitiseSkillsSection,
-    echoJobTitle, normaliseJobTitle, scrubRawTitle, repairSummary, _historyFacts, scoreSevenFilters, summaryNamesAnotherProfession, sortExperienceByStartDate,
+    echoJobTitle, normaliseJobTitle, scrubRawTitle, repairSummary, _historyFacts, scoreSevenFilters, summaryNamesAnotherProfession, summaryReadsBroken, sortExperienceByStartDate,
     firstSixSecondsCheck,
     // v2
     stripFillers,
