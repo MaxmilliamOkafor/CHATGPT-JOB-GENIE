@@ -5930,15 +5930,15 @@ class ATSTailor {
       } else if (field && !degree) {
         degree = field;
       }
-      // A degree with no years is still a degree. Blank year fields are
-      // common and must not produce "undefined - undefined".
-      const start = str(row.start_year || row.startYear || row.start_date || row.from);
-      const end = str(row.end_year || row.endYear || row.graduation_year
-        || row.graduationYear || row.end_date || row.to);
-      let dates = str(row.dates || row.date_range || row.dateRange);
-      if (!dates) dates = start && end ? `${start} - ${end}` : (end || start || '');
+      // NO DATES. A graduation year is an age proxy, and the whole
+      // point of the summary work was to keep the levers a reader
+      // judges on off the page. The years stay in the PROFILE, where
+      // autofill reads them for application forms that demand one
+      // (autofill-core.js takes graduation_year from the education row,
+      // never from this text), so nothing is lost by leaving them off
+      // the document a human reads.
       if (!school && !degree) continue;
-      lines.push([school, dates].filter(Boolean).join(' '));
+      if (school) lines.push(school);
       if (degree) lines.push(degree);
       const grade = str(row.grade || row.gpa || row.classification || row.honours);
       if (grade) lines[lines.length - 1] += ', ' + grade;
@@ -5950,6 +5950,70 @@ class ATSTailor {
     console.warn('[ATS Tailor] The tailored CV had no EDUCATION section; rebuilt '
       + rows.length + ' entry(ies) from your saved profile.');
     return text.replace(/\s*$/, '') + '\n\nEDUCATION\n' + lines.join('\n') + '\n';
+  }
+
+  // ██ A GRADUATION YEAR IS AN AGE PROXY ██
+  //
+  // Rebuilding the section without dates only covers the case where the
+  // section was missing. When the tailoring service DOES return one it
+  // writes the years it finds, and the same exposure is back on the
+  // page through the other door.
+  //
+  // This is the same principle the summary work settled on: keep off
+  // the document the things a reader forms a prior from before reading
+  // the substance. Employment dates stay, because a reader needs the
+  // shape of a career and their absence is conspicuous; a degree year
+  // carries no information a recruiter needs and dates the candidate to
+  // within a year or two.
+  //
+  // Only inside the EDUCATION section. Nothing else on the page is
+  // touched.
+  stripEducationDates(cvText) {
+    const text = String(cvText == null ? '' : cvText);
+    if (!text.trim()) return text;
+    const lines = text.split('\n');
+    const isHeading = (l) => /^[A-Z][A-Z\s&/'-]{2,40}$/.test(String(l || '').trim());
+    const EDU = /^(EDUCATION|ACADEMIC (?:BACKGROUND|QUALIFICATIONS|HISTORY)|EDUCATIONAL QUALIFICATIONS|QUALIFICATIONS)\s*:?\s*$/i;
+
+    const MONTH = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*';
+    const YEAR = '(?:(?:' + MONTH + ')\\s+)?(?:19|20)\\d{2}';
+    const RANGE = YEAR + '(?:\\s*[-–—to]+\\s*(?:' + YEAR + '|Present|Current|Date))?';
+    const TRAILING = new RegExp('[\\s,|•-]*\\b' + RANGE + '\\s*$', 'i');
+    const ONLY = new RegExp('^[\\s,|•-]*' + RANGE + '[\\s,|.]*$', 'i');
+
+    let inEdu = false;
+    let changed = false;
+    const out = [];
+    for (const raw of lines) {
+      const line = String(raw == null ? '' : raw);
+      const trimmed = line.trim();
+      if (EDU.test(trimmed)) { inEdu = true; out.push(line); continue; }
+      if (inEdu && isHeading(trimmed) && !EDU.test(trimmed)) { inEdu = false; out.push(line); continue; }
+      if (!inEdu || !trimmed) { out.push(line); continue; }
+
+      // "Class of 2019" and a bare year line say the same thing.
+      if (ONLY.test(trimmed) || /^class of\s+(?:19|20)\d{2}\.?$/i.test(trimmed)) {
+        changed = true;
+        continue;
+      }
+      let next = line.replace(/\bclass of\s+(?:19|20)\d{2}/gi, '');
+      // Repeat: "UCD | BSc Physics | 2014 - 2017" has the range at the
+      // end, and taking it off can expose another.
+      for (let i = 0; i < 3; i++) {
+        const shorter = next.replace(TRAILING, '');
+        if (shorter === next) break;
+        next = shorter;
+      }
+      next = next.replace(/[\s,|•-]+$/, '').replace(/\s{2,}/g, ' ');
+      if (next !== line) changed = true;
+      if (next.trim()) out.push(next);
+      else changed = true;
+    }
+    if (!changed) return text;
+    console.warn('[ATS Tailor] Removed graduation dates from the education section: a '
+      + 'graduation year is an age proxy, and the years remain in your profile for '
+      + 'application forms that ask for one.');
+    return out.join('\n');
   }
 
   /**
@@ -7076,6 +7140,11 @@ class ATSTailor {
       // a document with no education in it at all. Restored from the
       // profile, which is where the degrees actually live.
       this.generatedDocuments.cv = this.ensureEducationSection(this.generatedDocuments.cv, p);
+
+      // And whichever door the section came in through, it leaves
+      // without graduation years. They stay in the profile, where
+      // autofill reads them for forms that demand one.
+      this.generatedDocuments.cv = this.stripEducationDates(this.generatedDocuments.cv);
 
       // CLOSE THE COVERAGE GAP WITH THINGS THE PROFILE ALREADY PROVES.
       //

@@ -66,8 +66,13 @@ console.log('THE SECTION COMES BACK');
     'Riverside College', 'BSc Computer Science']) {
     t('    ' + want.padEnd(26) + ' is on the page', fixed.indexOf(want) !== -1, 'dropped');
   }
-  t('  the years that exist are shown', /Riverside College 2014 - 2017/.test(fixed),
-    'dates lost');
+  // The years are NOT shown, even when the profile has them. A
+  // graduation year is an age proxy; it stays on the profile for the
+  // application forms that demand one. See
+  // a-graduation-year-is-an-age-proxy.test.cjs.
+  t('  ...and no graduation year is printed',
+    !/(?:19|20)\d{2}/.test(fixed.slice(fixed.indexOf('EDUCATION'))),
+    fixed.slice(fixed.indexOf('EDUCATION')));
 }
 
 console.log('\nAND A DEGREE WITH NO YEARS IS STILL A DEGREE');
