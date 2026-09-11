@@ -13,26 +13,11 @@
    * @returns {Object} Score details with matched/missing keywords
    */
   function calculateDynamicMatch(cvText, jobKeywords) {
-    if (!cvText || !jobKeywords || jobKeywords.length === 0) {
-      return {
-        score: 0,
-        matched: [],
-        missing: jobKeywords || [],
-        matchCount: 0,
-        totalKeywords: jobKeywords?.length || 0
-      };
-    }
-
-    // A REQUIREMENT, NOT A STRING.
-    //
-    // Counting distinct strings made the same requirement count twice
-    // whenever the posting used two words for it -- "Linux systems"
-    // beside "Linux", "AI building" beside "AI", "GitLab CI" beside
-    // "GitHub Actions" -- and marked a CV missing "PostgreSQL" because
-    // it says "Postgres". Both faults are the same one: the string was
-    // being treated as the thing. KeywordTaxonomy resolves each term to
-    // the requirement behind it, so the denominator counts requirements
-    // and the CV is searched for every way of writing each.
+    jobKeywords = [...new Map((Array.isArray(jobKeywords) ? jobKeywords : [])
+      .filter(k => typeof k === 'string' && k.trim())
+      .map(k => [k.normalize('NFKC').trim().toLowerCase(), k.trim()])).values()];
+    cvText = typeof cvText === 'string' ? cvText : '';
+    // Genuine aliases share a requirement; distinct tools keep their own entries.
     const TX = (typeof global !== 'undefined' && global.KeywordTaxonomy)
       || (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
     if (TX && typeof TX.measure === 'function') {
@@ -287,3 +272,4 @@
   };
 
 })(typeof window !== 'undefined' ? window : global);
+

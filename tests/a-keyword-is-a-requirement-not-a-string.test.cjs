@@ -5,13 +5,12 @@
 // the same fault, and it was not the CV's:
 //
 //   PostgreSQL    x   the CV says "Postgres"
-//   GitLab CI     x   the CV says "GitLab"
 //   Linux systems x   the CV says "Linux"
 //   observability x   the CV says "observability tooling"
 //
 // The denominator was wrong too. Thirty-three "keywords" counted
-// "Linux systems" AND "Linux", "AI" AND "AI building", "GitLab CI" AND
-// "GitHub Actions" -- one requirement counted two and three times in
+// "Linux systems" AND "Linux", "AI" AND "AI building" -- one
+// requirement counted two and three times in
 // whatever words that posting happened to use. A percentage over a list
 // like that measures the job description's vocabulary, not the CV.
 //
@@ -54,7 +53,6 @@ const CV = [
 console.log('THE REPORTED MISSES');
 for (const [term, why] of [
   ['PostgreSQL', 'the CV says Postgres'],
-  ['GitLab CI', 'the CV says GitLab'],
   ['Linux systems', 'the CV says Linux'],
   ['Cloud cost management', 'the CV says cost optimisation'],
   ['observability', 'the CV has an Observability line'],
@@ -72,6 +70,8 @@ for (const [text, term] of [
   ['Worked on Google Ads', 'Go'],
   ['Ran the Postgres upgrade', 'MySQL'],
   ['Deployed with Docker', 'Kubernetes'],
+  ['GitLab repository hosting', 'GitLab CI'],
+  ['Git version control', 'GitHub Actions'],
 ]) {
   t('  "' + text + '" does not satisfy ' + term, !TX.appearsIn(text, term), 'a false match');
 }
@@ -101,10 +101,10 @@ console.log('\nONE ENTRY PER REQUIREMENT, UNDER ITS CANONICAL NAME');
     'SRE', 'site reliability engineering', 'PostgreSQL', 'Postgres',
     'Cloud cost management', 'FinOps'];
   const entries = TX.dedupe(asked);
-  t('  twelve strings are six requirements', entries.length === 6,
+  t('  twelve strings are seven requirements', entries.length === 7,
     entries.length + ': ' + entries.map((e) => e.label).join(', '));
   const labels = entries.map((e) => e.label);
-  for (const want of ['Linux', 'AI', 'Git', 'SRE', 'PostgreSQL', 'Cloud Cost Management']) {
+  for (const want of ['Linux', 'AI', 'GitLab CI', 'GitHub Actions', 'SRE', 'PostgreSQL', 'Cloud Cost Management']) {
     t('  ...one of them is "' + want + '"', labels.indexOf(want) !== -1, labels.join(', '));
   }
   t('  and the chip shows the canonical name, not the posting\'s phrasing',
@@ -152,12 +152,12 @@ console.log('\nTHE GAUGE COUNTS REQUIREMENTS, NOT STRINGS');
   const asked = ['Kubernetes', 'AWS', 'PostgreSQL', 'CI/CD', 'Terraform', 'Docker',
     'Linux systems', 'Linux', 'GitLab CI', 'GitHub Actions', 'Elixir', 'Clojure'];
   const r = DS.calculateDynamicMatch(CV, asked);
-  t('  twelve strings measured as ten requirements', r.totalKeywords === 10,
+  t('  twelve strings measured as eleven requirements', r.totalKeywords === 11,
     r.totalKeywords + ': ' + r.matched.concat(r.missing).join(', '));
-  t('  ...eight of them on the CV', r.matchCount === 8, r.matchCount + ' / ' + r.totalKeywords);
-  t('  ...so the gauge reads 80%', r.score === 80, r.score + '%');
-  t('  and the two genuinely absent ones are named',
-    r.missing.length === 2 && r.missing.indexOf('Elixir') !== -1 && r.missing.indexOf('Clojure') !== -1,
+  t('  ...seven of them on the CV', r.matchCount === 7, r.matchCount + ' / ' + r.totalKeywords);
+  t('  ...so the gauge reads 64%', r.score === 64, r.score + '%');
+  t('  and the four absent tools are named',
+    r.missing.length === 4 && r.missing.includes('GitLab CI') && r.missing.includes('GitHub Actions') && r.missing.indexOf('Elixir') !== -1 && r.missing.indexOf('Clojure') !== -1,
     JSON.stringify(r.missing));
 }
 
@@ -194,3 +194,4 @@ console.log('\nAND NOTHING HERE IS SOMEBODY ELSE\'S FILE');
 
 console.log('\n' + PASS + ' passed, ' + FAIL + ' failed');
 process.exit(FAIL ? 1 : 0);
+

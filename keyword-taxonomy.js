@@ -102,14 +102,15 @@
 
     // --- devops / platform --------------------------------------------
     ['Kubernetes', 'K8s'],
-    ['Docker', 'Containerisation', 'Containerization', 'Containers'],
+    ['Docker'], ['Containerisation', 'Containerization', 'Containers'],
     ['Terraform'], ['Pulumi'], ['Ansible'], ['Chef'], ['Puppet'], ['Helm'],
     ['Infrastructure as Code', 'IaC'],
     ['CI/CD', 'CI', 'CD', 'CICD', 'Continuous Integration',
       'Continuous Delivery', 'Continuous Deployment',
       'Continuous Integration and Deployment'],
-    ['Git', 'GitHub', 'GitLab', 'Bitbucket', 'GitHub Actions', 'GitLab CI',
-      'GitLab CI/CD', 'Version Control', 'Source Control'],
+    ['Git'], ['GitHub'], ['GitLab'], ['Bitbucket'],
+    ['GitHub Actions'], ['GitLab CI', 'GitLab CI/CD'],
+    ['Version Control', 'Source Control'],
     ['Jenkins'], ['CircleCI'], ['ArgoCD', 'Argo CD'], ['Spinnaker'],
     ['Linux', 'Linux/Unix', 'Unix', 'Linux Kernel'],
     ['Nginx'], ['Apache'], ['Kafka', 'Apache Kafka'], ['RabbitMQ'],
@@ -134,7 +135,8 @@
     ['Machine Learning', 'ML'],
     ['Deep Learning'], ['NLP', 'Natural Language Processing'],
     ['LLM', 'Large Language Models', 'GenAI', 'Generative AI'],
-    ['Data Engineering', 'Data Pipelines', 'ETL', 'ELT'],
+    ['Data Engineering'], ['Data Pipelines', 'Data Pipeline'],
+    ['ETL', 'Extract Transform Load'], ['ELT', 'Extract Load Transform'],
     ['Data Analysis', 'Data Analytics', 'Analytics'],
     ['Data Science'], ['Data Modelling', 'Data Modeling'],
     ['Data Warehousing', 'Data Warehouse'],
@@ -208,8 +210,8 @@
     ['Vendor Management', 'Supplier Management', 'Third Party Management'],
     ['SLA Management', 'Service Levels', 'Service Level Agreements'],
     ['KPI', 'KPIs', 'Key Performance Indicators', 'Metrics', 'Performance Metrics'],
-    ['Continuous Improvement', 'Process Improvement', 'Operational Excellence',
-      'Process Optimisation', 'Process Optimization', 'Lean', 'Six Sigma'],
+    ['Continuous Improvement', 'Process Improvement', 'Process Optimisation', 'Process Optimization'],
+    ['Operational Excellence'], ['Lean'], ['Six Sigma'],
     ['Escalation Management', 'Issue Resolution', 'Operational Resolution',
       'Query Resolution', 'Case Management'],
     ['Performance Management', 'Performance Reviews', 'Performance Feedback',
@@ -401,7 +403,19 @@
     const haystack = String(text == null ? '' : text).normalize('NFKC');
     if (!haystack) return false;
     for (const form of variantsOf(term)) {
-      if (formPattern(form).test(haystack)) return true;
+      const pattern = formPattern(form);
+      const occurrences = new RegExp(pattern.source, 'giu');
+      for (const match of haystack.matchAll(occurrences)) {
+        const before = haystack.slice(0, match.index);
+        const clause = before.slice(Math.max(before.lastIndexOf('\n'), before.lastIndexOf('.'), before.lastIndexOf(';'), before.lastIndexOf('!'), before.lastIndexOf('?')) + 1);
+        // Scope negative experience statements, not unrelated results such as
+        // "without downtime using Docker" or "not only Python".
+        const scope = clause.split(/\b(?:but|however|although)\b/i).pop();
+        const negativeExperience = /\b(?:no|without|zero|lacking)\s+(?:(?:prior|direct|professional|hands-on)\s+)?(?:experience|knowledge|exposure|proficiency|familiarity)\b[^.!?;]{0,100}$/i;
+        const negativeUse = /\b(?:not|never)\s+(?:(?:directly|previously|personally|yet)\s+)*(?:worked|used|implemented|built|learned|worked with)\b[^.!?;]{0,100}$/i;
+        const directNegation = /\b(?:no|neither|nor|without)\s*$/i;
+        if (!negativeExperience.test(scope) && !negativeUse.test(scope) && !directNegation.test(scope)) return true;
+      }
     }
     return false;
   }
@@ -413,7 +427,8 @@
   function dedupe(terms) {
     const seen = new Map();
     for (const raw of (Array.isArray(terms) ? terms : [])) {
-      const term = String(raw == null ? '' : raw).trim();
+      if (typeof raw !== 'string') continue;
+      const term = raw.trim();
       if (!term) continue;
       const key = keyOf(term);
       if (seen.has(key)) { seen.get(key).asked.push(term); continue; }
@@ -444,3 +459,4 @@
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.KeywordTaxonomy;
 })(typeof window !== 'undefined' ? window : globalThis);
+
