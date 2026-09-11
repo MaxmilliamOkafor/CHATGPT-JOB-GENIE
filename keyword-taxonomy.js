@@ -527,7 +527,42 @@
     'Data Warehousing': ['Snowflake', 'Redshift', 'BigQuery', 'data warehouse'],
     'Mentorship': ['mentored', 'coached', 'onboarded', 'trained', 'apprentice'],
     'Leadership': ['led the', 'chaired', 'headed', 'ran the team', 'line managed'],
-    'Stakeholder Management': ['stakeholder', 'business partner', 'client CTO', 'steering'],
+    'Stakeholder Management': ['stakeholder', 'business partner', 'client CTO', 'steering',
+      'chaired', 'review board', 'for a regulated', 'presented to', 'senior leadership',
+      'executive', 'business users'],
+    // Work done WITH other teams is collaboration; a posting asking for
+    // it is not asking for the word. "Across four teams" on its own is
+    // a count, not evidence, so it is not here.
+    'Collaboration': ['cross-team', 'cross team', 'cross-functional', 'with product',
+      'with design', 'partnered', 'paired', 'design documents', 'working group'],
+    'REST APIs': ['FastAPI', 'Flask', 'Express', 'Django REST', 'API endpoint', 'GraphQL',
+      'gRPC', 'OpenAPI', 'Swagger'],
+    'MLOps': ['MLflow', 'Evidently', 'model deployment', 'model registry', 'model monitoring',
+      'feature store', 'Kubeflow', 'SageMaker', 'model drift', 'concept drift', 'retrains'],
+    'Feature Engineering': ['XGBoost', 'scikit-learn', 'ranking model', 'model training',
+      'PyTorch', 'TensorFlow', 'SHAP'],
+    'Statistics': ['XGBoost', 'regression', 'A/B test', 'significance', 'forecasting',
+      'PyTorch', 'scikit-learn', 'credit risk', 'ranking model'],
+    'Data Modelling': ['Snowflake', 'Redshift', 'BigQuery', 'data warehouse', 'star schema',
+      'dimensional', 'ETL', 'dbt', 'reporting suite'],
+    'Data Quality': ['data drift', 'concept drift', 'reconciliation', 'validation',
+      'data accuracy', 'test coverage', 'Evidently', 'Great Expectations'],
+    'Business Analysis': ['reporting pack', 'business requirement', 'reporting suite',
+      'Power BI', 'Tableau', 'stakeholder', 'data request'],
+    'System Design': ['architected', 'architecture', 'design document', 'designed the',
+      'migration from a legacy', 'distributed'],
+    // Making a thing faster. "Cut the cycle time" is process work and
+    // belongs to Continuous Improvement, so it is not here.
+    'Performance Optimisation': ['latency', 'throughput', 'faster', 'optimis', 'optimiz',
+      'cached', 'query plan', 'profiling'],
+    'Security': ['access control', 'encryption', 'security architecture', 'authentication',
+      'authorisation', 'IAM', 'least privilege', 'threat model'],
+    // Reviewing a DESIGN DOCUMENT is not reviewing code, and chairing an
+    // architecture board is not either. Only the practice itself counts,
+    // which means this usually stays a genuine gap in the profile --
+    // where it can be fixed truthfully.
+    'Code Review': ['pull request', 'merge request', 'reviewed the code', 'peer review'],
+    'Agile': ['sprint', 'scrum', 'kanban', 'stand-up', 'standup', 'retro', 'iteration'],
     'Regulatory Reporting': ['regulatory', 'IFRS', 'statutory', 'regulator'],
     'Compliance': ['ISO 27001', 'HIPAA', 'GDPR', 'SOC 2', 'audit'],
     'Performance Management': ['performance review', 'appraisal', 'feedback', 'one to one', '1:1'],

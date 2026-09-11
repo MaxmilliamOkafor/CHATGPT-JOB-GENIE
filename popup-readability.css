@@ -62,3 +62,32 @@ button:disabled { opacity:.6; cursor:not-allowed; }
 
 /* Coverage gaps are neutral review items, not error states. */
 .priority-high .section-title,.priority-medium .section-title,.priority-low .section-title { color:var(--text-secondary); }
+
+/* ── The profile gap ───────────────────────────────────────────────────
+   Terms the posting asked for that the profile does not record. They
+   are not failures of the tailoring and must not read as red errors:
+   they are an invitation to complete the profile once. Amber, chips
+   that toggle, and a claimed one turns green like any other match. */
+.priority-gap { border-top: 1px solid rgba(148,163,184,0.18); padding-top: 10px; margin-top: 4px; }
+.priority-gap .section-title { color: #fcd34d; }
+.priority-gap .section-count {
+  color: #fcd34d; background: rgba(251,191,36,0.14);
+  border: 1px solid rgba(251,191,36,0.38); border-radius: 999px; padding: 1px 8px;
+}
+.gap-help {
+  color: var(--text-secondary); font-size: 12px; line-height: 1.45;
+  margin: 6px 0 8px;
+}
+.keyword-chip.gap {
+  color: #fcd34d; background: rgba(251,191,36,0.10);
+  border-color: rgba(251,191,36,0.38); cursor: pointer;
+}
+.keyword-chip.gap:hover { background: rgba(251,191,36,0.20); }
+.keyword-chip.gap.claimed {
+  color: #6ee7b7; background: rgba(16,185,129,0.16); border-color: rgba(16,185,129,0.50);
+}
+#claimGapBtn { margin-top: 10px; width: 100%; padding: 8px; }
+.gap-status {
+  display: block; margin-top: 8px; font-size: 12px; color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}

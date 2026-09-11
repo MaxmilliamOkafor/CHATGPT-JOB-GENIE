@@ -700,6 +700,26 @@
               </div>
               <div class="keyword-chips" id="lowPriorityChips"></div>
             </div>
+
+            <!-- THE ONLY THING LEFT BETWEEN A RUN AND FULL COVERAGE.
+                 Everything the saved profile evidences is already on the
+                 CV, so whatever is still missing is missing for one
+                 reason: the profile does not record it. Naming those
+                 terms in a console warning helped nobody. Claiming one
+                 here writes it to the profile, so the next posting that
+                 asks starts from a profile that already has it. -->
+            <div class="keyword-section priority-gap hidden" id="profileGapSection">
+              <div class="keyword-section-header">
+                <span class="section-title">Not on your profile</span>
+                <span class="section-count" id="profileGapCount">0</span>
+              </div>
+              <p class="gap-help">The posting asks for these and your profile does not record
+                them, so they were kept off the CV. Tick the ones you genuinely have; they are
+                saved to your profile and counted on every future application.</p>
+              <div class="keyword-chips" id="profileGapChips"></div>
+              <button id="claimGapBtn" class="btn-secondary" disabled>Add to my profile</button>
+              <span class="gap-status" id="profileGapStatus"></span>
+            </div>
           </div>
 
           <!-- Keyword Coverage Report -->

@@ -4635,6 +4635,135 @@ class ATSTailor {
       : 'No keywords available to measure.');
     set('keywordCountBadge', `${hits} of ${count} keywords matched`);
     set('matchPanelProvider', this.aiProvider === 'kimi' ? 'Kimi K2' : 'OpenAI');
+    // The gap section is the newest thing on this panel and the panel
+    // is on the tailoring flow's own stack. Nothing drawn here is worth
+    // failing a run for.
+    try {
+      if (typeof this.renderProfileGap === 'function') this.renderProfileGap();
+    } catch (e) {
+      console.warn('[ATS Tailor] profile gap render failed, tailoring continues:', e && e.message);
+    }
+  }
+
+  // ██ THE GAP THAT NO AMOUNT OF TAILORING CLOSES ██
+  //
+  // Measured across eight postings in his own field, the coverage pass
+  // put every term the profile could support onto the CV and still
+  // stopped short -- on Linux, code review, Agile, dbt, Ansible. Not a
+  // matching fault: those words appear nowhere in the profile, and
+  // writing them anyway is inventing experience.
+  //
+  // So the ceiling is the profile, and the profile is a one-time cost
+  // paid once per missing skill. This turns the console warning into
+  // the fix: tick what you have, it is saved, and every posting from
+  // then on counts it. A handful of applications and the gap is gone.
+  renderProfileGap() {
+    const section = document.getElementById('profileGapSection');
+    const chips = document.getElementById('profileGapChips');
+    const btn = document.getElementById('claimGapBtn');
+    if (!section || !chips) return;
+
+    // Only what is STILL absent. A term the generator managed to place
+    // after the injection pass is on the CV, and asking for it back
+    // would be asking twice for something already done.
+    const stillMissing = new Set((this.generatedDocuments?.missingKeywords || [])
+      .map((k) => String(k == null ? '' : k).trim().toLowerCase()));
+    const gap = (Array.isArray(this._unevidencedKeywords) ? this._unevidencedKeywords : [])
+      .map((k) => String(k == null ? '' : k).trim())
+      .filter((k) => k && (!stillMissing.size || stillMissing.has(k.toLowerCase())));
+    if (!gap.length) { section.classList.add('hidden'); return; }
+
+    section.classList.remove('hidden');
+    const countEl = document.getElementById('profileGapCount');
+    if (countEl) countEl.textContent = String(gap.length);
+    this._claimedGapTerms = this._claimedGapTerms instanceof Set ? this._claimedGapTerms : new Set();
+
+    chips.innerHTML = gap.map((term) => {
+      const on = this._claimedGapTerms.has(term);
+      return `<button type="button" class="keyword-chip gap${on ? ' claimed' : ''}" `
+        + `data-gap-term="${this.escapeHtml(term)}" aria-pressed="${on}">`
+        + `${on ? '✓' : '+'} ${this.escapeHtml(term)}</button>`;
+    }).join('');
+
+    chips.querySelectorAll('[data-gap-term]').forEach((el) => {
+      el.addEventListener('click', () => {
+        const term = el.getAttribute('data-gap-term');
+        if (this._claimedGapTerms.has(term)) this._claimedGapTerms.delete(term);
+        else this._claimedGapTerms.add(term);
+        this.renderProfileGap();
+      });
+    });
+
+    if (btn) {
+      btn.disabled = this._claimedGapTerms.size === 0;
+      btn.textContent = this._claimedGapTerms.size
+        ? `Add ${this._claimedGapTerms.size} to my profile`
+        : 'Add to my profile';
+      btn.onclick = () => this.claimProfileGap();
+    }
+  }
+
+  /**
+   * Write the claimed terms into the saved profile's skills.
+   *
+   * Additive and de-duplicated against what is already there, through
+   * the same taxonomy the matcher uses -- claiming "Postgres" when the
+   * profile says "PostgreSQL" must not write a second entry.
+   */
+  async claimProfileGap() {
+    const status = document.getElementById('profileGapStatus');
+    const say = (msg) => { if (status) status.textContent = msg; };
+    const claimed = [...(this._claimedGapTerms || [])];
+    if (!claimed.length) return;
+    if (!this.session?.access_token || !this.session?.user?.id) {
+      say('Sign in to save to your profile.');
+      return;
+    }
+
+    const profile = this._cachedProfile || {};
+    const existing = Array.isArray(profile.skills)
+      ? profile.skills.slice()
+      : (typeof profile.skills === 'string'
+        ? profile.skills.split(',').map((s) => s.trim()).filter(Boolean) : []);
+
+    const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
+    const blob = existing.join(' | ');
+    const toAdd = claimed.filter((term) => {
+      if (TX && typeof TX.appearsIn === 'function') return !TX.appearsIn(blob, term);
+      return existing.every((s) => s.toLowerCase() !== term.toLowerCase());
+    });
+    if (!toAdd.length) { say('Already on your profile.'); this._claimedGapTerms.clear(); return; }
+
+    const next = existing.concat(toAdd);
+    say('Saving...');
+    try {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.session.user.id}`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${this.session.access_token}`,
+            Prefer: 'return=minimal',
+          },
+          body: JSON.stringify({ skills: next }),
+        }
+      );
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      profile.skills = next;
+      this._cachedProfile = profile;
+      this._claimedGapTerms.clear();
+      // Drop what was just claimed out of the gap list so the section
+      // reflects the profile as it now stands.
+      this._unevidencedKeywords = (this._unevidencedKeywords || [])
+        .filter((k) => toAdd.indexOf(k) === -1);
+      say(`Added ${toAdd.length} to your profile. Tailor again to use them.`);
+      this.renderProfileGap();
+    } catch (e) {
+      console.warn('[ATS Tailor] Could not save claimed skills:', e);
+      say('Could not save. Check your connection and try again.');
+    }
   }
 
   /**
@@ -5675,8 +5804,16 @@ class ATSTailor {
         if (typeof v === 'string') { parts.push(v); return; }
         if (Array.isArray(v)) { v.forEach(push); return; }
         if (typeof v === 'object') {
+          // The key list decides what counts as evidence, and education
+          // rows carry none of the old names -- a degree is {institution,
+          // degree, field_of_study}, so every qualification the profile
+          // held was read as nothing at all. A posting asking for a
+          // computer science background was refused against a computer
+          // science degree.
           for (const k of ['title', 'name', 'company', 'description', 'text', 'bullet',
-            'summary', 'value', 'technologies', 'tech_stack', 'skills', 'bullets']) {
+            'summary', 'value', 'technologies', 'tech_stack', 'skills', 'bullets',
+            'institution', 'school', 'degree', 'field_of_study', 'major', 'qualification',
+            'issuer', 'role', 'position', 'achievement', 'detail', 'details', 'notes']) {
             if (v[k]) push(v[k]);
           }
         }
