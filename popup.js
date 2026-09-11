@@ -5795,6 +5795,17 @@ class ATSTailor {
         for (const form of TX.variantsOf(keyword)) {
           if (TX.appearsIn(evidence, form)) return true;
         }
+        // DEMONSTRATING A CAPABILITY IS EVIDENCE OF IT.
+        //
+        // A profile that says "authored the Terraform modules and Helm
+        // charts" evidences Infrastructure as Code; one naming
+        // Prometheus, Grafana and Datadog evidences Observability; one
+        // describing on-call and incident response evidences SRE. The
+        // gate used to demand the requirement's own words, so a
+        // platform engineer applying to a platform role had six
+        // requirements withheld that the profile plainly proved, and
+        // scored seventy per cent.
+        if (typeof TX.impliedIn === 'function' && TX.impliedIn(evidence, keyword)) return true;
       } catch (e) { /* fall through to the word-shape test below */ }
     }
     const stop = ATSTailor._KEYWORD_STOPWORDS;

@@ -214,8 +214,15 @@
     ['Operational Excellence'], ['Lean'], ['Six Sigma'],
     ['Escalation Management', 'Issue Resolution', 'Operational Resolution',
       'Query Resolution', 'Case Management'],
+    // "feedback" and "team performance" arrived as separate chips on one
+    // posting and counted as two more requirements, when both are the
+    // same area of work as the performance review cycle that was
+    // already listed. A posting's phrasing is not a new requirement.
     ['Performance Management', 'Performance Reviews', 'Performance Feedback',
-      'Performance Actions', 'Appraisals'],
+      'Performance Actions', 'Appraisals', 'Feedback', 'Team Performance',
+      'Performance Improvement', 'Performance Conversations'],
+    ['Policy', 'Policy Application', 'Policy Compliance', 'Policy Development',
+      'Policy Implementation', 'Policies and Procedures'],
     ['Remote-first', 'Remote First', 'Remote-first Teams', 'Distributed Teams',
       'Remote Teams', 'Fully Remote'],
     ['Languages', 'Additional Languages', 'Multilingual', 'Language Skills'],
@@ -453,9 +460,101 @@
     };
   }
 
+
+  // ── WHAT PROVES A CAPABILITY, AS OPPOSED TO NAMING IT ────────────────
+  //
+  // A posting asks for "Infrastructure as Code". The profile says
+  // "authored the Terraform modules and Helm charts the client
+  // continues to operate". Those are the same competence, and a gate
+  // that looks for the WORDS "infrastructure" and "code" rejects it --
+  // so the term was withheld from a CV that had every right to it, and
+  // a platform engineer applying to a platform role scored 70%.
+  //
+  // The same gap, over and over, on exactly the requirements that
+  // matter most:
+  //
+  //   Infrastructure as Code   proved by Terraform, Helm, Pulumi
+  //   Observability            proved by Prometheus, Grafana, Datadog
+  //   SRE                      proved by on-call, incident response,
+  //                            error budgets, reliability targets
+  //   Scalability              proved by "serves billions of requests"
+  //
+  // This table is the difference between naming a capability and
+  // demonstrating it. It is used ONLY to decide whether a term may be
+  // written onto the CV -- never to decide whether the finished CV
+  // matches, which stays a literal test because an ATS is literal.
+  //
+  // Every entry has to be an entailment, not an association. Using
+  // Terraform IS doing infrastructure as code. Having "improved a
+  // process" is NOT continuous improvement in the sense a posting
+  // means, so no such entry exists.
+  const IMPLIED_BY = {
+    'Infrastructure as Code': ['Terraform', 'Pulumi', 'CloudFormation', 'Helm', 'Ansible', 'Puppet', 'Chef'],
+    'Observability': ['Prometheus', 'Grafana', 'Datadog', 'New Relic', 'Splunk', 'OpenTelemetry',
+      'Honeycomb', 'Sentry', 'monitoring and alerting', 'alerting'],
+    'Monitoring': ['Prometheus', 'Grafana', 'Datadog', 'New Relic', 'Splunk', 'PagerDuty'],
+    'SRE': ['on-call', 'oncall', 'incident response', 'error budget', 'reliability target',
+      'postmortem', 'post-mortem', 'SLO', 'production incident'],
+    'Incident Response': ['on-call', 'oncall', 'postmortem', 'post-mortem', 'production incident',
+      'paged', 'PagerDuty'],
+    'Scalability': ['billions of requests', 'millions of requests', 'high availability',
+      'horizontally', 'load balanc', 'throughput', 'distributed'],
+    'CI/CD': ['Jenkins', 'GitHub Actions', 'GitLab CI', 'ArgoCD', 'CircleCI', 'build pipeline',
+      'deployment pipeline', 'release pipeline'],
+    'Platform Engineering': ['Kubernetes', 'Terraform', 'internal tooling', 'developer platform',
+      'deployment tooling'],
+    'Microservices': ['microservice', 'EKS', 'ECS', 'service mesh'],
+    'Data Engineering': ['Airflow', 'Spark', 'PySpark', 'dbt', 'Kafka', 'ETL', 'data pipeline',
+      'data feed', 'Presto'],
+    'Machine Learning': ['PyTorch', 'TensorFlow', 'scikit-learn', 'XGBoost', 'ranking model',
+      'model training', 'MLflow'],
+    'Cloud Infrastructure': ['AWS', 'Azure', 'GCP', 'Google Cloud', 'EC2', 'EKS', 'S3', 'Lambda'],
+    'Testing': ['pytest', 'unit test', 'test coverage', 'integration test', 'automated test'],
+    'Linux': ['Bash', 'shell script', 'Unix', 'systemd', 'cron'],
+    'Docker': ['container', 'Kubernetes', 'EKS'],
+    'Data Analysis': ['Power BI', 'Tableau', 'SQL', 'Looker', 'dashboards'],
+    'Data Warehousing': ['Snowflake', 'Redshift', 'BigQuery', 'data warehouse'],
+    'Mentorship': ['mentored', 'coached', 'onboarded', 'trained', 'apprentice'],
+    'Leadership': ['led the', 'chaired', 'headed', 'ran the team', 'line managed'],
+    'Stakeholder Management': ['stakeholder', 'business partner', 'client CTO', 'steering'],
+    'Regulatory Reporting': ['regulatory', 'IFRS', 'statutory', 'regulator'],
+    'Compliance': ['ISO 27001', 'HIPAA', 'GDPR', 'SOC 2', 'audit'],
+    'Performance Management': ['performance review', 'appraisal', 'feedback', 'one to one', '1:1'],
+    'Multi-country': ['offices in', 'across three markets', 'cross-border', 'EMEA', 'APAC',
+      'multiple countries', 'international'],
+    'KPI': ['reliability target', 'performance metric', 'service level', 'SLA', 'SLO',
+      'error budget', 'month-end reporting'],
+    'Escalation Management': ['incident response', 'triage', 'escalated', 'root cause',
+      'recurring failure', 'backlog'],
+    'Continuous Improvement': ['cutting the', 'cut the month-end', 'reduced the cycle',
+      'streamlined', 'removed the manual'],
+  };
+  const _IMPLIED_LOOKUP = new Map();
+  for (const label of Object.keys(IMPLIED_BY)) _IMPLIED_LOOKUP.set(tight(label), IMPLIED_BY[label]);
+
+  /**
+   * Does this body of text DEMONSTRATE the requirement, as opposed to
+   * naming it? Used by the evidence gate only.
+   */
+  function impliedIn(text, term) {
+    const group = groupOf(term);
+    const label = group ? group[0] : String(term || '');
+    const proofs = _IMPLIED_LOOKUP.get(tight(label));
+    if (!proofs) return false;
+    const haystack = String(text == null ? '' : text).normalize('NFKC').toLowerCase();
+    if (!haystack) return false;
+    for (const proof of proofs) {
+      // A plain lower-cased contains: these are phrases, not keywords,
+      // and a boundary test would reject "load balanc" matching
+      // "load balancing", which is the point of writing it that way.
+      if (haystack.indexOf(norm(proof)) !== -1) return true;
+    }
+    return false;
+  }
+
   global.KeywordTaxonomy = {
     norm, tight, canonical, keyOf, groupOf, variantsOf, appearsIn, dedupe,
-    measure, stripQualifiers, GROUPS,
+    measure, stripQualifiers, GROUPS, impliedIn, IMPLIED_BY,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.KeywordTaxonomy;
 })(typeof window !== 'undefined' ? window : globalThis);
