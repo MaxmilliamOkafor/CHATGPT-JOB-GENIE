@@ -66,9 +66,10 @@
       // Generate Cover Letter PDF
       const coverResult = await this.generateCoverLetterPDF(tailoredData, keywords, jobData, candidateData);
       
-      // Calculate match score
-      const matchScore = this.calculateMatchScore(tailoredData, keywords);
-      
+      // Measure the document that was just drawn, not a re-derivation.
+      const coverage = this.measureCoverage(tailoredData, keywords);
+      const matchScore = coverage.score;
+
       const timing = performance.now() - startTime;
       console.log(`[OpenResume] Package generated in ${timing.toFixed(0)}ms`);
 
@@ -80,6 +81,7 @@
         coverBase64: coverResult.base64,
         coverFilename: coverResult.filename,
         matchScore,
+        coverage,
         timing,
         tailoredData
       };
@@ -175,6 +177,12 @@
             }
           }
         }
+        // Merge projects. Without this the parsed block was dropped on
+        // the floor -- the other half of why a PROJECTS section only
+        // ever showed up as stray entries on the skills line.
+        if (parsed.projects?.length) {
+          data.projects = [...(data.projects || []), ...parsed.projects];
+        }
         // Merge certifications
         if (parsed.certifications?.length) {
           const existingCerts = new Set((data.certifications || []).map(c => c.toLowerCase()));
@@ -205,21 +213,41 @@
         experience: [],
         skills: [],
         education: [],
-        certifications: []
+        certifications: [],
+        projects: []
       };
 
+      // A HEADER THIS TABLE DOES NOT KNOW DOES NOT END A SECTION.
+      //
+      // PROJECTS was missing, so on a CV that has one the parser stayed
+      // in SKILLS and appended the whole block to it -- project names,
+      // bullet sentences and "Live demo:" URLs all became "skills". Two
+      // consequences, both silent: the projects never rendered, and the
+      // skills list blew past the cap in mergeSkills, which trims from
+      // the END -- exactly where the keywords tailored for the posting
+      // had just been added. Every term the coverage pass wrote was
+      // being deleted before the PDF was drawn.
       const sectionMap = {
         'PROFESSIONAL SUMMARY': 'summary',
         'SUMMARY': 'summary',
         'PROFILE': 'summary',
         'WORK EXPERIENCE': 'experience',
         'EXPERIENCE': 'experience',
+        'PROFESSIONAL EXPERIENCE': 'experience',
         'EMPLOYMENT': 'experience',
+        'EMPLOYMENT HISTORY': 'experience',
         'SKILLS': 'skills',
         'TECHNICAL SKILLS': 'skills',
+        'CORE SKILLS': 'skills',
+        'CORE COMPETENCIES': 'skills',
         'TECHNICAL PROFICIENCIES': 'skills',
         'EDUCATION': 'education',
-        'CERTIFICATIONS': 'certifications'
+        'CERTIFICATIONS': 'certifications',
+        'PROJECTS': 'projects',
+        'RELEVANT PROJECTS': 'projects',
+        'KEY PROJECTS': 'projects',
+        'SELECTED PROJECTS': 'projects',
+        'PERSONAL PROJECTS': 'projects'
       };
 
       /**
@@ -268,6 +296,15 @@
           currentSection = sectionMap[upperTrimmed];
           currentContent = [];
           currentJob = null;
+        } else if (this.isUnknownSectionHeading(trimmed)) {
+          // A heading nobody listed still ends the section it follows.
+          // Absorbing it -- and everything under it -- into whatever
+          // section happened to be open is how a PROJECTS block became
+          // fifteen "skills".
+          this.saveSection(result, currentSection, currentContent, currentJob);
+          currentSection = null;
+          currentContent = [];
+          currentJob = null;
         } else if (currentSection) {
           currentContent.push(line);
         }
@@ -277,6 +314,55 @@
       this.saveSection(result, currentSection, currentContent, currentJob);
 
       return result;
+    },
+
+    /**
+     * A standalone line that reads as a section heading but is not one
+     * this parser knows: short, upper case, no sentence punctuation.
+     *
+     * Deliberately narrow. "PROGRAMMING: PYTHON, JAVA" carries a colon
+     * and commas and is a skills LINE, not a heading; an all-caps
+     * employer name carries digits or a comma. Anything that fails to
+     * look like a bare heading falls through and is treated as content,
+     * which is the behaviour this always had.
+     */
+    isUnknownSectionHeading(line) {
+      const text = String(line || '').trim().replace(/[:\s]+$/, '');
+      if (text.length < 3 || text.length > 34) return false;
+      if (/[,;.:()\d@/|]/.test(text)) return false;
+      if (!/[A-Z]/.test(text)) return false;
+      if (text !== text.toUpperCase()) return false;
+      return /^[A-Z][A-Z\s&'-]*$/.test(text) && text.split(/\s+/).length <= 4;
+    },
+
+    /**
+     * A projects block: a header line per project (name, then the stack),
+     * its bullets, and any demo/code links beneath it.
+     *
+     * Before PROJECTS was a section, this block was appended to the
+     * skills list and split on commas, so "Live demo: ..." and half a
+     * sentence rendered as technical skills on the PDF.
+     */
+    parseProjectsText(text) {
+      const projects = [];
+      let current = null;
+      for (const raw of String(text || '').split('\n')) {
+        const line = raw.trim();
+        if (!line) continue;
+        const isBullet = /^[-•*•]\s*/.test(line);
+        const isLink = /^(live demo|demo|code|repo|repository|source|github|url|link)\s*:/i.test(line);
+        if (isBullet) {
+          if (current) current.bullets.push(line.replace(/^[-•*•]\s*/, '').trim());
+          continue;
+        }
+        if (isLink) {
+          if (current) current.links = current.links ? current.links + ' | ' + line : line;
+          continue;
+        }
+        current = { header: line, bullets: [], links: '' };
+        projects.push(current);
+      }
+      return projects;
     },
 
     saveSection(result, section, content, job) {
@@ -313,6 +399,10 @@
           // MERGE education instead of overwriting
           const newEducation = this.parseEducationText(text);
           result.education = [...(result.education || []), ...newEducation];
+          break;
+        }
+        case 'projects': {
+          result.projects = [...(result.projects || []), ...this.parseProjectsText(text)];
           break;
         }
         case 'certifications': {
@@ -565,7 +655,7 @@
         );
 
         // Only add remaining TECHNICAL keywords to skills (minimal skills list)
-        tailored.skills = this.mergeSkills(cvData.skills, remainingKeywords.slice(0, 10));
+        tailored.skills = this.mergeSkills(cvData.skills, remainingKeywords.slice(0, 10), allKeywords);
 
         console.log('[OpenResume] Strategic Integration Stats:', {
           bulletsModified: integrationResult.stats?.bulletsModified || 0,
@@ -583,7 +673,7 @@
         });
 
         // Only merge TECHNICAL keywords into skills (not soft skills)
-        tailored.skills = this.mergeSkills(cvData.skills, technicalKeywords);
+        tailored.skills = this.mergeSkills(cvData.skills, technicalKeywords, allKeywords);
       }
 
       return this.enforceInterviewGradeExperienceDepth(tailored, {
@@ -807,19 +897,86 @@
     },
 
     // ============ MERGE SKILLS WITH KEYWORDS ============
-    mergeSkills(existingSkills, keywords) {
-      const skillSet = new Set((existingSkills || []).map(s => s.toLowerCase()));
-      const merged = [...(existingSkills || [])];
+    // THE CAP USED TO DELETE EXACTLY WHAT THE TAILORING ADDED.
+    //
+    // Keywords are appended, then the list was cut with slice(0, 25)
+    // from the end -- so on any CV with 25 skills already, every term
+    // written for the posting was dropped before the PDF was drawn. The
+    // page-length cap is worth keeping; which entries it sheds is not.
+    // The job's terms are kept, and the overflow comes out of the
+    // generic skills that were there before.
+    mergeSkills(existingSkills, keywords, postingKeywords) {
+      const MAX = 25;
+      const existing = (existingSkills || []).filter((s) => this.looksLikeSkill(s));
 
+      // A SKILLS LINE IS NOT ONE SKILL.
+      //
+      // The old check asked whether an entry EQUALLED the keyword, but
+      // a grouped section arrives as "Programming: Python, Java" in a
+      // single entry, so Python never matched and was appended again --
+      // the PDF ended "..., Python, AWS, Microservices" restating terms
+      // already three lines above it. Ask whether the keyword is
+      // already present in the skills block at all.
+      const blob = existing.join(' | ');
+      const added = [];
       const topKeywords = (keywords.all || keywords).slice(0, 10);
       topKeywords.forEach(kw => {
-        if (!skillSet.has(kw.toLowerCase())) {
-          merged.push(this.formatSkillName(kw));
-          skillSet.add(kw.toLowerCase());
-        }
+        const already = this.satisfiesAnyKeyword(blob, [kw])
+          || added.some((a) => this.satisfiesAnyKeyword(a, [kw]));
+        if (!already) added.push(this.formatSkillName(kw));
       });
 
-      return merged.slice(0, 25);
+      if (existing.length + added.length <= MAX) return [...existing, ...added];
+
+      // WHAT THE CAP SHEDS IS WHAT THE POSTING DID NOT ASK FOR.
+      //
+      // Trimming by position sheds the tail, and the coverage pass
+      // writes its terms at the tail -- so "keep the first 25" deleted
+      // the tailoring just as reliably as slice(0, 25) did. Rank
+      // instead: an entry that satisfies one of the posting's
+      // requirements is kept, in its original order, and the leftover
+      // room goes to the rest.
+      // Rank against everything the posting asked for, not just the
+      // subset that was left over for the skills list.
+      const asked = Array.isArray(postingKeywords) && postingKeywords.length
+        ? postingKeywords : allKeywords;
+      const wanted = [], rest = [];
+      for (const entry of existing) {
+        (this.satisfiesAnyKeyword(entry, asked) ? wanted : rest).push(entry);
+      }
+      const room = Math.max(0, MAX - added.length - wanted.length);
+      const kept = [...wanted, ...rest.slice(0, room)];
+      // Put them back in the order they were written.
+      const order = new Map(existing.map((s, i) => [s, i]));
+      kept.sort((a, b) => (order.get(a) || 0) - (order.get(b) || 0));
+      return [...kept, ...added];
+    },
+
+    /** Does this skills entry satisfy any requirement the posting listed? */
+    satisfiesAnyKeyword(entry, allKeywords) {
+      const text = String(entry || '');
+      if (!text || !Array.isArray(allKeywords)) return false;
+      const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy)
+        || (typeof global !== 'undefined' && global.KeywordTaxonomy) || null;
+      if (TX && typeof TX.appearsIn === 'function') {
+        return allKeywords.some((kw) => TX.appearsIn(text, kw));
+      }
+      const lower = text.toLowerCase();
+      return allKeywords.some((kw) => lower.indexOf(String(kw).toLowerCase()) !== -1);
+    },
+
+    /**
+     * Is this entry a skill, or a fragment of prose that landed in the
+     * list? Sentences, URLs and bullet text used to reach the PDF's
+     * TECHNICAL SKILLS line verbatim.
+     */
+    looksLikeSkill(entry) {
+      const s = String(entry || '').trim();
+      if (!s || s.length > 60) return false;
+      if (/^[-•*]/.test(s)) return false;
+      if (/https?:\/\/|www\.|\.(com|io|org|net|dev)\b/i.test(s)) return false;
+      if (/[.!?]$/.test(s)) return false;
+      return s.split(/\s+/).length <= 7;
     },
 
     // ============ FORMAT SKILL NAME ============
@@ -830,10 +987,18 @@
         'HTTP', 'JWT', 'OAuth', 'CRUD', 'ORM', 'MVC', 'TDD', 'NoSQL'
       ]);
 
-      return skill.split(/\s+/).map(word => {
+      // Short words were uppercased unconditionally, which turned
+      // "infrastructure as code" into "Infrastructure AS Code" and the
+      // language Go into "GO". A word is only shouted when it is a
+      // known acronym or was already written in capitals.
+      const CONNECTORS = new Set(['as', 'of', 'in', 'on', 'to', 'and', 'or', 'the', 'for', 'a', 'an']);
+      const words = String(skill || '').split(/\s+/);
+      return words.map((word, i) => {
         const upper = word.toUpperCase();
         if (acronyms.has(upper)) return upper;
-        if (word.length <= 2) return word.toUpperCase();
+        if (word.length > 1 && word === upper) return word;
+        const lower = word.toLowerCase();
+        if (i > 0 && CONNECTORS.has(lower)) return lower;
         return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
       }).join(' ');
     },
@@ -1006,6 +1171,18 @@
         }
       }
 
+      // === PROJECTS ===
+      if (data.projects && data.projects.length > 0) {
+        if (addSectionHeader('PROJECTS') !== false) {
+          data.projects.forEach(pr => {
+            addText(pr.header, true, false, font.body);
+            (pr.bullets || []).forEach(b => addText(`${ATS_SPEC.bullets.char} ${b}`, false, false, font.body));
+            if (pr.links) addText(pr.links, false, false, font.small);
+            y += 2;
+          });
+        }
+      }
+
       // === CERTIFICATIONS ===
       if (data.certifications && data.certifications.length > 0) {
         if (addSectionHeader('CERTIFICATIONS') !== false) {
@@ -1023,13 +1200,17 @@
     // ============ GENERATE CV TEXT (Fallback) ============
     generateCVText(data) {
       const lines = [];
-      const formattedPhone = this.formatPhoneForATS(data.contact.phone);
+      // Coverage is measured from this text, so a document with no
+      // contact block must still render rather than throw and take the
+      // whole PDF pass down with it.
+      const contact = (data && data.contact) || {};
+      const formattedPhone = this.formatPhoneForATS(contact.phone);
 
-      lines.push(data.contact.name.toUpperCase());
+      if (contact.name) lines.push(String(contact.name).toUpperCase());
       const candidateLocation = 'Dublin, IE';
-      const extractedLocation = String(data.contact.location || '').replace(/\bopen\s+to\s+relocation\b/gi, '').replace(/^Dublin,?\s*IE$/i, '').trim();
-      lines.push([candidateLocation, formattedPhone, data.contact.email, extractedLocation].filter(Boolean).join(' | '));
-      lines.push([data.contact.linkedin, data.contact.github, data.contact.portfolio].filter(Boolean).join(' | '));
+      const extractedLocation = String(contact.location || '').replace(/\bopen\s+to\s+relocation\b/gi, '').replace(/^Dublin,?\s*IE$/i, '').trim();
+      lines.push([candidateLocation, formattedPhone, contact.email, extractedLocation].filter(Boolean).join(' | '));
+      lines.push([contact.linkedin, contact.github, contact.portfolio].filter(Boolean).join(' | '));
       lines.push('');
 
       if (data.summary) {
@@ -1042,8 +1223,9 @@
         lines.push('WORK EXPERIENCE');
         data.experience.forEach(job => {
           lines.push([job.company, job.title, job.dates, job.location].filter(Boolean).join(' | '));
+          // Every bullet was pushed twice here, so the text CV -- and
+          // anything measured from it -- carried each one in duplicate.
           (Array.isArray(job.bullets) ? job.bullets : []).forEach(b => lines.push(`- ${b}`));
-          job.bullets.forEach(b => lines.push(`- ${b}`));
           lines.push('');
         });
       }
@@ -1060,6 +1242,16 @@
         lines.push('TECHNICAL SKILLS');
         lines.push(data.skills.join(', '));
         lines.push('');
+      }
+
+      if (data.projects?.length > 0) {
+        lines.push('PROJECTS');
+        data.projects.forEach(pr => {
+          lines.push(pr.header);
+          (pr.bullets || []).forEach(b => lines.push(`- ${b}`));
+          if (pr.links) lines.push(pr.links);
+          lines.push('');
+        });
       }
 
       if (data.certifications?.length > 0) {
@@ -1384,27 +1576,46 @@
     },
 
     // ============ CALCULATE MATCH SCORE ============
-    calculateMatchScore(tailoredData, keywords) {
-      const allKeywords = keywords.all || keywords;
-      if (!allKeywords || allKeywords.length === 0) return 0;
-
-      // Build text from all sections
-      const text = [
-        tailoredData.summary,
-        tailoredData.skills?.join(' '),
-        tailoredData.experience?.map(e => e.bullets?.join(' ')).join(' '),
-        tailoredData.certifications?.join(' ')
-      ].filter(Boolean).join(' ').toLowerCase();
-
-      // Count matches
-      let matches = 0;
-      allKeywords.forEach(kw => {
-        if (text.includes(kw.toLowerCase())) matches++;
+    // ONE SCORER, OVER THE DOCUMENT THAT IS ACTUALLY SENT.
+    //
+    // This was a second, independent scorer: raw substring containment
+    // over the posting's raw keyword list, missing the education and
+    // header sections entirely. It disagreed with the panel's taxonomy
+    // reading in both directions -- counting "payroll", "global payroll"
+    // and "payroll management" as three requirements, and failing
+    // "Postgres" against "PostgreSQL" -- and because popup.js assigned
+    // its result last, its number was the one on screen. Every coverage
+    // fix made upstream was overwritten here.
+    //
+    // It now measures what generateCVText renders, which is the same
+    // content the PDF draws, through the same taxonomy the panel uses.
+    measureCoverage(tailoredData, keywords) {
+      const allKeywords = (keywords && keywords.all) || keywords;
+      if (!Array.isArray(allKeywords) || allKeywords.length === 0) {
+        return { score: 0, matched: [], missing: [], total: 0 };
+      }
+      const text = this.generateCVText(tailoredData);
+      const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy)
+        || (typeof global !== 'undefined' && global.KeywordTaxonomy) || null;
+      if (TX && typeof TX.measure === 'function') {
+        const r = TX.measure(text, allKeywords);
+        console.log(`[OpenResume] Coverage: ${r.percent}% (${r.matched.length}/${r.total} requirements)`);
+        return { score: r.percent, matched: r.matched, missing: r.missing, total: r.total };
+      }
+      // Without the taxonomy, fall back to the literal count this always
+      // did -- but over the whole rendered document, not four fields.
+      const lower = text.toLowerCase();
+      const matched = [], missing = [];
+      allKeywords.forEach((kw) => {
+        (lower.indexOf(String(kw).toLowerCase()) !== -1 ? matched : missing).push(kw);
       });
+      const score = Math.round((matched.length / allKeywords.length) * 100);
+      console.log(`[OpenResume] Coverage (no taxonomy): ${score}% (${matched.length}/${allKeywords.length})`);
+      return { score, matched, missing, total: allKeywords.length };
+    },
 
-      const score = Math.round((matches / allKeywords.length) * 100);
-      console.log(`[OpenResume] Match Score: ${score}% (${matches}/${allKeywords.length})`);
-      return score;
+    calculateMatchScore(tailoredData, keywords) {
+      return this.measureCoverage(tailoredData, keywords).score;
     },
 
     // ============ HELPER: Extract Company Name with Multi-Source Fallback (100% ACCURACY) ============

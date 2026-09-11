@@ -5578,11 +5578,62 @@ class ATSTailor {
     };
   }
 
+  // ██ JUNK KEYWORD FILTER ██
+  //
+  // Terms a job description carries as furniture. A scraper cannot tell
+  // "competitive salary" and "401k" from a requirement, so they arrived
+  // in the keyword list like everything else.
+  //
+  // They were filtered out of the INJECTION and left in the DENOMINATOR,
+  // which is the worst of both: nothing can ever satisfy "dental" or
+  // "paid time off", so every one of them was a permanent, unfixable
+  // point off the score. A posting that mentioned five capped the
+  // reading in the low eighties no matter how well the CV was written.
+  // They are not requirements, so they are not counted as any.
+  static get _JUNK_KEYWORDS() {
+    if (!this.__junkKeywords) {
+      this.__junkKeywords = new Set([
+        'customer service', 'high school diploma', 'commission', 'customer-facing',
+        'independent work', 'motivated', 'benefits', 'fast-paced',
+        'work environment', 'motivation', 'self-motivated',
+        'go-getter', 'passion', 'passionate', 'enthusiasm', 'enthusiastic',
+        'dedicated', 'dedication', 'driven', 'dynamic', 'proactive',
+        'synergy', 'paradigm', 'robust', 'commitment',
+        'integrity', 'professionalism', 'multitasking', 'positive attitude',
+        'work ethic', 'goal-oriented', 'results-oriented', 'mission',
+        'equal opportunity', 'competitive salary', 'full-time', 'part-time',
+        'base salary', 'bonus', 'stock options', 'health insurance',
+        'dental', 'vision', '401k', 'pto', 'paid time off', 'remote work',
+        'hybrid', 'on-site', 'office', 'headquarters', 'location',
+        'apply now', 'submit resume', 'cover letter', 'interview',
+        'can-do attitude', 'people person', 'go above and beyond',
+        'think outside the box', 'hit the ground running', 'wear many hats',
+      ]);
+      // "Reliability" used to sit in this list, read as the soft sense a
+      // posting means when it calls a person reliable. On a platform or
+      // SRE posting it is a core technical requirement, and being junk
+      // meant it was never written onto the CV, never reported as a
+      // gap, and still counted against the score. It is a requirement
+      // now, earned from on-call, error budgets and reliability targets.
+    }
+    return this.__junkKeywords;
+  }
+
+  /** The posting's requirements, with the furniture taken out. */
+  static requirementsOnly(list) {
+    const junk = this._JUNK_KEYWORDS;
+    return (Array.isArray(list) ? list : []).filter((kw) => {
+      const k = String(kw == null ? '' : kw).toLowerCase().trim();
+      return k && !junk.has(k);
+    });
+  }
+
   /**
    * OPTIMIZED: Calculate match score with single-pass matching
    */
   calculateMatchScore(cvText, keywords) {
-    const result = window.DynamicScore.calculateDynamicMatch(cvText, keywords?.all || []);
+    const asked = ATSTailor.requirementsOnly(keywords?.all || []);
+    const result = window.DynamicScore.calculateDynamicMatch(cvText, asked);
     return {matchScore:result.score, matchedKeywords:result.matched, missingKeywords:result.missing};
   }
 
@@ -5823,26 +5874,7 @@ class ATSTailor {
       return { tailoredCV: cvText, injectedKeywords: [], reviewKeywords: [] };
     }
 
-    // ██ JUNK KEYWORD FILTER ██
-    // Terms a job description carries as furniture. They cost a line of
-    // the skills section and win nothing in an ATS.
-    const JUNK_KEYWORDS = new Set([
-      'customer service', 'high school diploma', 'commission', 'customer-facing',
-      'independent work', 'motivated', 'benefits', 'fast-paced',
-      'work environment', 'motivation', 'self-motivated',
-      'go-getter', 'passion', 'passionate', 'enthusiasm', 'enthusiastic',
-      'dedicated', 'dedication', 'driven', 'dynamic', 'proactive',
-      'synergy', 'paradigm', 'robust', 'commitment', 'reliable', 'reliability',
-      'integrity', 'professionalism', 'multitasking', 'positive attitude',
-      'work ethic', 'goal-oriented', 'results-oriented', 'mission',
-      'equal opportunity', 'competitive salary', 'full-time', 'part-time',
-      'base salary', 'bonus', 'stock options', 'health insurance',
-      'dental', 'vision', '401k', 'pto', 'paid time off', 'remote work',
-      'hybrid', 'on-site', 'office', 'headquarters', 'location',
-      'apply now', 'submit resume', 'cover letter', 'interview',
-      'can-do attitude', 'people person', 'go above and beyond',
-      'think outside the box', 'hit the ground running', 'wear many hats',
-    ]);
+    const JUNK_KEYWORDS = ATSTailor._JUNK_KEYWORDS;
 
     const cleanMissing = missingKeywords.filter((kw) => {
       const k = String(kw || '').toLowerCase().trim();
@@ -7465,8 +7497,30 @@ class ATSTailor {
             console.log('[ATS Tailor] OpenResume Cover Letter generated:', atsPackage.coverFilename);
           }
 
-          if (atsPackage.matchScore) {
-            this.generatedDocuments.matchScore = atsPackage.matchScore;
+          // THE NUMBER ON SCREEN DESCRIBES THE FILE THAT GETS SENT.
+          //
+          // This used to take a score from a second, naive scorer --
+          // raw substring containment over the posting's unmerged
+          // keyword list -- and assign it LAST, so it overwrote the
+          // reviewed taxonomy reading and was the number displayed.
+          // Every coverage fix upstream was invisible behind it.
+          //
+          // The package now measures its own rendered document through
+          // the same taxonomy the panel uses, and the chips move with
+          // it: if the PDF pipeline ever drops a term again, it shows
+          // here and says so, instead of being hidden by a second
+          // opinion.
+          if (atsPackage.coverage && atsPackage.coverage.total > 0) {
+            const c = atsPackage.coverage;
+            if (c.score < this.generatedDocuments.matchScore) {
+              console.warn('[ATS Tailor] PDF pipeline lost coverage: reviewed '
+                + this.generatedDocuments.matchScore + '%, delivered ' + c.score
+                + '%. Absent from the PDF: ' + (c.missing || []).join(', '));
+            }
+            this.generatedDocuments.matchScore = c.score;
+            this.generatedDocuments.matchedKeywords = c.matched;
+            this.generatedDocuments.missingKeywords = c.missing;
+            this.updateMatchAnalysisUI();
           }
 
           if (atsPackage.cvBase64) return; // Only return if PDF was actually generated

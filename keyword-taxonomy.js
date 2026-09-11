@@ -163,6 +163,14 @@
     ['Performance Optimisation', 'Performance Optimization', 'Performance Tuning'],
     ['Testing', 'Automated Testing', 'Test Automation', 'Unit Testing'],
     ['QA', 'Quality Assurance'],
+    // Both arrived on postings as bare words with no group at all, so
+    // nothing could be shown to satisfy them and they sat in the
+    // denominator as permanent misses.
+    // High availability stays with Scalability, and automated testing
+    // with Testing: those are where a reader of either group would look
+    // for them, and a form belongs to one group only.
+    ['Reliability', 'Availability', 'Uptime', 'Resilience'],
+    ['Automation', 'Process Automation', 'Workflow Automation', 'Scripting'],
     ['Security', 'Application Security', 'AppSec', 'InfoSec'],
 
     // --- business, product, finance ------------------------------------
@@ -529,6 +537,11 @@
       'error budget', 'month-end reporting'],
     'Escalation Management': ['incident response', 'triage', 'escalated', 'root cause',
       'recurring failure', 'backlog'],
+    'Reliability': ['on-call', 'oncall', 'error budget', 'reliability target', 'SLO',
+      'uptime', 'incident response', 'failover', 'redundancy', 'disaster recovery'],
+    'Automation': ['automated the', 'automating the', 'CI/CD', 'GitHub Actions', 'Jenkins',
+      'GitLab CI', 'ArgoCD', 'Terraform', 'Ansible', 'Airflow', 'cron', 'scripted',
+      'Bash', 'PowerShell', 'pipeline'],
     // Taking work that was being done by hand and making it stop being
     // done by hand is the thing a posting means. "Improved a process" on
     // its own is not, which is why no bare "improved" appears here.
