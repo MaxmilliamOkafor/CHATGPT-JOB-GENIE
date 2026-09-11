@@ -574,9 +574,33 @@
     },
 
     // ============ PARSE EDUCATION TEXT ============
+    // A DEGREE IS NOT A SECOND UNIVERSITY.
+    //
+    // This understood exactly one shape, "Institution | Degree | Dates",
+    // and made every other line its own entry with no degree and no
+    // dates. A CV written the ordinary way --
+    //
+    //   University of Manchester 2014 - 2017
+    //   BSc Computer Science
+    //
+    // -- came back as two institutions, "University of Manchester 2014 -
+    // 2017" and "BSc Computer Science", and rendered on the PDF as two
+    // schools with no qualification between them.
     parseEducationText(text) {
+      const DEGREE_RE = /\b(?:bachelor|master|magister|doctor|doctorate|ph\.?d|m\.?b\.?a|associate|diploma|certificate|foundation degree|b\.?sc|m\.?sc|b\.?a|m\.?a|b\.?eng|m\.?eng|llb|llm|hnd|higher national)\b/i;
+      const GRADE_RE = /[,;]\s*((?:First[- ]Class(?:\s+Honou?rs)?|Upper Second(?:\s+Class)?(?:\s+Honou?rs)?|Second[- ]Class(?:\s+Honou?rs)?|2:1|2:2|Distinction|Merit|Pass|Magna Cum Laude|Summa Cum Laude|Cum Laude|GPA\s*[\d.]+(?:\s*\/\s*[\d.]+)?)\.?)$/i;
+      // A year, a year range, or a month-year range at the end of a line.
+      // The optional leading word must be an actual MONTH: allowing any
+      // capitalised word turned "University of Manchester 2014 - 2017"
+      // into the institution "University of" with the dates "Manchester
+      // 2014 - 2017".
+      const MONTH = '(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)[a-z]*';
+      const YEAR = '(?:(?:' + MONTH + ')\\s+)?(?:19|20)\\d{2}';
+      const TRAILING_DATES_RE = new RegExp(
+        '\\s+(' + YEAR + '\\s*(?:[-\u2013\u2014]\\s*(?:' + YEAR + '|Present|Current))?)$');
+
       const entries = [];
-      const lines = text.split('\n').filter(l => l.trim());
+      const lines = String(text || '').split('\n').map((l) => l.trim()).filter(Boolean);
 
       for (const line of lines) {
         const parts = line.split('|').map(p => p.trim());
@@ -587,14 +611,29 @@
             dates: parts[2] || '',
             gpa: parts[3] || ''
           });
-        } else if (line.trim()) {
-          entries.push({
-            institution: line.trim(),
-            degree: '',
-            dates: '',
-            gpa: ''
-          });
+          continue;
         }
+
+        let rest = line;
+        let grade = '';
+        const g = GRADE_RE.exec(rest);
+        if (g) { grade = g[1]; rest = rest.slice(0, g.index).trim(); }
+
+        // A degree line belongs to the entry above it, not to itself.
+        const last = entries[entries.length - 1];
+        if (DEGREE_RE.test(rest) && last && !last.degree) {
+          last.degree = rest;
+          if (grade && !last.gpa) last.gpa = grade;
+          continue;
+        }
+
+        let dates = '';
+        const d = TRAILING_DATES_RE.exec(rest);
+        if (d) { dates = d[1].trim(); rest = rest.slice(0, d.index).trim(); }
+        if (!rest && !dates) continue;
+        // A bare date under an entry that has none belongs to it.
+        if (!rest && dates && last && !last.dates) { last.dates = dates; continue; }
+        entries.push({ institution: rest, degree: '', dates, gpa: grade });
       }
 
       return entries;

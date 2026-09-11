@@ -5846,6 +5846,76 @@ class ATSTailor {
     }));
   }
 
+  // ██ A CV WITH NO EDUCATION SECTION ██
+  //
+  // The generated document went out carrying a summary, four employers,
+  // a skills block and three projects, and no EDUCATION heading at all.
+  // Both degrees were in the saved profile the whole time.
+  //
+  // The section is composed by the tailoring service, and when its
+  // response comes back without one nothing downstream notices: the
+  // coverage pass only ever touches skills, and the DOCX renderer can
+  // only lay out sections that exist in the text it is handed. So a
+  // response that quietly dropped education produced a file that was
+  // missing it, every time, with no error anywhere.
+  //
+  // Education is not something to regenerate or tailor. It is a fact
+  // held in the profile, so if the section is absent it is rebuilt from
+  // the profile verbatim. Nothing is invented and nothing is reworded;
+  // if the profile has no education either, nothing is added.
+  ensureEducationSection(cvText, profile) {
+    const text = String(cvText == null ? '' : cvText);
+    if (!text.trim()) return text;
+    if (/^\s*(EDUCATION|ACADEMIC (?:BACKGROUND|QUALIFICATIONS|HISTORY)|QUALIFICATIONS)\s*:?\s*$/im
+      .test(text)) return text;
+
+    const p = profile || this._cachedProfile || {};
+    const rows = Array.isArray(p.education) ? p.education
+      : (p.education && typeof p.education === 'object' ? [p.education] : []);
+    if (!rows.length) return text;
+
+    const str = (v) => String(v == null ? '' : v).trim();
+    const lines = [];
+    for (const row of rows) {
+      if (!row) continue;
+      if (typeof row === 'string') { if (row.trim()) lines.push(row.trim()); continue; }
+      const school = str(row.institution || row.school || row.university || row.college);
+      let degree = str(row.degree || row.qualification || row.award);
+      const field = str(row.field_of_study || row.fieldOfStudy || row.major || row.subject);
+      // The subject is nearly always already inside the degree string,
+      // and a substring test is not enough to see it: "MSc Computing"
+      // does not contain "Computer Science", but writing "MSc Computing,
+      // Computer Science" names the same subject twice. The field is
+      // only appended when the degree is a BARE LEVEL with no subject of
+      // its own.
+      const BARE_LEVEL = /^(?:b\.?sc|m\.?sc|b\.?a|m\.?a|b\.?eng|m\.?eng|mba|m\.?b\.?a|ph\.?d|llb|llm|hnd|bachelor(?:'?s)?(?:\s+degree)?|master(?:'?s)?(?:\s+degree)?|doctorate|diploma|certificate)\.?$/i;
+      if (field && degree && BARE_LEVEL.test(degree)) {
+        degree = degree + ' ' + field;
+      } else if (field && !degree) {
+        degree = field;
+      }
+      // A degree with no years is still a degree. Blank year fields are
+      // common and must not produce "undefined - undefined".
+      const start = str(row.start_year || row.startYear || row.start_date || row.from);
+      const end = str(row.end_year || row.endYear || row.graduation_year
+        || row.graduationYear || row.end_date || row.to);
+      let dates = str(row.dates || row.date_range || row.dateRange);
+      if (!dates) dates = start && end ? `${start} - ${end}` : (end || start || '');
+      if (!school && !degree) continue;
+      lines.push([school, dates].filter(Boolean).join(' '));
+      if (degree) lines.push(degree);
+      const grade = str(row.grade || row.gpa || row.classification || row.honours);
+      if (grade) lines[lines.length - 1] += ', ' + grade;
+      lines.push('');
+    }
+    while (lines.length && !lines[lines.length - 1]) lines.pop();
+    if (!lines.length) return text;
+
+    console.warn('[ATS Tailor] The tailored CV had no EDUCATION section; rebuilt '
+      + rows.length + ' entry(ies) from your saved profile.');
+    return text.replace(/\s*$/, '') + '\n\nEDUCATION\n' + lines.join('\n') + '\n';
+  }
+
   recoverOmittedProfileSkills(cvText, keywords, profile) {
     const before = this.calculateMatchScore(cvText, keywords);
     if (before.matchScore >= 90) return cvText;
@@ -6869,6 +6939,11 @@ class ATSTailor {
 
       // Recover relevant skills the first tailoring response omitted from the saved profile.
       this.generatedDocuments.cv = this.recoverOmittedProfileSkills(this.generatedDocuments.cv, keywords, p);
+
+      // A response that came back without an EDUCATION section produced
+      // a document with no education in it at all. Restored from the
+      // profile, which is where the degrees actually live.
+      this.generatedDocuments.cv = this.ensureEducationSection(this.generatedDocuments.cv, p);
 
       // CLOSE THE COVERAGE GAP WITH THINGS THE PROFILE ALREADY PROVES.
       //
