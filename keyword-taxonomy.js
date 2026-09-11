@@ -170,20 +170,18 @@
     ['Product Management'], ['Stakeholder Management', 'Stakeholder Engagement'],
     ['Requirements Gathering', 'Requirements Analysis'],
     ['Business Analysis', 'Business Analytics'],
-    ['Process Improvement', 'Process Optimisation', 'Process Optimization'],
     ['Agile', 'Scrum', 'Kanban', 'Agile Methodologies'],
     ['Jira', 'Atlassian Jira'], ['Confluence'], ['Asana'], ['Notion'],
     ['Salesforce', 'SFDC'], ['HubSpot'], ['Workday'], ['SAP'], ['NetSuite'],
     ['Oracle EBS', 'Oracle E-Business Suite', 'E-Business Suite', 'EBS'],
     ['Excel', 'Microsoft Excel', 'MS Excel'],
     ['Financial Reporting'], ['Forecasting', 'Financial Forecasting'],
-    ['Budgeting'], ['Reconciliation'], ['Invoicing', 'Billing'],
+    ['Budgeting'], ['Invoicing', 'Billing'],
     ['Payouts', 'Disbursements'], ['Payments', 'Payment Services',
       'Payment Processing', 'Payment Service Providers', 'PSP'],
     ['Tax Calculation', 'Tax Compliance'],
     ['Financial Technology', 'FinTech'],
     ['Risk Management', 'Credit Risk'],
-    ['Regulatory Reporting', 'Compliance', 'Regulatory Compliance'],
     ['AML', 'Anti Money Laundering', 'Anti-Money Laundering'],
     ['KYC', 'Know Your Customer'],
     ['GTM', 'Go To Market', 'Go-to-Market'],
@@ -203,7 +201,10 @@
     ['HRIS', 'HR Information System', 'Core HR'],
     ['Benefits Administration', 'Benefits'], ['Compensation', 'Comp & Ben', 'Total Rewards'],
     ['Time and Attendance', 'Timekeeping'],
-    ['Statutory Reporting', 'Regulatory Reporting', 'Statutory Filings'],
+    // Producing the filings and meeting the rules are different work. A
+    // CV that reports to a regulator has not thereby shown a compliance
+    // programme, so these stay two requirements.
+    ['Regulatory Reporting', 'Statutory Reporting', 'Statutory Filings'],
     ['Compliance', 'Regulatory Compliance', 'Statutory Compliance'],
     ['Audit', 'Internal Audit', 'Audit Readiness', 'Controls'],
     ['Reconciliation', 'Account Reconciliation', 'Payroll Reconciliation'],
@@ -236,7 +237,9 @@
     ['Data Accuracy', 'Accuracy', 'Quality Control'],
 
     // --- people -------------------------------------------------------
-    ['Leadership', 'Team Leadership', 'Technical Leadership'],
+    // "Team leadership" sits with People Leadership above: a posting that
+    // asks for it means direct reports. Leadership on its own does not.
+    ['Leadership', 'Technical Leadership'],
     ['Mentorship', 'Mentoring', 'Coaching'],
     ['Collaboration', 'Cross-functional Collaboration', 'Cross Functional',
       'Cross-functional', 'Teamwork', 'Team Dynamics'],
@@ -526,8 +529,12 @@
       'error budget', 'month-end reporting'],
     'Escalation Management': ['incident response', 'triage', 'escalated', 'root cause',
       'recurring failure', 'backlog'],
-    'Continuous Improvement': ['cutting the', 'cut the month-end', 'reduced the cycle',
-      'streamlined', 'removed the manual'],
+    // Taking work that was being done by hand and making it stop being
+    // done by hand is the thing a posting means. "Improved a process" on
+    // its own is not, which is why no bare "improved" appears here.
+    'Continuous Improvement': ['cutting the', 'cut the', 'reduced the cycle',
+      'streamlined', 'removed the manual', 'replaced the manual', 'eliminated the manual',
+      'automated the', 'automating the', 'shortened the'],
   };
   const _IMPLIED_LOOKUP = new Map();
   for (const label of Object.keys(IMPLIED_BY)) _IMPLIED_LOOKUP.set(tight(label), IMPLIED_BY[label]);

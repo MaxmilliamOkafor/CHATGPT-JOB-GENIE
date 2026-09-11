@@ -177,6 +177,46 @@ console.log('\nAND THE CHIPS SAY WHICH IS WHICH IN COLOUR, NOT ONLY IN A GLYPH')
     /isMatched \? '✓' : '✗'/.test(js), 'colour became the only signal');
 }
 
+console.log('\nAND NO SURFACE FORM BELONGS TO TWO REQUIREMENTS');
+{
+  // The index is first-wins and silent, so a form written into two
+  // groups belongs to whichever is declared earlier and the later group
+  // quietly loses it. That is how "process improvement" came to sit
+  // outside Continuous Improvement, and "compliance" inside Regulatory
+  // Reporting -- one requirement counted twice, and a CV that satisfied
+  // it marked missing.
+  const owner = new Map();
+  const clashes = [];
+  TX.GROUPS.forEach((group, i) => {
+    for (const form of group) {
+      const key = TX.tight(form);
+      if (!key) continue;
+      const first = owner.get(key);
+      if (first === undefined) owner.set(key, i);
+      else if (first !== i) clashes.push(form + ': [' + TX.GROUPS[first][0] + '] / [' + group[0] + ']');
+    }
+  });
+  t('  every form is claimed by exactly one group', clashes.length === 0, clashes.join('  |  '));
+
+  // And the requirements those collisions were splitting are single ones.
+  for (const [a, b] of [
+    ['continuous improvement', 'process improvement'],
+    ['reconciliation', 'account reconciliation'],
+    ['statutory reporting', 'regulatory reporting'],
+  ]) {
+    t('  "' + a + '" and "' + b + '" are one requirement',
+      TX.canonical(a) === TX.canonical(b), TX.canonical(a) + ' / ' + TX.canonical(b));
+  }
+  // ...while these stayed two, because they are two.
+  for (const [a, b] of [
+    ['compliance', 'regulatory reporting'],
+    ['leadership', 'people leadership'],
+  ]) {
+    t('  "' + a + '" and "' + b + '" stay separate',
+      TX.canonical(a) !== TX.canonical(b), 'both read as ' + TX.canonical(a));
+  }
+}
+
 console.log('\nAND NOTHING HERE IS SOMEBODY ELSE\'S FILE');
 {
   const src = fs.readFileSync(path.join(DIR, 'keyword-taxonomy.js'), 'utf8');
