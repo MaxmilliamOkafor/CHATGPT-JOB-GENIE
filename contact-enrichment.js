@@ -36,7 +36,7 @@
  *   not one the recipient gave you. In the EU that needs a lawful basis
  *   under GDPR and the obligation sits with the sender.
  *
- *   ON by default, with Closely as the default provider. It still costs
+ *   OFF by default, with Closely as the default provider when enabled. It still costs
  *   nothing and contacts nobody until a provider credential is saved, and
  *   it is only ever consulted when the posting, its structured data and
  *   the employer's careers page all published nothing. Every address it
@@ -932,7 +932,7 @@
   // itself what "unset" means is a chance for the interface to draw one
   // thing while the code does another -- which has already happened twice
   // in this extension.
-  const DEFAULT_ENABLED = true;
+  const DEFAULT_ENABLED = false;
   const DEFAULT_PROVIDER = 'closely';
 
   function _withDefaults(c) {
@@ -1790,3 +1790,4 @@
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.ContactEnrichment;
 })(typeof window !== 'undefined' ? window : globalThis);
+

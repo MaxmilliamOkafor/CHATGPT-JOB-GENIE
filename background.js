@@ -1210,7 +1210,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const r = await CareersAddressFinder.find({
         companyName: message.companyName || '',
         jdUrl: message.jdUrl || '',
-        maxPages: 4,
+        orgUrl: message.orgUrl || '',
+        maxPages: 8,
       });
       console.log('[JG-Careers] lookup:', message.companyName, '->', r.email || '(none)');
       sendResponse({ ok: true, ...r });
@@ -1220,3 +1221,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   })();
   return true;   // async response
 });
+
