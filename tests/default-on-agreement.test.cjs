@@ -86,7 +86,7 @@ t('...and is read with === true',
   'it would arm itself by default');
 
 
-// ---- the contact lookup ships ON, with Closely ------------------------
+// ---- provider contact lookup is opt-in, with Closely ------------------------
 // Same failure mode as the LinkedIn toggle above, in a different config
 // shape: enrichment lives under one `enrichment_config` object rather
 // than a top-level key, so it has its own place for the interface and the
@@ -105,7 +105,7 @@ const enrich = (() => {
 })();
 
 t('the defaults are exported, not scattered',
-  enrich.DEFAULT_ENABLED === true && enrich.DEFAULT_PROVIDER === 'closely',
+  enrich.DEFAULT_ENABLED === false && enrich.DEFAULT_PROVIDER === 'closely',
   JSON.stringify({ enabled: enrich.DEFAULT_ENABLED, provider: enrich.DEFAULT_PROVIDER }));
 
 const ceSrc = read('contact-enrichment.js');
@@ -123,10 +123,10 @@ t('the popup renders the toggle from loadConfig',
 t('...and the provider select too',
   /const current = cfg\.provider \|\| providers\[0\]\.id;/.test(popupSrc));
 
-// On by default must not mean "contacts people by default".
-t('the UI no longer claims it is off by default',
-  !/off by default/i.test(read('popup.html')),
-  'the label would contradict the behaviour');
+// The visible label must agree with the opt-in provider default.
+t('the provider toggle visibly says it is off by default',
+  /Enable lookup[\s\S]{0,80}off by default/i.test(read('popup.html')),
+  'the label would contradict the opt-in behaviour');
 
 console.log('\n' + PASS + ' passed, ' + FAIL + ' failed');
 process.exit(FAIL ? 1 : 0);

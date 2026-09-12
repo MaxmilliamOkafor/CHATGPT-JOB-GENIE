@@ -111,12 +111,12 @@ t('a skipped provider is recorded rather than omitted',
 t('the on-demand run bypasses the cache',
   /findContacts\(ctx,\s*\{\s*noCache:\s*true\s*\}\)/.test(popupJs), 'would report a stale answer');
 
-// Closely is the selected provider by default, and the lookup ships ON.
+// Closely is the selected provider by default, and provider lookup requires explicit opt-in.
 // Asserted against the exported constants rather than a literal, so the
 // default cannot be changed in one place and left stale in another.
 t('Closely is the default provider', /DEFAULT_PROVIDER = 'closely'/.test(enrich),
   'default is something else');
-t('the lookup ships enabled', /DEFAULT_ENABLED = true/.test(enrich));
+t('provider lookup ships disabled until explicitly enabled', /DEFAULT_ENABLED = false/.test(enrich));
 t('no stale contactout fallback overrides it', !/\|\| 'contactout'/.test(enrich),
   "a leftover || 'contactout' would win over the declared default");
 // ContactOut is still the one that covers both cases with a single key,
