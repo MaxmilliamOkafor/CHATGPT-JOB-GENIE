@@ -5,7 +5,25 @@
   const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,24}/gi;
   const RECRUITING = /\b(recruit(?:er|ing|ment)|talent acquisition|hiring|careers|job applications)\b/i;
   const BLOCKED = /(?:noreply|no-reply|privacy|legal|accommodat|disabilit|accessib|support|security|press|media|sales|billing|unsubscribe|dpo|gdpr)/i;
-  const PATHS = ['/careers', '/jobs', '/careers/contact', '/contact', '/about/careers', '/company/careers'];
+  // WHAT THE SURROUNDING SENTENCE MAY VETO, AND WHAT IT MAY NOT.
+  //
+  // The whole list above was tested against the 240 characters AROUND
+  // the address as well as against the mailbox name, and those words are
+  // ordinary careers-page furniture. "We support flexible working. Email
+  // careers@acme.com", "For media enquiries see below. Careers:
+  // careers@acme.com" and "Our office is accessible. Apply via
+  // talent@acme.com" all threw the address away -- the exact addresses
+  // this file exists to find.
+  //
+  // A mailbox called careers@ or talent@ states its own purpose, and
+  // prose near it cannot overrule that. What prose CAN establish is that
+  // the address is published for a DIFFERENT purpose: an adjustments
+  // inbox exists so a candidate can request a disability accommodation,
+  // and a job follow-up sent there misuses it however the mailbox is
+  // spelled. Only those words veto. The full list still applies to the
+  // mailbox name itself, where "accommodations@" is caught outright.
+  const BLOCKED_CONTEXT = /(?:accommodat|disabilit|accessib|\beeo\b|affirmative action|reasonable[-\s]?adjust)/i;
+  const PATHS =['/careers', '/jobs', '/careers/contact', '/contact', '/about/careers', '/company/careers'];
   const decode = s => String(s || '').replace(/&amp;/gi, '&').replace(/&#(x[0-9a-f]+|\d+);/gi, (_, n) => { const v = n[0].toLowerCase() === 'x' ? parseInt(n.slice(1),16) : Number(n); return v <= 0x10ffff ? String.fromCodePoint(v) : ''; });
   const plain = s => decode(s).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   function publicUrl(raw, base) {
@@ -60,7 +78,7 @@
     function add(raw, context, kind) {
       let email; try { email = decodeURIComponent(decode(raw)).replace(/^mailto:/i,'').split('?')[0].trim().toLowerCase(); } catch (_) { return; }
       if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,24}$/i.test(email)) return;
-      if (!sameDomain(email.split('@')[1], domain) || BLOCKED.test(email.split('@')[0]) || BLOCKED.test(context)) return;
+      if (!sameDomain(email.split('@')[1], domain) || BLOCKED.test(email.split('@')[0]) || BLOCKED_CONTEXT.test(context)) return;
       const generic = _score(email) > 0;
       if (!generic && (kind !== 'mailto' || !RECRUITING.test(context))) return;
       contacts.set(email, {email, source, context:context.slice(0,240), contactType:generic ? 'recruiting-inbox' : 'published-recruiting-contact', score:generic ? 100 : 90, verification:'published-source', checkedAt:new Date().toISOString(), mailboxVerified:false, requiresReview:true});

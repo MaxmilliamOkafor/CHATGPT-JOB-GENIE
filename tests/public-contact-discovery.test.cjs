@@ -22,6 +22,29 @@ test('recruiting mailto keeps evidence; unrelated personal addresses are exclude
 test('accommodation-only recruiting inbox is not a follow-up target',()=>{
  assert.equal(F.harvest('<p>For disability accommodations contact careers@acme.com</p>','acme.com','https://acme.com').length,0);
 });
+// ORDINARY CAREERS-PAGE PROSE IS NOT A VETO.
+//
+// The mailbox blocklist was being tested against the 240 characters
+// around the address as well as against the mailbox name, and it carries
+// words like support, media, sales and press. Those are furniture on a
+// careers page, so "We support flexible working. Email careers@acme.com"
+// threw away the exact address this file exists to find.
+//
+// A mailbox called careers@ states its own purpose. Only prose that
+// establishes a DIFFERENT purpose -- an adjustments or accessibility
+// inbox -- may overrule it, and the full blocklist still applies to the
+// mailbox name itself.
+test('page furniture near the address does not discard it',()=>{
+ for(const html of [
+  '<p>We support flexible working. Email <a href="mailto:careers@acme.com">careers@acme.com</a>.</p>',
+  '<p>For media enquiries see below. Careers: <a href="mailto:careers@acme.com">careers@acme.com</a></p>',
+  '<p>Our sales and billing teams sit here too. Apply: <a href="mailto:talent@acme.com">talent@acme.com</a></p>',
+ ]) assert.equal(F.harvest(html,'acme.com','https://acme.com/careers').length,1,html);
+});
+test('a purpose-built adjustments inbox is still refused, however it is spelled',()=>{
+ assert.equal(F.harvest('<p>To request a disability adjustment email <a href="mailto:careers-adjust@acme.com">careers-adjust@acme.com</a></p>','acme.com','https://acme.com').length,0);
+ assert.equal(F.harvest('<p>Accommodations: <a href="mailto:accommodations@acme.com">accommodations@acme.com</a></p>','acme.com','https://acme.com').length,0);
+});
 test('unsafe URL schemes and local destinations are rejected',()=>{
  for(const url of ['http://acme.com','https://127.0.0.1','https://[::1]','https://server.local','https://user:pass@acme.com','https://acme.com:8080']) assert.equal(F.publicUrl(url),null,url);
 });
