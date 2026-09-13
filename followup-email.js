@@ -43,19 +43,8 @@
   // application rather than a helpful note. Users can edit these, add
   // their own, and switch per application.
   // ===================================================================
-  // Signature block, written out literally rather than as tokens, so the
-  // template editor shows the exact text that will be sent. Tokens are
-  // still available ({{my_first_name}}, {{my_phone}}, {{my_email}},
-  // {{my_linkedin}}) for anyone who prefers the signature to follow their
-  // stored profile automatically.
-  const SIGN_OFF = [
-    'Kind regards,',
-    '',
-    'Maxmilliam',
-    '+353 874 261 508',
-    'Maxokafordev@gmail.com',
-    'https://www.linkedin.com/in/maxokafor/',
-  ].join('\n');
+  // Resolve the signature from the current candidate's profile.
+  const SIGN_OFF = ['Kind regards,', '', '{{my_name}}', '{{my_phone}}', '{{my_email}}', '{{my_linkedin}}'].join('\n');
 
   const BUILT_IN_TEMPLATES = [
     {
@@ -277,7 +266,7 @@
   }
 
   // ---- token expansion -------------------------------------------------
-  // "0874261508" -> "+353 874 261 508". Only converts a leading 0 when we
+  // Normalize a national Irish number. Only converts a leading 0 when we
   // know the country; otherwise the number is left exactly as the user
   // typed it, because guessing a dialling code is worse than plain digits.
   function _prettyPhone(raw, country) {
@@ -378,7 +367,7 @@
       my_first_name: String(c.myName || '').trim().split(/\s+/)[0] || '',
       my_email: c.myEmail || '',
       // Presented, not raw. A signature is the last thing read, so a
-      // bare "0874261508" or a scheme-less profile URL undercuts an
+      // bare "2025550100" or a scheme-less profile URL undercuts an
       // otherwise careful note.
       my_phone: _prettyPhone(c.myPhone, c.country),
       my_linkedin: _prettyLinkedIn(c.myLinkedin),
@@ -828,6 +817,11 @@
   function getAuthTokenFromManifest(interactive) {
     return new Promise((resolve, reject) => {
       try {
+        const clientId = chrome.runtime.getManifest().oauth2?.client_id;
+        if (!clientId || /YOUR_|REPLACE|xxxx/i.test(clientId)) {
+          reject(new Error('Connect Gmail in preferences with your OAuth client ID, or use Open in Gmail to review and send manually.'));
+          return;
+        }
         if (!chrome.identity || !chrome.identity.getAuthToken) {
           reject(new Error('chrome.identity unavailable - add the "identity" permission and an oauth2 client_id to manifest.json'));
           return;

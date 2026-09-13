@@ -1,0 +1,5034 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  aiErrorResponse,
+  classifyProviderStatus,
+  lookupAiKeyRow,
+  type AiErrorCode,
+} from "../_shared/aiErrors.ts";
+import {
+  applyProjectsSection,
+  buildProjectsSection,
+  evaluateRevision,
+  measureCoverage,
+  termAppearsIn,
+  type RevisionRecord,
+} from "../_shared/coverage.ts";
+import {
+  buildEvidenceSources,
+  buildRequirementList,
+  classifyTerm,
+  reportCoverage,
+  type EvidenceSource,
+} from "../_shared/evidence.ts";
+import {
+  CATEGORY_LABEL,
+  categoriseSkill,
+  isSoftCapability,
+  placeSkillsInSection,
+} from "../_shared/skillsPlacement.ts";
+
+
+// We reuse the existing generate-pdf backend function to keep a single client call per job.
+// This function calls generate-pdf server-side and returns base64 PDFs alongside the tailored text.
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+// Input validation limits
+const MAX_STRING_SHORT = 200;
+const MAX_STRING_MEDIUM = 500;
+const MAX_STRING_LONG = 50000;
+const MAX_ARRAY_SIZE = 50;
+
+function validateString(value: any, maxLength: number, fieldName: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`${fieldName} must be a string`);
+  }
+  const trimmed = value.trim();
+  if (trimmed.length > maxLength) {
+    throw new Error(`${fieldName} exceeds maximum length of ${maxLength} characters`);
+  }
+  return trimmed;
+}
+
+function validateStringArray(value: any, maxItems: number, maxStringLength: number, fieldName: string): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  if (value.length > maxItems) {
+    throw new Error(`${fieldName} exceeds maximum of ${maxItems} items`);
+  }
+  return value.slice(0, maxItems).map((item, i) => validateString(item, maxStringLength, `${fieldName}[${i}]`));
+}
+
+interface TailorRequest {
+  jobTitle: string;
+  company: string;
+  description: string;
+  requirements: string[];
+  location?: string;
+  extractedCity?: string; // City extracted by extension for "[CITY] | open to relocation" CV format
+  jobId?: string;
+  userProfile: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    phone: string;
+    linkedin: string;
+    github: string;
+    portfolio: string;
+    coverLetter: string;
+    // Canonical field: professional_experience (with fallback to workExperience for backward compatibility)
+    professionalExperience: any[];
+    education: any[];
+    skills: any[];
+    certifications: string[];
+    achievements: any[];
+    atsStrategy: string;
+    // Declared because the tailoring flow reads them: projects are injected
+    // verbatim, and the spoken languages / citizenship line is built from these.
+    relevantProjects?: any[];
+    languages?: any[];
+    citizenship?: string;
+    city?: string;
+    country?: string;
+    address?: string;
+    state?: string;
+    zipCode?: string;
+  };
+
+  includeReferral?: boolean;
+  coverLetterTone?: "professional" | "enthusiastic" | "concise";
+}
+
+async function verifyAuth(req: Request): Promise<{ userId: string; supabase: any }> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, supabaseKey);
+
+  const authHeader = req.headers.get("authorization");
+  if (!authHeader) {
+    throw new Error("Missing authorization header");
+  }
+
+  const token = authHeader.replace("Bearer ", "");
+  const {
+    data: { user },
+    error,
+  } = await supabase.auth.getUser(token);
+
+  if (error || !user) {
+    throw new Error("Unauthorized: Invalid or expired token");
+  }
+
+  return { userId: user.id, supabase };
+}
+
+interface AIProviderConfig {
+  provider: "openai" | "kimi";
+  apiKey: string;
+  openaiEnabled: boolean;
+  kimiEnabled: boolean;
+}
+
+type AIConfigResult =
+  | { ok: true; config: AIProviderConfig }
+  | { ok: false; code: AiErrorCode; userMessage: string; detail: string };
+
+/**
+ * Resolves the caller's AI provider config, reporting exactly WHY it is
+ * unavailable: empty columns, RLS denial, zero rows, multiple rows, or another
+ * Postgres error (which is logged, not discarded).
+ */
+async function getUserAIConfigResult(supabase: any, userId: string): Promise<AIConfigResult> {
+  const lookup = await lookupAiKeyRow(
+    supabase,
+    userId,
+    "openai_api_key, kimi_api_key, preferred_ai_provider, openai_enabled, kimi_enabled",
+  );
+  if (!lookup.ok) return lookup;
+  const data = lookup.row as any;
+
+  const preferredProvider = data.preferred_ai_provider || "openai";
+  const openaiEnabled = data.openai_enabled ?? true;
+  const kimiEnabled = data.kimi_enabled ?? true;
+
+  // Determine which provider to use based on preference and availability
+  let activeProvider: "openai" | "kimi" = "openai";
+  let activeKey: string | null = null;
+
+  if (preferredProvider === "kimi" && kimiEnabled && data.kimi_api_key) {
+    activeProvider = "kimi";
+    activeKey = data.kimi_api_key;
+  } else if (preferredProvider === "openai" && openaiEnabled && data.openai_api_key) {
+    activeProvider = "openai";
+    activeKey = data.openai_api_key;
+  } else if (kimiEnabled && data.kimi_api_key) {
+    // Fallback to Kimi if OpenAI not available
+    activeProvider = "kimi";
+    activeKey = data.kimi_api_key;
+  } else if (openaiEnabled && data.openai_api_key) {
+    // Fallback to OpenAI if Kimi not available
+    activeProvider = "openai";
+    activeKey = data.openai_api_key;
+  }
+
+  if (!activeKey) {
+    console.error("[ai-key-lookup] no enabled provider has a key saved", {
+      userId,
+      hasOpenai: !!data.openai_api_key,
+      hasKimi: !!data.kimi_api_key,
+      openaiEnabled,
+      kimiEnabled,
+    });
+    return {
+      ok: false,
+      code: "ai_key_missing",
+      userMessage:
+        "No AI API key is saved and enabled on your profile, so nothing can be generated. Add or enable a key in Profile settings.",
+      detail: "openai_api_key / kimi_api_key empty or provider disabled",
+    };
+  }
+
+  return {
+    ok: true,
+    config: {
+      provider: activeProvider,
+      apiKey: activeKey,
+      openaiEnabled,
+      kimiEnabled,
+    },
+  };
+}
+
+// Legacy wrapper: returns null on any failure. Prefer getUserAIConfigResult.
+async function getUserAIConfig(supabase: any, userId: string): Promise<AIProviderConfig | null> {
+  const result = await getUserAIConfigResult(supabase, userId);
+  return result.ok ? result.config : null;
+}
+
+// Legacy function for backward compatibility
+async function getUserOpenAIKey(supabase: any, userId: string): Promise<string | null> {
+  const config = await getUserAIConfig(supabase, userId);
+  return config?.provider === "openai" ? config.apiKey : null;
+}
+
+async function logApiUsage(supabase: any, userId: string, functionName: string, tokensUsed: number): Promise<void> {
+  try {
+    await supabase.from("api_usage").insert({
+      user_id: userId,
+      function_name: functionName,
+      tokens_used: tokensUsed,
+    });
+  } catch (error) {
+    console.error("Failed to log API usage:", error);
+  }
+}
+
+/**
+ * Strip job-posting noise (requisition numbers, JR-/REQ-/R- codes,
+ * employment-type / location suffixes) from a JD title, while keeping
+ * legitimate digits like "Dynamics 365" or "SAP S/4HANA".
+ */
+const MONTH_NAMES = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+// Format a stored date token (2023-01, 01/2023, 2023) as "January 2023"; passes through "Present".
+function formatMonthYear(raw?: string): string {
+  const t = (raw || "").toString().trim();
+  if (!t) return "";
+  if (/present|current/i.test(t)) return "Present";
+  let y = "", m = "";
+  const iso = t.match(/^((?:19|20)\d{2})[-\/](\d{1,2})/);
+  const my = t.match(/^(\d{1,2})[-\/]((?:19|20)\d{2})/);
+  if (iso) { y = iso[1]; m = iso[2]; }
+  else if (my) { y = my[2]; m = my[1]; }
+  else return t;
+  const idx = parseInt(m, 10) - 1;
+  return MONTH_NAMES[idx] ? `${MONTH_NAMES[idx]} ${y}` : y;
+}
+// Build an ATS-safe range: "January 2023 - Present" (full month names, plain hyphen).
+function formatDateRangeATS(start?: string, end?: string, fallbackEnd = ""): string {
+  const s = formatMonthYear(start);
+  const e = formatMonthYear(end) || fallbackEnd;
+  if (!s && !e) return "";
+  if (!e) return s;
+  if (!s) return e;
+  return `${s} - ${e}`;
+}
+
+function normaliseJobTitle(raw: string, company?: string): string {
+  let t = String(raw || "").trim();
+
+  // Leading "(1526) ", "[1526] ", "1526 - ", "#88213 " style prefixes
+  t = t.replace(/^\s*[\(\[\{]\s*#?\d{3,}\s*[\)\]\}]\s*[-–—:|]?\s*/, "");
+  t = t.replace(/^\s*#?\d{4,}\s*[-–—:|]\s*/, "");
+
+  // Requisition codes anywhere: JR-104882, REQ 88213, R-1234, Req #88213, Job ID: 1234
+  t = t.replace(/\b(?:job\s*id|requisition(?:\s*(?:id|no\.?|number))?|req(?:uisition)?|jr|jobreq)\b\s*[#:\-–—]?\s*\d{2,}[A-Za-z]?\b/gi, " ");
+  t = t.replace(/\b(?:JR|REQ|R)[-_]\d{2,}[A-Za-z]?\b/gi, " ");
+  t = t.replace(/\s*[#(\[]\s*\d{3,}\s*[)\]]?\s*/g, " ");
+
+  // Parenthetical employment-type / location / seniority noise
+  const noise = /(remote|hybrid|on[-\s]?site|onsite|full[-\s]?time|part[-\s]?time|contract(?:or)?|permanent|perm|temporary|temp|fixed[-\s]?term|internship|intern|w2|c2c|ftc|maternity cover|\d+\s*months?|m\/f\/d|m\/w\/d|f\/m\/d|d\/f\/m|all genders|any gender)/i;
+  t = t.replace(/[\(\[]([^)\]]*)[\)\]]/g, (m, inner: string) =>
+    noise.test(String(inner)) ? " " : m,
+  );
+
+  // Trailing employment-type / noise suffixes after a separator
+  t = t.replace(
+    /\s*[-–—|,\/]\s*(remote|hybrid|on[-\s]?site|onsite|full[-\s]?time|part[-\s]?time|contract(?:or)?|permanent|temporary|fixed[-\s]?term|internship|intern|m\/f\/d|m\/w\/d|f\/m\/d|all genders)\s*$/gi,
+    "",
+  );
+
+  // Trailing bare requisition-ish number ("Senior Engineer 104882")
+  t = t.replace(/\s+\d{4,}$/g, "");
+
+  // ---- Browser page-title furniture ----
+  // "GTM Strategy/Operations Associate | Datadog Careers" -> "GTM Strategy/Operations Associate"
+  // Only ever strips segments after a page-title separator, and only when every
+  // following segment is site furniture (company name, "Careers", "Jobs", a location).
+  const TITLE_WORDS = /\b(engineer|developer|manager|analyst|associate|specialist|director|lead|consultant|officer|intern|scientist|designer|architect|administrator|coordinator|advisor|adviser|technician|accountant|nurse|assistant|executive|partner|president|head|chief|supervisor|representative|agent|strategist|recruiter|controller|auditor|planner|operator|programmer|researcher|trainee|graduate|apprentice|clerk|counsel|attorney|paralegal|therapist|teacher|professor|writer|editor|marketer|buyer|salesperson)\b/i;
+  const FURNITURE = /\b(careers?|jobs?|job\s*board|job\s*openings?|vacanc(?:y|ies)|hiring|we\s+are\s+hiring|apply(?:\s+now)?|opportunit(?:y|ies)|join\s+us|work\s+with\s+us|workday|myworkdayjobs|greenhouse|lever|smartrecruiters|taleo|icims|successfactors|linkedin|indeed|glassdoor|ziprecruiter|monster|totaljobs|irishjobs)\b/i;
+  const companyLower = String(company || "").toLowerCase().replace(/\b(inc|llc|ltd|limited|plc|gmbh|corp|corporation|co)\b\.?/g, "").replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+
+  const looksLikeFurniture = (seg: string): boolean => {
+    const s = seg.trim();
+    if (!s) return true;
+    if (FURNITURE.test(s)) return true;
+    if (companyLower && s.toLowerCase().includes(companyLower)) return true;
+    // A short capitalised phrase with no job-title word: a company name or a place
+    if (!TITLE_WORDS.test(s) && /^[A-Z0-9][^,]*$/.test(s) && s.split(/\s+/).length <= 4) return true;
+    return false;
+  };
+
+  const segments = t.split(/\s*[|·•»‹›─]\s*|\s+[–—]\s+|\s+-\s+/).map((x) => x.trim()).filter(Boolean);
+  if (segments.length > 1) {
+    const tail = segments.slice(1);
+    if (tail.every(looksLikeFurniture) && segments[0].length >= 3) {
+      t = segments[0];
+    }
+  }
+
+  // Trailing "at <Company>"
+  t = t.replace(/\s+at\s+([A-Z][\w.&'()\-]*(?:\s+[\w.&'()\-]+){0,3})\s*$/, (m, tailName: string) => {
+    const name = String(tailName).trim();
+    if (companyLower && name.toLowerCase().includes(companyLower)) return "";
+    if (!companyLower && !TITLE_WORDS.test(name) && FURNITURE.test(name)) return "";
+    return m;
+  });
+
+  // Tidy separators / whitespace
+  t = t.replace(/\s{2,}/g, " ").replace(/\s*[-–—|,\/:]+\s*$/g, "").replace(/^\s*[-–—|,\/:]+\s*/g, "").trim();
+
+  return t || String(raw || "").trim();
+}
+
+function validateRequest(data: any): TailorRequest {
+  const company = validateString(data.company, MAX_STRING_SHORT, "company");
+  const jobTitle = normaliseJobTitle(validateString(data.jobTitle, MAX_STRING_SHORT, "jobTitle"), company);
+
+  const description = validateString(data.description || "", MAX_STRING_LONG, "description");
+  const requirements = validateStringArray(data.requirements || [], MAX_ARRAY_SIZE, MAX_STRING_MEDIUM, "requirements");
+  const location = data.location ? validateString(data.location, MAX_STRING_SHORT, "location") : undefined;
+  const extractedCity = data.extractedCity
+    ? validateString(data.extractedCity, MAX_STRING_SHORT, "extractedCity")
+    : undefined;
+  const jobId = data.jobId ? validateString(data.jobId, MAX_STRING_SHORT, "jobId") : undefined;
+
+  const profile = data.userProfile || {};
+  
+  // Canonical mapping: prefer professionalExperience/professional_experience, fallback to workExperience/work_experience
+  const experienceArray = Array.isArray(profile.professionalExperience) ? profile.professionalExperience :
+                          Array.isArray(profile.professional_experience) ? profile.professional_experience :
+                          Array.isArray(profile.workExperience) ? profile.workExperience :
+                          Array.isArray(profile.work_experience) ? profile.work_experience : [];
+  
+  const userProfile = {
+    firstName: validateString(profile.firstName || "", MAX_STRING_SHORT, "firstName"),
+    lastName: validateString(profile.lastName || "", MAX_STRING_SHORT, "lastName"),
+    email: validateString(profile.email || "", MAX_STRING_SHORT, "email"),
+    phone: validateString(profile.phone || "", MAX_STRING_SHORT, "phone"),
+    linkedin: validateString(profile.linkedin || "", MAX_STRING_MEDIUM, "linkedin"),
+    github: validateString(profile.github || "", MAX_STRING_MEDIUM, "github"),
+    portfolio: validateString(profile.portfolio || "", MAX_STRING_MEDIUM, "portfolio"),
+    coverLetter: validateString(profile.coverLetter || "", MAX_STRING_LONG, "coverLetter"),
+    // Use canonical experience array (professionalExperience preferred)
+    professionalExperience: experienceArray.slice(0, 20),
+    education: Array.isArray(profile.education) ? profile.education.slice(0, 10) : [],
+    skills: Array.isArray(profile.skills) ? profile.skills.slice(0, 100) : [],
+    certifications: validateStringArray(
+      ((profile.certificationsHidden || profile.certifications_hidden) ? [] : profile.certifications || []).slice(0, 6),
+      MAX_ARRAY_SIZE,
+      MAX_STRING_MEDIUM,
+      "certifications",
+    ),
+    achievements: Array.isArray(profile.achievements) ? profile.achievements.slice(0, 20) : [],
+    atsStrategy: validateString(profile.atsStrategy || "", MAX_STRING_LONG, "atsStrategy"),
+    city: profile.city ? validateString(profile.city, MAX_STRING_SHORT, "city") : undefined,
+    country: profile.country ? validateString(profile.country, MAX_STRING_SHORT, "country") : undefined,
+    address: profile.address ? validateString(profile.address, MAX_STRING_MEDIUM, "address") : undefined,
+    state: profile.state ? validateString(profile.state, MAX_STRING_SHORT, "state") : undefined,
+    zipCode: profile.zipCode ? validateString(profile.zipCode, MAX_STRING_SHORT, "zipCode") : undefined,
+    relevantProjects: Array.isArray(profile.relevantProjects) ? profile.relevantProjects.slice(0, 10) :
+                      Array.isArray(profile.relevant_projects) ? profile.relevant_projects.slice(0, 10) : [],
+    languages: Array.isArray(profile.languages) ? profile.languages.slice(0, 20) : [],
+    citizenship: profile.citizenship ? validateString(profile.citizenship, MAX_STRING_SHORT, "citizenship") : "",
+  };
+
+  // Cover letter tone selection
+  const validTones = ["professional", "enthusiastic", "concise"];
+  const coverLetterTone = validTones.includes(data.coverLetterTone) ? data.coverLetterTone : "professional";
+
+  return {
+    jobTitle,
+    company,
+    description,
+    requirements,
+    location,
+    extractedCity,
+    jobId,
+    userProfile,
+    includeReferral: !!data.includeReferral,
+    coverLetterTone: coverLetterTone as "professional" | "enthusiastic" | "concise",
+  };
+}
+
+// Extract city from job location/description/URL for ATS optimization
+function extractJobCity(jdLocation: string | undefined, jdDescription: string, jobUrl?: string): string | null {
+  // Common city patterns to extract
+  const cityPatterns = [
+    // Major US cities
+    "New York",
+    "San Francisco",
+    "Los Angeles",
+    "Chicago",
+    "Seattle",
+    "Austin",
+    "Boston",
+    "Denver",
+    "Atlanta",
+    "Dallas",
+    "Houston",
+    "Miami",
+    "Phoenix",
+    "Philadelphia",
+    "San Diego",
+    "San Jose",
+    "Portland",
+    "Minneapolis",
+    "Detroit",
+    "Washington DC",
+    "D.C.",
+    // Major UK cities
+    "London",
+    "Manchester",
+    "Birmingham",
+    "Edinburgh",
+    "Glasgow",
+    "Bristol",
+    "Cambridge",
+    "Oxford",
+    "Cardiff",
+    "Leeds",
+    "Liverpool",
+    "Newcastle",
+    "Belfast",
+    "Southampton",
+    "Nottingham",
+    "Sheffield",
+    // Major EU cities
+    "Dublin",
+    "Paris",
+    "Berlin",
+    "Amsterdam",
+    "Munich",
+    "Frankfurt",
+    "Vienna",
+    "Zurich",
+    "Barcelona",
+    "Madrid",
+    "Milan",
+    "Rome",
+    "Stockholm",
+    "Copenhagen",
+    "Oslo",
+    "Helsinki",
+    "Brussels",
+    "Lisbon",
+    "Prague",
+    "Warsaw",
+    // Major Canadian cities
+    "Toronto",
+    "Vancouver",
+    "Montreal",
+    "Ottawa",
+    "Calgary",
+    "Edmonton",
+    // Major APAC cities
+    "Singapore",
+    "Hong Kong",
+    "Tokyo",
+    "Sydney",
+    "Melbourne",
+    "Auckland",
+    "Bangalore",
+    "Mumbai",
+    "Delhi",
+    "Hyderabad",
+    "Seoul",
+    "Shanghai",
+    "Beijing",
+    // Ireland cities
+    "Cork",
+    "Galway",
+    "Limerick",
+    "Waterford",
+  ];
+
+  // Priority 1: Extract from job location field
+  if (jdLocation && jdLocation.trim().length > 0) {
+    const locationText = jdLocation.trim();
+
+    // Check for direct city match in location
+    for (const city of cityPatterns) {
+      if (new RegExp(`\\b${city}\\b`, "i").test(locationText)) {
+        return city;
+      }
+    }
+
+    // If location is simple (no "or", no "Remote" as primary), use first part
+    if (!/\bremote\b/i.test(locationText) && !locationText.includes(",") && locationText.length < 50) {
+      return locationText;
+    }
+
+    // Extract first city from "City, State" or "City or Remote" patterns
+    const firstCityMatch = locationText.match(/^([A-Za-z\s]+?)(?:,|\s+or\s+|\s*\|)/i);
+    if (firstCityMatch && firstCityMatch[1].length > 2) {
+      return firstCityMatch[1].trim();
+    }
+  }
+
+  // Priority 2: Extract from URL params (e.g., ?city=London)
+  if (jobUrl) {
+    try {
+      const url = new URL(jobUrl);
+      const cityParam = url.searchParams.get("city") || url.searchParams.get("location");
+      if (cityParam) {
+        for (const city of cityPatterns) {
+          if (new RegExp(`\\b${city}\\b`, "i").test(cityParam)) {
+            return city;
+          }
+        }
+        return cityParam;
+      }
+    } catch (e) {
+      // URL parsing failed, continue
+    }
+  }
+
+  // Priority 3: Extract from job description
+  const descLower = jdDescription.toLowerCase();
+
+  // Look for "Based in [City]" or "[City] Role" patterns
+  const basedInMatch = jdDescription.match(/based in\s+([A-Za-z\s]+?)(?:\.|,|\s+and|\s+or|$)/i);
+  if (basedInMatch && basedInMatch[1].length > 2) {
+    const potentialCity = basedInMatch[1].trim();
+    for (const city of cityPatterns) {
+      if (new RegExp(`\\b${city}\\b`, "i").test(potentialCity)) {
+        return city;
+      }
+    }
+  }
+
+  // Check for any city mention in description
+  for (const city of cityPatterns) {
+    if (new RegExp(`\\b${city}\\b`, "i").test(jdDescription)) {
+      return city;
+    }
+  }
+
+  return null;
+}
+
+// Smart location logic - formats as "[CITY]" for CV header (no relocation suffix)
+function getSmartLocation(
+  jdLocation: string | undefined,
+  jdDescription: string,
+  profileCity?: string,
+  profileCountry?: string,
+  jobUrl?: string,
+  preExtractedCity?: string,
+): string {
+  // Priority 1: Use city pre-extracted by extension if provided
+  if (preExtractedCity && preExtractedCity.trim().length > 0) {
+    console.log(`Using pre-extracted city from extension: ${preExtractedCity}`);
+    return preExtractedCity.replace(/\s*\|?\s*open\s+to\s+relocation\s*/gi, '').trim();
+  }
+
+  // Priority 2: Extract city from job listing
+  const extractedCity = extractJobCity(jdLocation, jdDescription, jobUrl);
+
+  if (extractedCity) {
+    return extractedCity;
+  }
+
+  // Check if job is remote
+  const jdText = `${jdLocation || ""} ${jdDescription}`.toLowerCase();
+  if (/\b(remote|worldwide|global|anywhere|distributed|work from home|wfh)\b/.test(jdText)) {
+    if (profileCity && profileCountry) {
+      return `${profileCity} | Remote`;
+    }
+    return "Remote";
+  }
+
+  // Fallback to profile location
+  if (profileCity) {
+    return profileCity;
+  }
+
+  return "Remote";
+}
+
+// PART 3A: Comprehensive location extraction from job data
+interface ExtractedJobLocation {
+  explicit: {
+    cities: string[];
+    countries: string[];
+    regions: string[];
+  };
+  remote: {
+    isRemote: boolean;
+    remoteType: "fully_remote" | "hybrid" | "on_site" | "flexible" | "unknown";
+    requiredTimezone?: string[];
+  };
+  relocation: {
+    relocationRequired: boolean;
+    relocationCoverage: boolean;
+  };
+  visa: {
+    sponsorshipAvailable: boolean;
+    citizenshipRequired?: string[];
+    workAuthAccepted?: string[];
+  };
+}
+
+function extractLocationFromJobData(
+  jobTitle: string,
+  jobDescription: string,
+  jobMetadata?: { location?: string }
+): ExtractedJobLocation {
+  const fullText = `${jobTitle} ${jobDescription}`.toLowerCase();
+  const jdLocation = jobMetadata?.location || "";
+
+  // Country mapping
+  const countryMap: { [key: string]: string } = {
+    uk: "United Kingdom", london: "United Kingdom", manchester: "United Kingdom",
+    us: "United States", usa: "United States", "new york": "United States",
+    "san francisco": "United States", california: "United States",
+    ireland: "Ireland", dublin: "Ireland",
+    eu: "European Union", europe: "European Union",
+    germany: "Germany", france: "France", netherlands: "Netherlands",
+    canada: "Canada", australia: "Australia", singapore: "Singapore",
+  };
+
+  // Extract cities and countries
+  const extractedCountries = new Set<string>();
+  const extractedCities = new Set<string>();
+  const allLocationsText = `${jdLocation} ${fullText}`;
+
+  Object.entries(countryMap).forEach(([key, country]) => {
+    if (allLocationsText.includes(key)) {
+      if (key.length > 3) {
+        extractedCities.add(key.charAt(0).toUpperCase() + key.slice(1));
+      }
+      extractedCountries.add(country);
+    }
+  });
+
+  // Detect remote work type
+  const remotePatterns = {
+    fully_remote: /fully remote|100% remote|completely remote|work from anywhere/i,
+    hybrid: /hybrid|flexible|mix of|days (?:in|at) office/i,
+    on_site: /on-?site|in office|office based|must be in|required to be in/i,
+  };
+
+  let remoteType: "fully_remote" | "hybrid" | "on_site" | "flexible" | "unknown" = "unknown";
+  if (remotePatterns.fully_remote.test(fullText)) remoteType = "fully_remote";
+  else if (remotePatterns.hybrid.test(fullText)) remoteType = "hybrid";
+  else if (remotePatterns.on_site.test(fullText)) remoteType = "on_site";
+  else if (/flexible|arrangement/i.test(fullText)) remoteType = "flexible";
+
+  const isRemote = remoteType === "fully_remote" || remoteType === "hybrid" || remoteType === "flexible";
+
+  // Detect timezone requirements
+  const timezoneMatch = fullText.match(
+    /(?:timezone|gmt|utc|est|pst|cet|ist)[:\s]*([A-Z]{2,3}(?:\s*[-to]\s*[A-Z]{2,3})?)/gi
+  );
+  const requiredTimezone = timezoneMatch ? timezoneMatch.map((tz) => tz.toUpperCase()) : undefined;
+
+  // Detect relocation/visa
+  const relocationRequired = /must relocate|requires relocation|willing to relocate/i.test(fullText);
+  const relocationCoverage = /relocation (?:assistance|package|covered|support)/i.test(fullText);
+  const sponsorshipAvailable = /visa sponsorship|sponsorship available|sponsor work visa/i.test(fullText);
+
+  // Extract regions
+  const regionPatterns = /(?:across|in|within)\s+(europe|asia|north america|apac|latam)/gi;
+  const regions: string[] = [];
+  let regionMatch;
+  while ((regionMatch = regionPatterns.exec(fullText)) !== null) {
+    regions.push(regionMatch[1]);
+  }
+
+  return {
+    explicit: {
+      cities: Array.from(extractedCities),
+      countries: Array.from(extractedCountries),
+      regions,
+    },
+    remote: {
+      isRemote,
+      remoteType,
+      requiredTimezone,
+    },
+    relocation: {
+      relocationRequired,
+      relocationCoverage,
+    },
+    visa: {
+      sponsorshipAvailable,
+      citizenshipRequired: undefined,
+      workAuthAccepted: undefined,
+    },
+  };
+}
+
+// PART 3B: Match user locations to job requirements
+interface LocationMatch {
+  matchScore: number;
+  isViableLocation: boolean;
+  reason: string;
+  userLocationsMatched: string[];
+  jobRequirementsMatched: string[];
+  flags: {
+    sponsorshipNeeded: boolean;
+    relocationRequired: boolean;
+    timezoneCompatible: boolean;
+  };
+}
+
+function matchUserLocationsToJob(
+  userProfile: { city?: string; country?: string; authorizedCountries?: string[] },
+  extractedJobLocation: ExtractedJobLocation
+): LocationMatch {
+  let matchScore = 0;
+  let reason = "";
+  const userLocationsMatched: string[] = [];
+  const jobRequirementsMatched: string[] = [];
+
+  const flags = {
+    sponsorshipNeeded: false,
+    relocationRequired: false,
+    timezoneCompatible: true,
+  };
+
+  // User's available locations
+  const userCountries = [
+    userProfile.country,
+    ...(userProfile.authorizedCountries || []),
+  ].filter(Boolean) as string[];
+
+  // Check 1: REMOTE MATCH
+  if (extractedJobLocation.remote.isRemote) {
+    matchScore += 40;
+    userLocationsMatched.push("Remote capable");
+    jobRequirementsMatched.push(extractedJobLocation.remote.remoteType);
+    reason = "Job is remote and user can work remotely";
+  }
+
+  // Check 2: EXPLICIT LOCATION MATCH
+  if (extractedJobLocation.explicit.countries.length > 0) {
+    const matchedCountries = extractedJobLocation.explicit.countries.filter((c) =>
+      userCountries.some(
+        (uc) =>
+          uc.toLowerCase().includes(c.toLowerCase()) ||
+          c.toLowerCase().includes(uc.toLowerCase())
+      )
+    );
+
+    if (matchedCountries.length > 0) {
+      matchScore += 35;
+      userLocationsMatched.push(...matchedCountries);
+      jobRequirementsMatched.push(...matchedCountries);
+      reason = `User authorized in ${matchedCountries.join(", ")}`;
+    }
+  }
+
+  // Check 3: RELOCATION
+  if (extractedJobLocation.relocation.relocationRequired) {
+    flags.relocationRequired = true;
+    matchScore -= 5;
+    reason += " [Relocation required]";
+  }
+
+  // Check 4: VISA SPONSORSHIP
+  if (extractedJobLocation.visa.sponsorshipAvailable) {
+    flags.sponsorshipNeeded = true;
+    // This is positive - sponsorship is available
+    matchScore += 5;
+  }
+
+  const isViableLocation = matchScore >= 35;
+
+  return {
+    matchScore,
+    isViableLocation,
+    reason: reason || "Location match evaluation completed",
+    userLocationsMatched,
+    jobRequirementsMatched,
+    flags,
+  };
+}
+
+// PART 2B: Extract job keywords for project matching
+function extractTechKeywords(jobDescription: string, jobTitle: string): string[] {
+  const keywords: Set<string> = new Set();
+
+  const techPatterns = [
+    /(?:python|javascript|typescript|java|c\+\+|rust|go|kotlin)/gi,
+    /(?:react|vue|angular|svelte|next\.?js)/gi,
+    /(?:node\.?js|express|django|flask|fastapi)/gi,
+    /(?:aws|azure|gcp|kubernetes|docker)/gi,
+    /(?:postgresql|mongodb|redis|elasticsearch)/gi,
+    /(?:machine learning|deep learning|nlp|computer vision|llm|ai)/gi,
+    /(?:api|rest|graphql|grpc)/gi,
+    /(?:agile|scrum|kanban)/gi,
+  ];
+
+  const fullText = `${jobTitle} ${jobDescription}`.toLowerCase();
+
+  for (const pattern of techPatterns) {
+    const matches = fullText.match(pattern);
+    if (matches) {
+      matches.forEach((m) => keywords.add(m.toLowerCase()));
+    }
+  }
+
+  return Array.from(keywords);
+}
+
+// Jobscan-style keyword extraction - enhanced for ATS ranking
+function extractJobscanKeywords(
+  description: string,
+  requirements: string[],
+): {
+  hardSkills: string[];
+  softSkills: string[];
+  tools: string[];
+  titles: string[];
+  certifications: string[];
+  responsibilities: string[];
+  allKeywords: string[];
+} {
+  const text = `${description} ${requirements.join(" ")}`.toLowerCase();
+
+  // Hard skills (expanded tech stack - covers most ATS systems)
+  const hardSkillPatterns = [
+    // Programming languages
+    "python",
+    "javascript",
+    "typescript",
+    "java",
+    "c\\+\\+",
+    "c#",
+    "go",
+    "golang",
+    "rust",
+    "ruby",
+    "php",
+    "scala",
+    "kotlin",
+    "swift",
+    "r",
+    "matlab",
+    "perl",
+    "bash",
+    "powershell",
+    "sql",
+    "plsql",
+    "tsql",
+    "vba",
+    "solidity",
+    "haskell",
+    "elixir",
+    "clojure",
+    "f#",
+    "dart",
+    "lua",
+    "groovy",
+    "objective-c",
+    // Web frameworks
+    "react",
+    "react\\.?js",
+    "angular",
+    "vue",
+    "vue\\.?js",
+    "svelte",
+    "next\\.?js",
+    "nuxt",
+    "gatsby",
+    "remix",
+    "ember",
+    "backbone",
+    "jquery",
+    "node\\.?js",
+    "express",
+    "express\\.?js",
+    "fastify",
+    "nest\\.?js",
+    "koa",
+    "hapi",
+    "django",
+    "flask",
+    "fastapi",
+    "pyramid",
+    "spring",
+    "spring boot",
+    "rails",
+    "ruby on rails",
+    "laravel",
+    "symfony",
+    "asp\\.?net",
+    "blazor",
+    "gin",
+    "echo",
+    "fiber",
+    "phoenix",
+    // Databases
+    "sql",
+    "nosql",
+    "postgresql",
+    "postgres",
+    "mysql",
+    "mariadb",
+    "mongodb",
+    "redis",
+    "elasticsearch",
+    "opensearch",
+    "cassandra",
+    "dynamodb",
+    "couchdb",
+    "couchbase",
+    "neo4j",
+    "graphdb",
+    "arangodb",
+    "firestore",
+    "firebase",
+    "supabase",
+    "sqlite",
+    "oracle",
+    "sql server",
+    "mssql",
+    "db2",
+    "teradata",
+    "redshift",
+    "bigquery",
+    "athena",
+    "presto",
+    "trino",
+    "clickhouse",
+    "timescaledb",
+    "influxdb",
+    // Cloud & infrastructure
+    "aws",
+    "amazon web services",
+    "azure",
+    "microsoft azure",
+    "gcp",
+    "google cloud",
+    "google cloud platform",
+    "docker",
+    "kubernetes",
+    "k8s",
+    "terraform",
+    "ansible",
+    "puppet",
+    "chef",
+    "cloudformation",
+    "pulumi",
+    "helm",
+    "istio",
+    "linkerd",
+    "consul",
+    "vault",
+    "nomad",
+    "ecs",
+    "eks",
+    "aks",
+    "gke",
+    "fargate",
+    "lambda",
+    "step functions",
+    "cloud functions",
+    "azure functions",
+    "cloudflare",
+    "vercel",
+    "netlify",
+    "heroku",
+    "digitalocean",
+    "linode",
+    "vagrant",
+    "openstack",
+    "vmware",
+    "proxmox",
+    // DevOps/CI-CD
+    "jenkins",
+    "circleci",
+    "github actions",
+    "gitlab ci",
+    "travis ci",
+    "bamboo",
+    "teamcity",
+    "azure devops",
+    "argo cd",
+    "argocd",
+    "flux",
+    "spinnaker",
+    "tekton",
+    "buildkite",
+    "drone",
+    "concourse",
+    "ci/cd",
+    "ci cd",
+    "continuous integration",
+    "continuous deployment",
+    "continuous delivery",
+    "devops",
+    "devsecops",
+    "sre",
+    "site reliability",
+    "infrastructure as code",
+    "iac",
+    "gitops",
+    // Data & ML
+    "tensorflow",
+    "pytorch",
+    "keras",
+    "scikit-learn",
+    "sklearn",
+    "pandas",
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "seaborn",
+    "plotly",
+    "spark",
+    "pyspark",
+    "hadoop",
+    "hive",
+    "pig",
+    "kafka",
+    "confluent",
+    "airflow",
+    "dagster",
+    "prefect",
+    "luigi",
+    "dbt",
+    "great expectations",
+    "mlflow",
+    "kubeflow",
+    "vertex ai",
+    "sagemaker",
+    "databricks",
+    "snowflake",
+    "fivetran",
+    "stitch",
+    "airbyte",
+    "meltano",
+    "looker",
+    "tableau",
+    "power bi",
+    "metabase",
+    "superset",
+    "quicksight",
+    "mode",
+    "amplitude",
+    "mixpanel",
+    "segment",
+    "heap",
+    "hugging face",
+    "transformers",
+    "langchain",
+    "llamaindex",
+    "openai",
+    "gpt",
+    "llm",
+    "large language model",
+    "nlp",
+    "natural language processing",
+    "computer vision",
+    "cv",
+    "opencv",
+    "yolo",
+    "bert",
+    "word2vec",
+    "xgboost",
+    "lightgbm",
+    "catboost",
+    "random forest",
+    "neural network",
+    "deep learning",
+    "machine learning",
+    "ml",
+    "ai",
+    "artificial intelligence",
+    "reinforcement learning",
+    "supervised learning",
+    "unsupervised learning",
+    "feature engineering",
+    "model training",
+    "model serving",
+    "mlops",
+    "data science",
+    "data engineering",
+    "data analytics",
+    "etl",
+    "elt",
+    "data warehouse",
+    "data lake",
+    "data lakehouse",
+    "data pipeline",
+    "streaming",
+    "real-time",
+    "batch processing",
+    // API & Architecture
+    "rest",
+    "rest api",
+    "restful",
+    "graphql",
+    "grpc",
+    "soap",
+    "websocket",
+    "webhook",
+    "api gateway",
+    "microservices",
+    "micro-services",
+    "serverless",
+    "event-driven",
+    "event driven",
+    "message queue",
+    "pub/sub",
+    "pubsub",
+    "rabbitmq",
+    "activemq",
+    "sqs",
+    "sns",
+    "kinesis",
+    "eventbridge",
+    "domain driven design",
+    "ddd",
+    "cqrs",
+    "saga pattern",
+    "circuit breaker",
+    "load balancer",
+    "reverse proxy",
+    "nginx",
+    "apache",
+    "haproxy",
+    "traefik",
+    "kong",
+    "envoy",
+    // Security
+    "oauth",
+    "oauth2",
+    "oidc",
+    "openid connect",
+    "jwt",
+    "saml",
+    "sso",
+    "single sign-on",
+    "mfa",
+    "multi-factor",
+    "2fa",
+    "rbac",
+    "role based access",
+    "iam",
+    "identity management",
+    "encryption",
+    "tls",
+    "ssl",
+    "https",
+    "penetration testing",
+    "security audit",
+    "vulnerability",
+    "owasp",
+    "soc2",
+    "soc 2",
+    "gdpr",
+    "hipaa",
+    "pci dss",
+    "iso 27001",
+    "compliance",
+    "cybersecurity",
+    "infosec",
+    "devsecops",
+    // Frontend
+    "html",
+    "html5",
+    "css",
+    "css3",
+    "sass",
+    "scss",
+    "less",
+    "tailwind",
+    "tailwindcss",
+    "bootstrap",
+    "material ui",
+    "mui",
+    "chakra ui",
+    "ant design",
+    "styled components",
+    "emotion",
+    "webpack",
+    "vite",
+    "parcel",
+    "rollup",
+    "esbuild",
+    "swc",
+    "babel",
+    "eslint",
+    "prettier",
+    "responsive design",
+    "mobile-first",
+    "accessibility",
+    "a11y",
+    "wcag",
+    "aria",
+    "pwa",
+    "progressive web app",
+    "spa",
+    "single page application",
+    "ssr",
+    "server side rendering",
+    "ssg",
+    "static site generation",
+    "jamstack",
+    // Mobile
+    "ios",
+    "android",
+    "react native",
+    "flutter",
+    "xamarin",
+    "ionic",
+    "cordova",
+    "capacitor",
+    "expo",
+    "mobile development",
+    "cross-platform",
+    "native app",
+    // Testing
+    "unit testing",
+    "integration testing",
+    "e2e",
+    "end-to-end",
+    "test automation",
+    "tdd",
+    "test driven",
+    "bdd",
+    "behavior driven",
+    "jest",
+    "mocha",
+    "chai",
+    "jasmine",
+    "karma",
+    "cypress",
+    "playwright",
+    "selenium",
+    "webdriver",
+    "puppeteer",
+    "pytest",
+    "unittest",
+    "junit",
+    "testng",
+    "rspec",
+    "cucumber",
+    "postman",
+    "newman",
+    "load testing",
+    "performance testing",
+    "jmeter",
+    "locust",
+    "k6",
+    "gatling",
+    "qa",
+    "quality assurance",
+    // Misc tech
+    "git",
+    "github",
+    "gitlab",
+    "bitbucket",
+    "svn",
+    "linux",
+    "unix",
+    "windows server",
+    "macos",
+    "shell scripting",
+    "regex",
+    "regular expressions",
+    "json",
+    "xml",
+    "yaml",
+    "protobuf",
+    "avro",
+    "parquet",
+    "orc",
+    "csv",
+    "markdown",
+    "agile",
+    "scrum",
+    "kanban",
+    "lean",
+    "safe",
+    "waterfall",
+    "sdlc",
+    "software development lifecycle",
+    // Blockchain & Web3
+    "blockchain",
+    "web3",
+    "ethereum",
+    "solana",
+    "polygon",
+    "smart contracts",
+    "defi",
+    "nft",
+    "dapp",
+    "ipfs",
+    "hardhat",
+    "truffle",
+    "foundry",
+  ];
+
+  // Soft skills (critical for ATS)
+  const softSkillPatterns = [
+    "communication",
+    "communication skills",
+    "written communication",
+    "verbal communication",
+    "presentation skills",
+    "leadership",
+    "team leadership",
+    "technical leadership",
+    "thought leadership",
+    "people management",
+    "problem-solving",
+    "problem solving",
+    "critical thinking",
+    "analytical thinking",
+    "strategic thinking",
+    "teamwork",
+    "collaboration",
+    "cross-functional",
+    "cross functional",
+    "interdisciplinary",
+    "adaptability",
+    "flexibility",
+    "learning agility",
+    "growth mindset",
+    "self-motivated",
+    "proactive",
+    "time management",
+    "prioritization",
+    "multitasking",
+    "deadline-driven",
+    "results-oriented",
+    "attention to detail",
+    "detail-oriented",
+    "quality-focused",
+    "accuracy",
+    "project management",
+    "program management",
+    "stakeholder management",
+    "client-facing",
+    "customer-focused",
+    "mentoring",
+    "coaching",
+    "training",
+    "knowledge sharing",
+    "onboarding",
+    "negotiation",
+    "conflict resolution",
+    "decision-making",
+    "decision making",
+    "consensus building",
+    "innovation",
+    "creativity",
+    "design thinking",
+    "user-centric",
+    "empathy",
+    "accountability",
+    "ownership",
+    "initiative",
+    "self-starter",
+    "independent",
+  ];
+
+  // Tools/platforms
+  const toolPatterns = [
+    "jira",
+    "confluence",
+    "slack",
+    "microsoft teams",
+    "teams",
+    "zoom",
+    "notion",
+    "asana",
+    "trello",
+    "monday",
+    "clickup",
+    "linear",
+    "shortcut",
+    "pivotal tracker",
+    "figma",
+    "sketch",
+    "adobe xd",
+    "invision",
+    "zeplin",
+    "miro",
+    "lucidchart",
+    "draw\\.io",
+    "excalidraw",
+    "postman",
+    "insomnia",
+    "swagger",
+    "openapi",
+    "graphiql",
+    "graphql playground",
+    "datadog",
+    "splunk",
+    "grafana",
+    "prometheus",
+    "new relic",
+    "dynatrace",
+    "appdynamics",
+    "elastic apm",
+    "honeycomb",
+    "lightstep",
+    "jaeger",
+    "zipkin",
+    "sentry",
+    "bugsnag",
+    "rollbar",
+    "logrocket",
+    "fullstory",
+    "hotjar",
+    "pagerduty",
+    "opsgenie",
+    "victorops",
+    "statuspage",
+    "incident\\.io",
+    "cloudwatch",
+    "stackdriver",
+    "azure monitor",
+    "sonarqube",
+    "snyk",
+    "dependabot",
+    "renovate",
+    "whitesource",
+    "black duck",
+    "veracode",
+    "checkmarx",
+    "salesforce",
+    "hubspot",
+    "zendesk",
+    "intercom",
+    "freshdesk",
+    "stripe",
+    "plaid",
+    "twilio",
+    "sendgrid",
+    "mailchimp",
+    "brevo",
+    "1password",
+    "lastpass",
+    "okta",
+    "auth0",
+    "onelogin",
+    "ping identity",
+  ];
+
+  // Job titles/roles
+  const titlePatterns = [
+    "software engineer",
+    "senior software engineer",
+    "staff engineer",
+    "principal engineer",
+    "distinguished engineer",
+    "fellow",
+    "software developer",
+    "senior software developer",
+    "application developer",
+    "web developer",
+    "frontend developer",
+    "backend developer",
+    "full stack developer",
+    "fullstack developer",
+    "data scientist",
+    "senior data scientist",
+    "lead data scientist",
+    "principal data scientist",
+    "data engineer",
+    "senior data engineer",
+    "analytics engineer",
+    "bi engineer",
+    "business intelligence",
+    "data analyst",
+    "business analyst",
+    "product analyst",
+    "marketing analyst",
+    "financial analyst",
+    "ml engineer",
+    "machine learning engineer",
+    "ai engineer",
+    "applied scientist",
+    "research scientist",
+    "research engineer",
+    "solution architect",
+    "solutions architect",
+    "cloud architect",
+    "enterprise architect",
+    "technical architect",
+    "software architect",
+    "system architect",
+    "devops engineer",
+    "platform engineer",
+    "infrastructure engineer",
+    "reliability engineer",
+    "sre",
+    "site reliability engineer",
+    "security engineer",
+    "security analyst",
+    "information security",
+    "application security",
+    "cloud security",
+    "qa engineer",
+    "sdet",
+    "test engineer",
+    "quality engineer",
+    "automation engineer",
+    "technical lead",
+    "tech lead",
+    "team lead",
+    "engineering manager",
+    "engineering director",
+    "vp of engineering",
+    "cto",
+    "chief technology officer",
+    "product manager",
+    "product owner",
+    "program manager",
+    "project manager",
+    "scrum master",
+    "agile coach",
+    "frontend",
+    "backend",
+    "full stack",
+    "fullstack",
+    "mobile developer",
+    "ios developer",
+    "android developer",
+  ];
+
+  // Certifications (highly valued by ATS)
+  const certificationPatterns = [
+    "aws certified",
+    "aws solutions architect",
+    "aws developer",
+    "aws sysops",
+    "aws devops",
+    "aws security",
+    "aws data analytics",
+    "aws machine learning",
+    "azure certified",
+    "azure administrator",
+    "azure developer",
+    "azure solutions architect",
+    "azure data engineer",
+    "azure ai engineer",
+    "gcp certified",
+    "google cloud certified",
+    "professional cloud architect",
+    "professional data engineer",
+    "professional cloud developer",
+    "cka",
+    "ckad",
+    "cks",
+    "kubernetes certified",
+    "certified kubernetes",
+    "terraform certified",
+    "hashicorp certified",
+    "pmp",
+    "project management professional",
+    "prince2",
+    "capm",
+    "agile certified",
+    "csm",
+    "certified scrum master",
+    "psm",
+    "safe certified",
+    "cissp",
+    "cism",
+    "cisa",
+    "comptia security\\+",
+    "ceh",
+    "certified ethical hacker",
+    "oscp",
+    "comptia a\\+",
+    "comptia network\\+",
+    "ccna",
+    "ccnp",
+    "ccie",
+    "ocjp",
+    "ocpjp",
+    "java certified",
+    "oracle certified",
+    "mcsa",
+    "mcse",
+    "microsoft certified",
+    "salesforce certified",
+    "servicenow certified",
+    "databricks certified",
+    "snowflake certified",
+  ];
+
+  // Key action verbs / responsibilities (ATS loves these)
+  const responsibilityPatterns = [
+    "designed",
+    "developed",
+    "implemented",
+    "built",
+    "created",
+    "architected",
+    "led",
+    "managed",
+    "supervised",
+    "mentored",
+    "coached",
+    "trained",
+    "optimized",
+    "improved",
+    "enhanced",
+    "streamlined",
+    "automated",
+    "collaborated",
+    "partnered",
+    "coordinated",
+    "communicated",
+    "analyzed",
+    "evaluated",
+    "assessed",
+    "reviewed",
+    "audited",
+    "deployed",
+    "released",
+    "launched",
+    "shipped",
+    "delivered",
+    "scaled",
+    "migrated",
+    "integrated",
+    "refactored",
+    "modernized",
+    "reduced",
+    "increased",
+    "achieved",
+    "exceeded",
+    "accomplished",
+    "documented",
+    "maintained",
+    "supported",
+    "troubleshot",
+    "debugged",
+    "resolved",
+  ];
+
+  // Display names for patterns whose regex source is not a valid skill string.
+  const PATTERN_DISPLAY_NAMES: Record<string, string> = {
+    "node.js": "Node.js", "react.js": "React", "vue.js": "Vue.js", "next.js": "Next.js",
+    "express.js": "Express.js", "nest.js": "NestJS", "asp.net": "ASP.NET",
+    "draw.io": "draw.io", "incident.io": "incident.io",
+    "c++": "C++", "c#": "C#", "sql": "SQL", "plsql": "PL/SQL", "tsql": "T-SQL",
+    "vba": "VBA", "aws": "AWS", "gcp": "GCP", "ci/cd": "CI/CD", "devops": "DevOps",
+  };
+
+  // Turn a regex pattern source into a human display name. Strips escapes and
+  // regex metacharacters so nothing like "Node.?js" can ever reach the CV.
+  const patternToDisplayName = (pattern: string): string => {
+    let cleaned = pattern
+      .replace(/\\([.+#/()\-&'])/g, "$1") // unescape literal characters
+      .replace(/\\\\/g, "\\")
+      .replace(/\\[sSwWdDbB]\+?/g, " ") // character classes -> space
+      .replace(/[?*+^$|\[\]{}()]/g, "") // drop remaining regex metacharacters
+      .replace(/\s+/g, " ")
+      .trim();
+    const known = PATTERN_DISPLAY_NAMES[cleaned.toLowerCase()];
+    if (known) return known;
+    return cleaned
+      .split(" ")
+      .map((word) => (word ? word.charAt(0).toUpperCase() + word.slice(1) : word))
+      .join(" ");
+  };
+
+  const extractMatches = (patterns: string[]): string[] => {
+    const matches: string[] = [];
+    for (const pattern of patterns) {
+      const regex = new RegExp(`\\b${pattern}\\b`, "gi");
+      if (regex.test(text)) {
+        const display = patternToDisplayName(pattern);
+        if (!display) continue;
+        if (!matches.some((m) => m.toLowerCase() === display.toLowerCase())) {
+          matches.push(display);
+        }
+      }
+    }
+    return matches;
+  };
+
+
+  // Extract with higher limits for better ATS coverage
+  const hardSkills = extractMatches(hardSkillPatterns).slice(0, 30);
+  const softSkills = extractMatches(softSkillPatterns).slice(0, 10);
+  const tools = extractMatches(toolPatterns).slice(0, 15);
+  const titles = extractMatches(titlePatterns).slice(0, 5);
+  const certifications = extractMatches(certificationPatterns).slice(0, 5);
+  const responsibilities = extractMatches(responsibilityPatterns).slice(0, 10);
+
+  // BLACKLIST: Meta/URL/nonsensical terms that should NEVER appear as skills
+  const SKILL_BLACKLIST = new Set([
+    "cv", "https", "http", "www", "html", "url", "pdf", "doc", "docx",
+    "com", "org", "net", "io", "co", "uk", "de", "fr", "ie",
+    "gmail", "email", "mailto", "tel", "fax",
+    "linkedin", "github", "website", "portfolio", "blog",
+    "click", "apply", "submit", "download", "upload", "login", "signin",
+    "job", "jobs", "career", "careers", "vacancy", "vacancies",
+    "description", "requirements", "qualifications", "responsibilities",
+    "about", "company", "team", "role", "position", "candidate",
+    "salary", "benefits", "perks", "compensation",
+    "true", "false", "null", "undefined", "nan",
+    "the", "and", "for", "with", "this", "that", "from", "are", "was",
+    "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec",
+  ]);
+
+  // Final safety net: no regex-pattern source may ever leave this function as a
+  // keyword. Anything still carrying regex metacharacters is repaired via the
+  // display-name mapper, and dropped if it cannot be repaired.
+  const scrubKeyword = (k: string): string => {
+    const raw = String(k || "").trim();
+    if (!raw) return "";
+    if (!/[\\?*+^$|\[\]{}()]/.test(raw)) return raw;
+    const fixed = patternToDisplayName(raw);
+    return /[\\?*^$|\[\]{}]/.test(fixed) ? "" : fixed;
+  };
+
+  const filterBlacklisted = (keywords: string[]): string[] =>
+    keywords
+      .map(scrubKeyword)
+      .filter(Boolean)
+      .filter(k => !SKILL_BLACKLIST.has(k.toLowerCase().trim()));
+
+  const cleanHardSkills = filterBlacklisted(hardSkills);
+  const cleanSoftSkills = filterBlacklisted(softSkills);
+  const cleanTools = filterBlacklisted(tools);
+  const cleanTitles = filterBlacklisted(titles);
+  const cleanCertifications = filterBlacklisted(certifications);
+  const cleanResponsibilities = filterBlacklisted(responsibilities);
+
+  // Combined keywords prioritised for ATS scoring - increased cap for full coverage
+  const allKeywords = [
+    ...cleanHardSkills,
+    ...cleanTitles,
+    ...cleanCertifications,
+    ...cleanTools,
+    ...cleanSoftSkills,
+  ].slice(0, 50);
+
+  return { hardSkills: cleanHardSkills, softSkills: cleanSoftSkills, tools: cleanTools, titles: cleanTitles, certifications: cleanCertifications, responsibilities: cleanResponsibilities, allKeywords };
+
+}
+
+// Calculate accurate match score with fuzzy matching and synonym detection
+function calculateMatchScore(
+  jdKeywords: string[],
+  profileSkills: any[],
+  profileExperience: any[],
+  profileEducation: any[] = [],
+  profileCertifications: string[] = [],
+): { score: number; matched: string[]; missing: string[]; partialMatches: string[] } {
+  // Synonym mapping for common tech terms (helps with ATS variations)
+  const synonyms: Record<string, string[]> = {
+    javascript: ["js", "ecmascript", "es6", "es2015"],
+    typescript: ["ts"],
+    python: ["py"],
+    kubernetes: ["k8s"],
+    postgresql: ["postgres", "psql"],
+    mongodb: ["mongo"],
+    "amazon web services": ["aws"],
+    "google cloud": ["gcp", "google cloud platform"],
+    "microsoft azure": ["azure"],
+    "node.js": ["nodejs", "node"],
+    "react.js": ["reactjs", "react"],
+    "vue.js": ["vuejs", "vue"],
+    "next.js": ["nextjs", "next"],
+    "machine learning": ["ml"],
+    "artificial intelligence": ["ai"],
+    "natural language processing": ["nlp"],
+    "continuous integration": ["ci"],
+    "continuous deployment": ["cd"],
+    "ci/cd": ["cicd", "ci cd", "continuous integration", "continuous deployment"],
+    "rest api": ["restful", "rest"],
+    graphql: ["gql"],
+    sql: ["structured query language"],
+    nosql: ["no-sql", "non-relational"],
+    agile: ["scrum", "kanban"],
+    "full stack": ["fullstack", "full-stack"],
+    frontend: ["front-end", "front end"],
+    backend: ["back-end", "back end"],
+    devops: ["dev ops", "dev-ops"],
+  };
+
+  // Build comprehensive profile text for matching
+  const profileSkillsLower = profileSkills.map((s) => (typeof s === "string" ? s : s.name || "").toLowerCase());
+
+  const experienceText = profileExperience
+    .map((exp) => `${exp.title || ""} ${exp.company || ""} ${exp.description || ""} ${(exp.bullets || []).join(" ")}`)
+    .join(" ")
+    .toLowerCase();
+
+  const educationText = profileEducation
+    .map((edu) => `${edu.degree || ""} ${edu.field || ""} ${edu.school || ""} ${edu.description || ""}`)
+    .join(" ")
+    .toLowerCase();
+
+  const certText = profileCertifications.join(" ").toLowerCase();
+
+  const fullProfileText = `${profileSkillsLower.join(" ")} ${experienceText} ${educationText} ${certText}`;
+
+  const matched: string[] = [];
+  const missing: string[] = [];
+  const partialMatches: string[] = [];
+
+  for (const keyword of jdKeywords) {
+    const keywordLower = keyword.toLowerCase();
+
+    // Direct match
+    let isMatched = fullProfileText.includes(keywordLower);
+
+    // Check synonyms if no direct match
+    if (!isMatched) {
+      const keywordSynonyms = synonyms[keywordLower] || [];
+      for (const syn of keywordSynonyms) {
+        if (fullProfileText.includes(syn)) {
+          isMatched = true;
+          partialMatches.push(`${keyword} (via ${syn})`);
+          break;
+        }
+      }
+
+      // Check reverse synonyms (if profile has synonym, match the keyword)
+      if (!isMatched) {
+        for (const [mainTerm, syns] of Object.entries(synonyms)) {
+          if (syns.includes(keywordLower) && fullProfileText.includes(mainTerm)) {
+            isMatched = true;
+            partialMatches.push(`${keyword} (via ${mainTerm})`);
+            break;
+          }
+        }
+      }
+    }
+
+    // Fuzzy match: check if keyword is substring or has high overlap
+    if (!isMatched) {
+      const words = keywordLower.split(/[\s\-\/]+/);
+      const matchedWords = words.filter((w) => w.length > 2 && fullProfileText.includes(w));
+      if (matchedWords.length >= Math.ceil(words.length * 0.6)) {
+        isMatched = true;
+        partialMatches.push(`${keyword} (partial: ${matchedWords.join(", ")})`);
+      }
+    }
+
+    if (isMatched) {
+      matched.push(keyword);
+    } else {
+      missing.push(keyword);
+    }
+  }
+
+  // Calculate score with weighted importance
+  // Hard skills (first 15) = 4 points, Tools/Certs (15-25) = 3 points, Soft skills = 2 points
+  let totalPoints = 0;
+  let earnedPoints = 0;
+
+  jdKeywords.forEach((kw, i) => {
+    const points = i < 15 ? 4 : i < 25 ? 3 : 2;
+    totalPoints += points;
+    if (matched.includes(kw)) {
+      earnedPoints += points;
+    }
+  });
+
+  const score = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 50;
+
+  return {
+    score: Math.min(100, Math.max(0, score)),
+    matched,
+    missing,
+    partialMatches,
+  };
+}
+
+// ==========================================
+// CONTENT QUALITY ENGINE (inspired by JobOwl)
+// ==========================================
+
+// Banned buzzwords that AI tends to overuse - makes resumes sound generic
+const BANNED_WORDS_MAP: Record<string, string> = {
+  "orchestrated": "directed",
+  "championed": "led",
+  "pioneered": "introduced",
+  "spearheaded": "led",
+  "helmed": "managed",
+  "leveraging": "using",
+  "leveraged": "used",
+  "leverage": "use",
+  "utilising": "using",
+  "utilised": "used",
+  "utilise": "use",
+  "utilizing": "using",
+  "utilized": "used",
+  "utilize": "use",
+  "synergy": "collaboration",
+  "synergies": "efficiencies",
+  "comprehensive": "thorough",
+  "dynamic": "adaptable",
+  "robust": "reliable",
+  "seamless": "smooth",
+  "holistic": "complete",
+  "cutting-edge": "modern",
+  "best-in-class": "leading",
+  "world-class": "top-tier",
+  "results-driven": "effective",
+  "detail-oriented": "precise",
+  "passionate": "committed",
+  "showcasing": "showing",
+  "demonstrating": "showing",
+  "meticulous": "thorough",
+  "highly motivated": "motivated",
+  "go-getter": "proactive",
+};
+
+// Phrase-level replacements for more natural language
+const BANNED_PHRASES_MAP: Record<string, string> = {
+  "proven ability": "ability",
+  "proven track record": "experience",
+  "proven record": "experience",
+  "proven expertise": "expertise",
+  "the intersection of": "across",
+  "drive impactful outcomes": "deliver results",
+  "strategic initiatives": "projects",
+  "stakeholder environments": "teams",
+  "think outside the box": "solve problems creatively",
+  "resulting in": "achieving",
+  "in order to": "to",
+  "as well as": "and",
+  "a wide range of": "various",
+  "state-of-the-art": "modern",
+  "paradigm shift": "change",
+};
+
+function applyContentQuality(text: string): string {
+  if (!text) return text;
+  let cleaned = text;
+
+  // Phase 1: Replace banned phrases (longer phrases first to avoid partial matches)
+  const sortedPhrases = Object.entries(BANNED_PHRASES_MAP).sort((a, b) => b[0].length - a[0].length);
+  for (const [phrase, replacement] of sortedPhrases) {
+    const regex = new RegExp(`\\b${phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+    cleaned = cleaned.replace(regex, replacement);
+  }
+
+  // Phase 2: Replace banned words
+  for (const [word, replacement] of Object.entries(BANNED_WORDS_MAP)) {
+    const regex = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+    cleaned = cleaned.replace(regex, (match) => {
+      // Preserve capitalisation
+      if (match[0] === match[0].toUpperCase()) {
+        return replacement.charAt(0).toUpperCase() + replacement.slice(1);
+      }
+      return replacement;
+    });
+  }
+
+  // Phase 3: Remove em dashes (AI detection signal) - replace with regular hyphens
+  cleaned = cleaned.replace(/[\u2013\u2014\u2015]/g, "-");
+
+  return cleaned;
+}
+
+// ==========================================
+// COVER LETTER TONE TEMPLATES (inspired by JobOwl)
+// ==========================================
+
+type CoverLetterTone = "professional" | "enthusiastic" | "concise";
+
+function getCoverLetterToneInstructions(tone: CoverLetterTone): string {
+  switch (tone) {
+    case "enthusiastic":
+      return `COVER LETTER TONE: ENTHUSIASTIC
+- Open with genuine excitement about the company's mission or recent achievements
+- Use energetic but professional language ("thrilled", "excited", "eager")
+- Show personality while maintaining professionalism
+- Emphasise cultural fit and passion for the industry
+- Close with strong forward-looking enthusiasm about contributing`;
+
+    case "concise":
+      return `COVER LETTER TONE: CONCISE
+- Maximum 3 short paragraphs (no more than 250 words total)
+- Lead with your strongest qualification match immediately
+- No filler phrases or unnecessary context
+- Every sentence must add value - cut anything redundant
+- Close with a single clear call to action`;
+
+    case "professional":
+    default:
+      return `COVER LETTER TONE: PROFESSIONAL
+- Formal but approachable tone throughout
+- Open with a clear statement of interest and top qualification
+- Structured body: qualification match, specific achievements, cultural alignment
+- Use measured, confident language without being boastful
+- Close with professional availability and next steps`;
+  }
+}
+
+
+// ==========================================
+// KEYWORD PRIORITY WEIGHTING (inspired by JobOwl)
+// ==========================================
+
+interface WeightedKeywords {
+  high: string[];    // 40% - most important, need 3-5 mentions each
+  medium: string[];  // 35% - important, need 2-4 mentions each
+  low: string[];     // 25% - nice to have, need 1-2 mentions each
+}
+
+function categoriseKeywordsByPriority(
+  hardSkills: string[],
+  tools: string[],
+  softSkills: string[],
+  titles: string[],
+  certifications: string[],
+  description: string,
+): WeightedKeywords {
+  const descLower = description.toLowerCase();
+
+  // Count frequency of each keyword in the JD - higher frequency = higher priority
+  const allKeywords = [...hardSkills, ...tools, ...softSkills, ...titles, ...certifications];
+  const frequencyMap = new Map<string, number>();
+
+  for (const kw of allKeywords) {
+    const kwLower = kw.toLowerCase();
+    const regex = new RegExp(`\\b${kwLower.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+    const matches = descLower.match(regex);
+    frequencyMap.set(kw, matches ? matches.length : 0);
+  }
+
+  // Sort by frequency descending
+  const sorted = [...frequencyMap.entries()].sort((a, b) => b[1] - a[1]);
+  const total = sorted.length;
+
+  const highCount = Math.ceil(total * 0.40);
+  const medCount = Math.ceil(total * 0.35);
+
+  return {
+    high: sorted.slice(0, highCount).map(([kw]) => kw),
+    medium: sorted.slice(highCount, highCount + medCount).map(([kw]) => kw),
+    low: sorted.slice(highCount + medCount).map(([kw]) => kw),
+  };
+}
+
+// ============================================================
+// ATS STRATEGY FROM THE EXTENSION
+//
+// atsStrategy arrives as a string. When the extension fills it with JSON
+// it carries the posting's requirements, a coverage target and a map of
+// keyword -> the evidence in this candidate's own profile that supports
+// it. The evidence map is what keeps coverage work honest: a keyword with
+// no evidence is reported as unsupported, never written in.
+// ============================================================
+interface AtsStrategy {
+  requirements: string[];
+  keywordCoverageTarget: number | null;
+  /** lowercased keyword -> supporting evidence sentence from the profile */
+  evidence: Record<string, string>;
+  notes: string;
+}
+
+function parseAtsStrategy(raw: unknown): AtsStrategy {
+  const empty: AtsStrategy = { requirements: [], keywordCoverageTarget: null, evidence: {}, notes: "" };
+  if (typeof raw !== "string" || !raw.trim()) return empty;
+  const text = raw.trim();
+  if (!text.startsWith("{")) return { ...empty, notes: text.slice(0, 2000) };
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { ...empty, notes: text.slice(0, 2000) };
+  }
+
+  const requirements = Array.isArray(parsed?.requirements)
+    ? parsed.requirements
+        .map((r: unknown) => (typeof r === "string" ? r : typeof (r as any)?.text === "string" ? (r as any).text : ""))
+        .filter((r: string) => r && r.trim())
+        .slice(0, 80)
+    : [];
+
+  const rawTarget = parsed?.keywordCoverageTarget;
+  let target: number | null = null;
+  if (typeof rawTarget === "number" && Number.isFinite(rawTarget)) {
+    target = rawTarget <= 1 ? Math.round(rawTarget * 100) : Math.round(rawTarget);
+    target = Math.max(0, Math.min(100, target));
+  }
+
+  const evidence: Record<string, string> = {};
+  const source =
+    parsed?.keywordEvidence ?? parsed?.evidence ?? parsed?.evidenceMap ?? parsed?.keyword_evidence ?? null;
+  if (source && typeof source === "object" && !Array.isArray(source)) {
+    for (const [k, v] of Object.entries(source)) {
+      const value = typeof v === "string" ? v : Array.isArray(v) ? v.filter((x) => typeof x === "string").join("; ") : "";
+      if (k.trim() && value.trim()) evidence[k.trim().toLowerCase()] = value.trim().slice(0, 400);
+    }
+  } else if (Array.isArray(source)) {
+    for (const item of source) {
+      const k = typeof item?.keyword === "string" ? item.keyword : typeof item?.term === "string" ? item.term : "";
+      const v = typeof item?.evidence === "string" ? item.evidence : typeof item?.source === "string" ? item.source : "";
+      if (k.trim() && v.trim()) evidence[k.trim().toLowerCase()] = v.trim().slice(0, 400);
+    }
+  }
+
+  return {
+    requirements,
+    keywordCoverageTarget: target,
+    evidence,
+    notes: typeof parsed?.notes === "string" ? parsed.notes.slice(0, 2000) : "",
+  };
+}
+
+/**
+ * How the writing must read, plus the extension's requirements and evidence
+ * map when it supplied one. The writing rules go out on every request.
+ */
+const NATURAL_WRITING_RULES = `HOW THIS MUST READ.
+
+Plain, specific professional English. Each bullet says what the candidate did, how they did it, and the result their own record supports. A reader who knows the field should recognise real work.
+
+Posting keywords are woven into achievements the candidate already has. A keyword sitting in a sentence that exists only to hold it is a keyword dump, and a reviewer spots one instantly.
+
+DO NOT WRITE:
+- Stock phrases: "results-driven professional", "proven track record", "dynamic self-starter", "passionate about", "seasoned", "leverage synergies", "wearing many hats".
+- Exaggerated adjectives on the candidate's own work: world-class, cutting-edge, unparalleled, exceptional, outstanding.
+- Generic praise of the employer ("industry leader", "innovative company", "exciting opportunity"). Where the letter says why this employer, it names something concrete from the posting.
+- The same sentence opening twice in a row, and no more than two bullets in the whole CV starting with the same verb.
+- Synonym substitution for its own sake. If the candidate wrote "customer support", it does not become "client success". Contractions are not introduced.
+
+PRESERVE EXACTLY: approximate figures ("roughly 40%", "around 50 clients") keep their qualifier; responsibilities keep their scope and scale; names, dates, employers, titles and personal details are reproduced as recorded. Never invent experience, a tool, a metric, a qualification or an eligibility to close a gap.`;
+
+function buildStrategyBlock(strategy: AtsStrategy): string {
+  const evidenceEntries = Object.entries(strategy.evidence).slice(0, 40);
+
+  const parts: string[] = [NATURAL_WRITING_RULES];
+
+  if (strategy.requirements.length || evidenceEntries.length || strategy.notes) {
+    parts.push(
+      "EXTENSION-SUPPLIED STRATEGY. Everything below comes from the posting and from this candidate's saved profile. It adds nothing you may invent.",
+    );
+  }
+
+
+  if (strategy.requirements.length) {
+    parts.push(
+      `REQUIREMENTS FROM THE POSTING, HIGHEST PRIORITY FIRST. Cover the ones the evidence below supports, and cover them inside real achievements:\n${strategy.requirements
+        .map((r, i) => `${i + 1}. ${r}`)
+        .join("\n")}`,
+    );
+  }
+
+  if (evidenceEntries.length) {
+    parts.push(
+      `KEYWORD -> EVIDENCE IN THIS PROFILE. A keyword may only appear in the CV where this evidence, or the profile itself, supports it. Write the keyword into the achievement the evidence names, not into a new one:\n${evidenceEntries
+        .map(([k, v]) => `- ${k}: ${v}`)
+        .join("\n")}`,
+    );
+    parts.push(
+      "ANY POSTING TERM WITH NO EVIDENCE LINE AND NO BASIS IN THE PROFILE IS LEFT OUT. It is reported back to the candidate as unsupported. Never close a coverage gap by inventing experience, a tool, a metric, a qualification or an eligibility.",
+    );
+  }
+
+  if (strategy.keywordCoverageTarget !== null) {
+    parts.push(
+      `COVERAGE TARGET: ${strategy.keywordCoverageTarget}% of the posting's relevant keywords, reached only through evidenced material. Falling short honestly is correct; padding to hit the number is a failure.`,
+    );
+  }
+
+  if (strategy.notes) parts.push(`NOTES FROM THE CANDIDATE'S STRATEGY FIELD:\n${strategy.notes}`);
+
+  return parts.join("\n\n");
+}
+
+
+
+
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const { userId, supabase } = await verifyAuth(req);
+
+    const rawData = await req.json();
+
+    // Support both 'description' and 'jobDescription' for extension compatibility
+    if (rawData.jobDescription && !rawData.description) {
+      rawData.description = rawData.jobDescription;
+    }
+
+    // Support 'jobUrl' as 'jobId' if no jobId provided
+    if (rawData.jobUrl && !rawData.jobId) {
+      rawData.jobId = rawData.jobUrl;
+    }
+
+    // If userProfile not provided, fetch from database
+    if (!rawData.userProfile || Object.keys(rawData.userProfile).length === 0) {
+      console.log(`[User ${userId}] Fetching profile from database...`);
+
+      const { data: profileData, error: profileError } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("user_id", userId)
+        .single();
+
+      if (profileError || !profileData) {
+        console.error("Failed to fetch user profile:", profileError);
+        return new Response(
+          JSON.stringify({
+            error: "Profile not found. Please complete your profile in settings.",
+          }),
+          {
+            status: 400,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      // Map database profile to expected userProfile format
+      // Canonical: use professional_experience (DB column), fallback to work_experience for legacy
+      const dbExperience = Array.isArray(profileData.professional_experience) ? profileData.professional_experience :
+                           Array.isArray(profileData.work_experience) ? profileData.work_experience : [];
+      
+      rawData.userProfile = {
+        firstName: profileData.first_name || "",
+        lastName: profileData.last_name || "",
+        email: profileData.email || "",
+        phone: profileData.phone || "",
+        linkedin: profileData.linkedin || "",
+        github: profileData.github || "",
+        portfolio: profileData.portfolio || "",
+        coverLetter: profileData.cover_letter || "",
+        professionalExperience: dbExperience,
+        education: profileData.education || [],
+        skills: profileData.skills || [],
+        certificationsHidden: Boolean(profileData.certifications_hidden),
+        certifications: profileData.certifications_hidden ? [] : profileData.certifications || [],
+        achievements: profileData.achievements || [],
+        atsStrategy: profileData.ats_strategy || "",
+        city: profileData.city || "",
+        country: profileData.country || "",
+        address: profileData.address || "",
+        state: profileData.state || "",
+        zipCode: profileData.zip_code || "",
+        relevantProjects: Array.isArray(profileData.relevant_projects) ? profileData.relevant_projects : [],
+        languages: Array.isArray(profileData.languages) ? profileData.languages : [],
+        citizenship: profileData.citizenship || "",
+      };
+
+      console.log(`[User ${userId}] Profile loaded: ${rawData.userProfile.firstName} ${rawData.userProfile.lastName}`);
+    }
+
+    const {
+      jobTitle,
+      company,
+      description,
+      requirements,
+      location,
+      extractedCity,
+      jobId,
+      userProfile,
+      includeReferral,
+      coverLetterTone,
+    } = validateRequest(rawData);
+
+    // Validate that profile has required info
+    if (!userProfile.firstName || !userProfile.lastName) {
+      return new Response(
+        JSON.stringify({
+          error: "Profile incomplete. Please add your first and last name in Profile settings.",
+        }),
+        {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    // Get user's AI provider configuration
+    const aiConfigResult = await getUserAIConfigResult(supabase, userId);
+
+    if (!aiConfigResult.ok) {
+      return await aiErrorResponse(
+        supabase,
+        userId,
+        "tailor-application",
+        {
+          error: aiConfigResult.userMessage,
+          errorCode: aiConfigResult.code,
+          userMessage: aiConfigResult.userMessage,
+          retryable: false,
+        },
+        corsHeaders,
+        aiConfigResult.detail,
+        400,
+      );
+    }
+
+    const { provider: aiProvider, apiKey: userApiKey } = aiConfigResult.config;
+    console.log(`[User ${userId}] Using AI provider: ${aiProvider}`);
+
+    console.log(`[User ${userId}] Tailoring application for ${jobTitle} at ${company}`);
+
+    // THE HEADER LOCATION IS THE CANDIDATE'S OWN, ALWAYS.
+    // This used to adapt to the job's city, so an application to a New York
+    // role printed "New York" under the candidate's name. That is a factual
+    // claim about where the candidate lives, so it now comes from the saved
+    // profile only and never from the posting.
+    const smartLocation = [userProfile.city, userProfile.country]
+      .map((v) => (typeof v === "string" ? v.trim() : ""))
+      .filter(Boolean)
+      .join(", ") || "Remote";
+    console.log(`Header location from saved profile: ${smartLocation}`);
+
+
+    // The extension may send a structured strategy in atsStrategy: the
+    // posting's requirements, a coverage target and a keyword -> profile
+    // evidence map. Requirements it names are merged into the keyword pool
+    // so coverage is measured against what the posting actually asks for.
+    const atsStrategy = parseAtsStrategy(userProfile.atsStrategy);
+    const mergedRequirements = Array.from(
+      new Set([...requirements, ...atsStrategy.requirements].map((r) => r.trim()).filter(Boolean)),
+    );
+    console.log(
+      `[ATS strategy] requirements: ${atsStrategy.requirements.length}, evidence entries: ${Object.keys(atsStrategy.evidence).length}, target: ${atsStrategy.keywordCoverageTarget ?? "none"}`,
+    );
+
+    // Jobscan keyword extraction
+    const jdKeywords = extractJobscanKeywords(description, mergedRequirements);
+
+    // ONE FIXED REQUIREMENT LIST, built once here and never rebuilt.
+    // Initial, per-revision and final coverage are only comparable when they
+    // are measured against the same denominator, so the deduplicated list
+    // replaces the raw extraction immediately. Incidental employer names,
+    // boilerplate and overlapping title phrases are dropped rather than being
+    // counted as requirements the candidate has to satisfy.
+    const requirementList = buildRequirementList(jdKeywords.allKeywords, [company], jobTitle);
+    console.log(
+      `Extracted ${jdKeywords.allKeywords.length} keywords from JD; fixed requirement list has ${requirementList.terms.length} (dropped ${requirementList.removed.length}: ${requirementList.removed.slice(0, 12).join(", ")})`,
+    );
+    jdKeywords.allKeywords = requirementList.terms;
+
+    const strategyBlock = buildStrategyBlock(atsStrategy);
+
+    // Calculate accurate match score with enhanced matching
+    const matchResult = calculateMatchScore(
+      jdKeywords.allKeywords,
+      userProfile.skills,
+      userProfile.professionalExperience,
+      userProfile.education,
+      userProfile.certifications,
+    );
+    console.log(
+      `Match score calculated: ${matchResult.score}%, matched: ${matchResult.matched.length}, missing: ${matchResult.missing.length}, partial: ${matchResult.partialMatches?.length || 0}`,
+    );
+
+    // Categorise keywords by priority (JobOwl-inspired weighted system)
+    const weightedKeywords = categoriseKeywordsByPriority(
+      jdKeywords.hardSkills,
+      jdKeywords.tools,
+      jdKeywords.softSkills,
+      jdKeywords.titles,
+      jdKeywords.certifications,
+      description,
+    );
+    console.log(`Keyword priorities - High: ${weightedKeywords.high.length}, Medium: ${weightedKeywords.medium.length}, Low: ${weightedKeywords.low.length}`);
+
+    const candidateName = `${userProfile.firstName} ${userProfile.lastName}`.trim();
+    // File naming: FirstName_LastName format with underscores
+    const candidateNameForFile = `${userProfile.firstName}_${userProfile.lastName}`.replace(/\s+/g, "_").trim();
+
+    // Calculate target score - we want 95-100% after AI integration
+    const currentMatchPercent = (matchResult.matched.length / jdKeywords.allKeywords.length) * 100;
+    const keywordsNeededFor95 = Math.ceil(jdKeywords.allKeywords.length * 0.95) - matchResult.matched.length;
+
+    // Get cover letter tone instructions
+    const toneInstructions = getCoverLetterToneInstructions(coverLetterTone || "professional");
+    console.log(`Cover letter tone: ${coverLetterTone}`);
+
+const systemPrompt = `You are an elite ATS (Applicant Tracking System) optimisation specialist with deep expertise in how Jobscan, Greenhouse, Workday, and Lever score resumes. Your ONLY goal is to rewrite the provided CV to score 95% or higher on a Jobscan match report against the provided job description, while keeping every claim 100% truthful and grounded in the candidate's actual experience.
+
+CRITICAL LANGUAGE RULE - BRITISH ENGLISH ONLY:
+ALL output MUST use British English spelling. This is NON-NEGOTIABLE and applies to every word.
+Examples of REQUIRED British spellings:
+- "optimised" NOT "optimized", "organised" NOT "organized", "analysed" NOT "analyzed"
+- "realised" NOT "realized", "specialised" NOT "specialized", "recognised" NOT "recognized"
+- "utilised" NOT "utilized", "minimised" NOT "minimized", "prioritised" NOT "prioritized"
+- "customised" NOT "customized", "colour" NOT "color", "behaviour" NOT "behavior"
+- "favour" NOT "favor", "centre" NOT "center", "defence" NOT "defense"
+- "travelling" NOT "traveling", "modelling" NOT "modeling", "cancelled" NOT "canceled"
+- "focussed" NOT "focused", "labelled" NOT "labeled"
+Any American English spelling is an INSTANT FAILURE.
+
+THE ONE EXEMPTION: PROPER NOUNS ARE REPRODUCED VERBATIM.
+Certification names, product names, company names, and official job titles
+are names, not prose. They are spelled the way their owner spells them,
+even when that is American English, and even when it looks wrong.
+- "AWS Certified Machine Learning - Specialty" NEVER becomes "Speciality"
+- "Program Manager" as an employer's actual job title stays "Program
+  Manager", never "Programme Manager"
+- "Center of Excellence", "Labor Relations", "Defense Systems" stay as the
+  organisation spells them
+An ATS matches certifications and titles as EXACT STRINGS. Anglicising one
+character makes the credential invisible to the scan, which is the
+opposite of the goal. This exemption outranks the rule above.
+
+---
+PHASE 1: EXTRACTION (Do this first, output nothing yet)
+Read the job description carefully and extract:
+A. HARD SKILLS - Extract EVERY specific technical term: programming languages, tools, frameworks, platforms, services, methodologies, and concepts. The EXACT job title as written.
+B. SOFT SKILLS - Extract every behavioural phrase (e.g. "growth mindset", "seeks feedback", "continuously improve", "collaborate", "explain technical concepts")
+C. WEIGHTED TERMS - Note which terms appear MORE THAN ONCE in the JD, as these carry the most ATS weight. You MUST include all of them.
+D. COMPANY CONTEXT - Identify key company-specific language (e.g. "gaming communities", "petabytes", "user privacy", "lovable products")
+
+---
+PHASE 2: GAP ANALYSIS (Internal reasoning, output nothing yet)
+Compare extracted terms from Phase 1 against the candidate's CV:
+- List every hard skill keyword MISSING from the CV
+- List every soft skill keyword MISSING from the CV
+- Identify which candidate experiences can legitimately support each missing keyword
+- Note which JD keywords have NO basis in the candidate's background (these must NOT be added - truthfulness is non-negotiable)
+
+Pre-extracted gap analysis:
+- Current match: ${matchResult.matched.length}/${jdKeywords.allKeywords.length} keywords (${Math.round(currentMatchPercent)}%)
+- Target: 95-100% match (need to add ${keywordsNeededFor95} more keywords)
+- MISSING KEYWORDS THAT MUST BE ADDED: ${matchResult.missing.join(", ")}
+- ALREADY MATCHED: ${matchResult.matched.join(", ")}
+
+---
+PHASE 3: REWRITE - EXECUTE ALL 7 RULES
+
+RULE -1 - IMMUTABLE FACTS (HIGHEST PRIORITY, OVERRIDES ALL OTHER RULES)
+The following fields from the candidate's original CV are facts. You may
+reword surrounding prose and mirror JD vocabulary, but you MUST NOT reorder
+bullets, drop bullets, or alter, invent or omit any of these values:
+- Name and contact details (email, phone, links)
+- EMPLOYER NAMES - never replace with a different company
+- JOB TITLES at each employer - never upgrade or change
+- EMPLOYMENT DATES - never shift; never write a range that overlaps
+  another listed role. Dates must EXACTLY match the original CV.
+- DEGREE NAMES, institutions, and classifications (Distinction, First
+  Class Honours, etc.) - never invent a degree or alter a class.
+- CERTIFICATIONS - list ONLY those present in the original CV. Never
+  fabricate (no "AWS Certified..." unless the original CV lists it).
+- AWARDS - list ONLY awards present in the original CV. NEVER invent an
+  award. If the JD mentions a "data analytics excellence" focus and the
+  candidate has no such award, do not write one.
+- METRICS in bullets - keep the SOURCE numbers from the original CV.
+  You may reword the sentence around the metric; you may NOT change the
+  number itself.
+
+NOTE: The candidate's STATED LOCATION on the CV header is a separate
+case - it is intentionally job-adaptive (handled outside the prompt by
+the extension). Do NOT change the location yourself; the extension sets it.
+
+If a JD demands an award/cert/employer/date/title the candidate does not
+have, the response is: omit it. Never write a fact the candidate cannot
+defend in interview.
+
+Pre-flight check before returning JSON: every employer, title, date,
+degree, certification, award, and metric in your output MUST exist in
+the original CV. If it doesn't, remove it before responding.
+
+RULE 0 - ANTI-FABRICATION (HARDEST RULE, OVERRIDES ALL OTHERS)
+This rule is non-negotiable. It is more important than match score, more
+important than keyword density, more important than Rule 10's verbatim-
+phrase requirement. Violations look like obvious lies to a recruiter and
+get the application instantly rejected, often blacklisting the candidate.
+
+NEVER do any of the following - even when injecting "missing keywords":
+
+1. Do NOT name the hiring company (or its products / brand / hardware /
+   software / acronyms) in a bullet about a DIFFERENT employer's role.
+   Example of what NEVER to write, given a JD for AMD applied to a Meta role:
+     ❌ "Provided technical support for AMD's commercial products..."
+     ❌ "...optimising workloads on AMD-based solutions..."
+     ❌ "...delivered technical presentations enhancing confidence in AMD technology..."
+     ❌ "...managing escalations of issues related to AMD hardware..."
+     BAD: "Provided technical support for AMD's commercial products..."
+     BAD: "...optimising workloads on AMD-based solutions..."
+     BAD: "...delivered technical presentations enhancing confidence in AMD technology..."
+     BAD: "...managing escalations of issues related to AMD hardware..."
+   The candidate worked at META during that period, not for AMD.
+   Writing AMD into a Meta bullet is a fabrication and a red flag.
+
+2. Do NOT claim job-content the candidate didn't perform. The role's
+   actual duties live in the ORIGINAL CV; you may reword them in place,
+   but you may not reorder or drop them, nor invent new responsibilities, products
+   supported, platforms used, customers served, sales activities, or
+   technical surfaces.
+
+3. Do NOT inject a JD phrase into a bullet where it has no truthful
+   anchor in the original bullet. If the JD says "managed mainframe
+   migrations" and no role in the CV touched mainframes, that phrase
+   does NOT appear anywhere. Rule 10's verbatim-phrase requirement
+   applies ONLY where the candidate genuinely has the experience.
+
+4. Do NOT add tools / certifications / domain experience the candidate
+   does not already have somewhere in the original CV.
+
+5. The hiring company's NAME may appear in: the cover letter (where it
+   addresses them), and the summary's "Target role" / opener line. It
+   must NEVER appear inside a work-experience bullet describing past
+   employment.
+
+TEST before writing each bullet: "Could the candidate defend this
+sentence in an interview when asked 'tell me about that?'" If the answer
+is no, the bullet is fabricated - rewrite it using only what is in the
+original CV, even if that means missing a keyword.
+
+If a Rule 3 / Rule 9 / Rule 10 instruction conflicts with Rule 0,
+Rule 0 wins. Lose the keyword, save the candidate's credibility.
+
+RULE 1 - JOB TITLE IN SUMMARY (evidence-capped)
+The summary must never assert a job title the rest of the CV cannot support.
+- If the candidate's own work history contains the SAME or a CLOSELY
+  EQUIVALENT title, the summary MAY use the JD's wording for it.
+- If it does NOT (a genuine career pivot), the summary MUST NOT claim that
+  title. Instead, mirror the JD's vocabulary through skills and domain
+  language that the CV genuinely evidences, and open with what the
+  candidate actually is (e.g. "Software engineer with data analytics and
+  delivery experience across ...").
+- NEVER open the summary with a bare title claim as its first words.
+- The job title may never appear in a requisition-number form; posting
+  noise (req numbers, JR-/REQ- codes, "(Remote)") must never appear in
+  the CV or cover letter.
+
+RULE 1b - THE PIVOT BRIDGE (how to be interesting without being false)
+
+Rule 1 says do not claim a title the history cannot support. It does NOT
+say write a CV that ignores the target role. A candidate moving into a
+field they can genuinely do deserves a CV that makes a recruiter in that
+field want to talk to them. That is the job here, and it is done with
+real material, not invented material.
+
+There is a hard line, and it is not about how ambitious the framing is:
+
+  ALWAYS ALLOWED - reframing work the candidate really did:
+    - describing real work in the target role's vocabulary, where the
+      description stays true ("mentored junior engineers" for a role
+      asking about developing a team; "presented root-cause findings to
+      VP-level stakeholders" for one asking about stakeholder engagement)
+    - leading with the parts of the history closest to this role, even
+      when they sit in an older position
+    - naming a domain the candidate has genuinely worked in, at the level
+      they worked in it ("healthcare platforms", "regulated financial
+      data", "HIPAA-compliant systems")
+    - using the JD's exact words for skills the candidate has
+
+  NEVER ALLOWED - things a check would catch:
+    - a licence, registration, board certification or degree they do not
+      hold (PharmD, RN, MD, CPA, PE, bar admission, a named degree)
+    - a job title they have never held, asserted as what they are
+    - years in a field they have not worked in
+    - a responsibility they have never carried
+
+The difference is that the first list survives an interview and a
+reference call. The second ends the application, and can end worse than
+that when a licence is involved.
+
+THE PIVOT OPENER. When the target title is not in the history, do not
+open with it and do not open with a bare claim about the target field.
+Open with what the candidate IS, then the bridge to what the role NEEDS,
+using only evidenced material:
+
+  "<real current discipline> with <the most relevant evidenced domain or
+   capability for this posting>, <a concrete evidenced achievement that
+   maps onto the posting's core need>."
+
+  Worked example. Software engineer applying to a healthcare operations
+  role, whose history includes a healthcare platform:
+
+    WRONG - "Experienced Manager of Clinical Services with a strong
+    background in clinical pharmacy leadership."
+    Nothing in the history supports the title OR the background. This is
+    the failure this rule exists to prevent.
+
+    RIGHT - "Software engineer with healthcare platform experience,
+    including HIPAA-compliant data governance and clinical model
+    validation against held-out test sets, and four years leading
+    delivery and mentoring engineers."
+    Every clause is in the CV. A recruiter reads a real overlap rather
+    than a claim they will discard on sight.
+
+WHERE THE PIVOT CASE IS ACTUALLY MADE. The summary shows the overlap in
+one sentence. The COVER LETTER is where the pivot is argued: state the
+move plainly, name the transferable evidence, and say what is being
+brought that the field does not usually get. A candidate who explains a
+pivot honestly is far more interesting than one who pretends there is
+nothing to explain.
+
+WHEN THE ROLE IS GATED ON A CREDENTIAL. If the posting requires a
+licence, registration or named degree the candidate does not hold, no
+amount of framing makes them eligible, and a summary implying otherwise
+wastes the application. Tailor honestly around what they do have, list
+the unmet requirement under KEYWORDS OMITTED, and let the human decide
+whether to apply. Do not quietly manufacture the credential to raise a
+score.
+
+RULE 2 - SKILLS SECTION: COMPLETE REWRITE (worth ~20 points)
+
+READ THIS BEFORE THE KEYWORD COUNTS BELOW. Every keyword target in this
+prompt -- the minimum counts here, the "MUST ADD THESE" list at the end,
+the 95% score -- is capped by RULE 0. A keyword goes in ONLY if the
+candidate's own history evidences it. Where the two conflict, the score
+loses. Always.
+
+A quota with no evidence gate produces a fabricated professional identity,
+which is worse than a low score because it survives the ATS and then fails
+the interview. A real example this rule exists to prevent: a candidate
+whose entire history is Meta software engineering, an AI product contract,
+Accenture cloud architecture and Citigroup data analysis was given a
+summary reading "Experienced Sales Engineer with over 5 years of expertise
+in electrical systems", and skills listing transformers, industrial
+batteries, protection relays and substations. Not one of those appeared
+anywhere in the source CV. Every one came from the job description.
+- If the JD asks for a skill the candidate has never used, it does NOT go
+  in the CV. Not in Skills, not in Core Competencies, not in the summary.
+- The summary describes the person the CV EVIDENCES, in their real
+  discipline, using the JD's vocabulary only where it honestly overlaps.
+- A genuine pivot is stated as a pivot. The cover letter is where
+  transferable experience is argued (RULE 13), not the CV.
+- Missing keywords that cannot be honestly claimed are reported in
+  KEYWORDS OMITTED. That is the correct outcome, not a failure.
+
+Rewrite the skills section as:
+  Technical Skills: [list ALL hard skill keywords from the JD that the candidate can legitimately claim, comma-separated, exact spelling]
+  Platforms & Tools: [all platforms, cloud services, devtools]
+  Methodologies: [ETL, CI/CD, distributed systems, data modelling, etc.]
+  Soft Skills: [all soft skill keywords from the JD, exact phrasing]
+This section alone can close 15-20 points of the gap. THERE IS NO UPPER LIMIT: list EVERY JD skill, tool and technology the candidate's history evidences, however many that is. There is no lower limit either. A floor is what causes padding -- it is satisfied by adding terms nobody can be proficient in ("b2b", "enterprise", "fast-paced"), which a recruiter reads instantly as machine-assembled and which the candidate cannot defend if asked. Maximum coverage means maximum EVIDENCED coverage: leave out only what the history does not support at all.
+
+RULE 3 - EXPERIENCE BULLETS: INJECT WEIGHTED TERMS (subject to Rule 0)
+For each role in work history:
+- Scan which Phase 1 keywords are THEMATICALLY relevant to that role
+  based on the ORIGINAL CV bullet content (not the JD's wishlist).
+- Rewrite 1-2 bullets per role to naturally incorporate missing keywords
+  ONLY when the underlying work in that role genuinely involved that
+  concept. "Genuinely involved" means the original bullet describes
+  the activity; you are renaming it with the JD's vocabulary, not
+  inventing the activity.
+- Use the exact term as it appears in the JD, not a synonym.
+- NEVER fabricate metrics, achievements, products supported, customer
+  segments, or technical surfaces not in the original CV.
+- NEVER mention the HIRING company / its products / its hardware / its
+  brand inside a bullet for a DIFFERENT employer. See Rule 0.
+- If a keyword has no truthful anchor in any role, leave it for the
+  Skills section instead of forcing it into a bullet.
+- Prioritise injecting the terms that appeared most often in the JD,
+  subject to all of the above.
+
+RULE 4 - MATCH SCALE LANGUAGE TO JD
+If the JD uses "petabytes" and the CV says "10TB", rewrite to contextualise relative to enterprise/petabyte-scale systems.
+If the JD says "millions of users", reference the candidate's production scale in that language.
+
+RULE 5 - SOFT SKILLS: WEAVE INTO BULLETS (worth ~5 points)
+Do not just list soft skills. Weave them into experience bullets:
+- "growth mindset" → "...continuously improved pipeline performance through iterative feedback loops..."
+- "seeks feedback" → "...actively sought peer code reviews to..."
+- "explain technical concepts" → "...presented findings to VP-level stakeholders..."
+
+RULE 6 - SEARCHABILITY FIXES (worth ~10 points)
+- Location in CV header MUST be: "${smartLocation} | ${userProfile.phone} | ${userProfile.email}" - this is the candidate's own saved location. Never substitute the job's city.
+- Never write the employer's or posting's city as the candidate's location.
+- Job title from JD appears in summary (Rule 1)
+- Section headings use standard ATS-readable labels: "Work Experience", "Education", "Skills", "Certifications"
+- Do NOT use tables, columns, graphics, or text boxes
+
+RULE 7 - PROFESSIONAL SUMMARY (replaces any existing summary length guidance)
+The PROFESSIONAL SUMMARY is positioning only, at most TWO sentences and at most 220 characters total.
+It states the held job title or level, the domain, and the value the candidate delivers. Nothing else.
+NO KEYWORD STUFFING IN THE SUMMARY: the summary must NOT list tools, technologies, platforms, frameworks or certifications, and must not contain a comma-separated run of skills. Posting keywords belong in TECHNICAL SKILLS and, above all, in PROFESSIONAL EXPERIENCE bullets - never in the summary.
+Acceptable style: "Senior data engineer with a record of delivering reliable, scalable regulatory reporting platforms and leading small delivery teams in regulated environments."
+Never write "seeking", "looking for", or "open to opportunities". No first-person pronouns anywhere in the CV.
+SUMMARY OPENS ON THE TARGET ROLE: The first sentence of PROFESSIONAL SUMMARY must position the candidate for the role being applied for, in that role's own domain language. Where the candidate holds several titles, lead with the one closest to the target role, not the most senior and not the most recent. Never open with a generic descriptor of a different discipline ("Experienced Software Engineer", "Seasoned Marketing Manager") on an application for another field. The sentence must still be true: it may only name a title, discipline or domain the employment history actually contains. If no held title is close to the target, open on the transferable capability instead of a title (for example "Five years building risk and reporting analytics across regulated financial portfolios") rather than borrowing the target title.
+SUMMARY LENGTH: The whole summary must be at most 220 characters, which is two rendered lines. Write it to land near that limit, not far under it. A one-clause summary is not a summary.
+NO SENTENCE FRAGMENTS: The summary must be complete sentences. "Experienced Software Engineer." on its own is a stub, not a summary.
+
+
+RULE 8 - SECTION ORDER, HEADINGS, ROLE BLOCKS, BULLETS, ACRONYMS, SKILLS, EDUCATION AND OUTPUT HYGIENE
+SECTION ORDER AND HEADINGS: Output sections in exactly this order with these exact uppercase headings, each on its own line: PROFESSIONAL SUMMARY, PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS, PROJECTS, CERTIFICATIONS, EDUCATION. Never write a heading inline with content (no "TECHNICAL SKILLS: Python, SQL" on one line). Never emit the same section twice.
+
+ROLE BLOCK SHAPE: Every role is exactly: company name alone on one line, job title alone on the next line, date range alone on the next line ("January 2023 - Present" format, plain hyphen, full month names), then the bullets. Never join company and city with a comma ("Meta, Dublin" is forbidden - the extension attaches locations from the profile itself). Never join company and title on one line.
+
+BULLET STYLE: Every bullet starts with a strong past-tense verb for ended roles and present tense only for the current role. Forbidden anywhere in bullets: "I", "we", "our", "responsible for", "tasked with", "duties included", "helped", "assisted with", "involved in", and passive voice ("was replaced by"). Keep every number from the profile's bullets (money, percentages, counts, timelines) exactly as written. Where the profile gives scope (team size, budget, users served), include it. Never append a tool or technology to a bullet unless that profile bullet already names it.
+
+NAME THE PRACTICE THE BULLET ALREADY DESCRIBES: When the posting asks for a practice and one of the candidate's own bullets already describes exactly that practice, name the practice inside that bullet in natural English, changing nothing else. A bullet that provisions cloud environments with Terraform IS infrastructure as code, so it may read "Provisioned AWS environments as code with Terraform, ..." - the tool, the scope, the numbers and the outcome all stay exactly as recorded. The same applies to declarative pipelines, containerised deployment, automated testing, and other practices the bullet plainly performs. This is wording, never a new claim: never name a practice a bullet does not perform, never add a tool, never change a figure, and never rename the employer, the dates or the scope.
+
+KEYWORD PRESERVATION IN REWRITES: When rewriting a bullet from the candidate's profile, the rewrite must not introduce any tool, technology, metric, or claim that is not present in the original bullet, and must not drop any tool or skill term the original bullet contains that the job description asks for. The rewrite may tighten the prose, but every posting-relevant term in the source bullet must survive into the rewritten bullet ("Automated the daily regulatory feed using Airflow and SQL Server" must not come back without "Airflow" when the posting asks for Airflow). If the rewrite cannot keep every posting-relevant term naturally, keep the candidate's original sentence unchanged instead.
+
+KEYWORD EXTRACTION AND CATEGORISATION: Before writing anything, read the job description and sort its terms into four buckets: (A) role and seniority terms (exact titles, close variants, domain focus such as backend, platform, data engineering, security); (B) hard and technical terms (languages, frameworks, cloud platforms, data tooling, methods and compliance standards); (C) soft and behavioural terms (leadership, ownership, cross-functional collaboration, communication, mentoring, stakeholder management, problem-solving, plus phrases such as "work across teams", "drive technical direction", "mentor junior engineers", "communicate with non-technical stakeholders"); (D) responsibility and outcome terms (design scalable systems, improve reliability or latency, own end-to-end delivery, reduce cost, increase throughput, improve developer experience). Rank each term by frequency in the posting, placement (title, must-have requirements, core responsibilities carry most weight) and repetition across sections. Select the top 12 to 25 terms that are BOTH high importance in the posting AND truthfully evidenced by the candidate's profile. Terms the profile does not evidence are discarded, not softened.
+
+KEYWORD PLACEMENT STRATEGY (this decides whether the CV wins): distribute the selected terms as follows.
+- PROFESSIONAL SUMMARY: no keywords at all (see RULE 7).
+- TECHNICAL SKILLS: hard skills only, 12 to 25 of them, grouped by label, using the posting's exact phrasing where the candidate genuinely has the skill ("Kubernetes" not "K8s" when the posting says Kubernetes). Never list a soft skill here: "leadership", "communication", "collaboration", "problem-solving", "adaptability", "stakeholder management" and similar are FORBIDDEN in TECHNICAL SKILLS.
+- PROFESSIONAL EXPERIENCE: the bulk of the impact. For each of the top 10 to 15 selected terms, at least one bullet in the relevant role must show that term in action. Hard skills are named explicitly in context with what they achieved. Soft skills are NEVER listed - they are demonstrated through the action and outcome of a bullet: leadership as "Led a team of four engineers to...", collaboration as "Partnered with product, design and data teams to...", communication as "Presented architecture proposals to senior leadership and non-technical stakeholders...", problem-solving as "Diagnosed and resolved a production incident affecting...".
+- PROJECTS and CERTIFICATIONS: use them to reinforce two to four high-value posting terms that do not fit naturally into the experience section. Never create a SOFT SKILLS section anywhere.
+Loading the TECHNICAL SKILLS section with posting terms while leaving the experience bullets generic is a failure of this rule.
+
+BULLET FORMULA AND WEIGHTING: every bullet follows [strong action verb] + [hard or soft skill in context] + [what was built or changed] + [outcome], one to two lines, never a dense paragraph. Put the most important posting terms in the FIRST ONE OR TWO bullets of the most recent and most relevant role; weight keyword integration heavily towards that role and keep older, less relevant roles lighter. Vary how a term appears across bullets (design, implementation, optimisation, automation, leadership) instead of repeating the same phrase, while keeping the posting's core term intact. If a term fits naturally in only one role, leave it there rather than forcing it everywhere. Outcomes come only from the profile's own figures, kept exactly as written; where the profile records no figure, express impact qualitatively ("reduced manual effort", "improved reliability") and never invent a number.
+
+PARTIAL EXPOSURE PHRASING: when the profile evidences only light exposure to a term the posting wants, phrase it accurately rather than dropping or inflating it - for example "Introduced Terraform to automate infrastructure for a pilot service". If the posting term has no basis in the profile at all, emphasise the closest truthful adjacent skill instead and say nothing about the missing one.
+
+RECRUITER TEST: before returning, re-read the PROFESSIONAL EXPERIENCE section alone and confirm a recruiter would immediately see the candidate using the posting's key hard AND soft skills to deliver real outcomes. If the bullets read generically, rewrite them substantially against the posting's responsibilities - still using only facts the profile records.
+
+
+ACRONYM RULE (new): When the job description uses both a long form and its acronym (for example "Anti-Money Laundering (AML)" or "Know Your Customer (KYC)"), and the candidate's history genuinely evidences that skill, write it with BOTH forms at its first mention on the CV: the long form followed by the acronym in parentheses. After the first mention, either form alone is fine. Never do this for a skill the profile does not evidence.
+
+TECHNICAL SKILLS FORMAT: Labelled groups, one per line, in the form "Group Name: item, item, item" - commas only, never pipe characters. Order the groups by relevance to this job description, most relevant first. No skill appears in two groups. Place every evidenced keyword from the job description into its correct group here rather than leaving it for the summary - the skills section is where posting keywords belong.
+
+LANGUAGES & CITIZENSHIP RULE (replaces any earlier guidance about that group): The FIRST line of TECHNICAL SKILLS is exactly "Languages & Citizenship:" followed by the candidate's SPOKEN languages from the profile, each with proficiency in parentheses, ending with the citizenship claim after a plain hyphen - for example "Languages & Citizenship: English (native), French (native), Spanish (advanced), German (advanced) - EU Citizen". Never place programming languages under this label: Python, SQL, Java, JavaScript and similar belong under a "Programming:" label. If the profile records no spoken languages, that line is instead "Citizenship: EU Citizen" (or the recorded claim). If the profile records neither spoken languages nor citizenship, omit the line.
+
+SKILLS GROUP LABELS: Every group label in TECHNICAL SKILLS is written in Title Case, exactly like "Programming:", "Cloud & DevOps:", "Data Engineering:", "Soft Skills:". Never write a label in full capitals or in lower case ("Soft SKILLS:", "cloud and devops:" are both forbidden). Real acronyms inside a label keep their capitals (CRM, AI, BI, CI/CD, DevOps).
+SKILLS GROUPS CARRY ONLY SKILLS: Never place a tool, product, process, or domain under a soft-skills label - those belong under a technical or domain group. Never place a duration ("10+ years experience"), a credential class ("certifications"), a support portal, or a requirement phrase in any skills group. Maximum ten items per group. Each item appears in exactly one group.
+TARGET TITLE FIDELITY: Use the target job title EXACTLY as supplied. Never append the company name, "Careers", a location, or any text from the page title to it. Scraped page titles such as "GTM Strategy/Operations Associate | Datadog Careers" are cleaned before they reach you, so the supplied title is already the whole title - never add to it and never quote page furniture in the CV headline or in the cover letter's Re: line.
+THE HEADLINE APPEARS ONCE: The line immediately after the candidate's name is the target job title, on its own line, and it appears exactly once. Never write a second title line, and never repeat the title in the contact line beneath it.
+
+CERTIFICATIONS RULE: Omit the CERTIFICATIONS section entirely unless the profile's certifications switch is on - that is, unless the candidate profile supplies a non-empty CERTIFICATIONS list. Whether the job description mentions certification is irrelevant to this decision. When the section is included, list only certifications the profile actually records; never invent one.
+PROJECTS RULE: The CV MUST include a PROJECTS section listing the candidate's projects taken from the profile's relevant_projects array. For each project give the project name, its tech stack, one description line, and the live/code links VERBATIM as recorded in the profile - links are never rewritten, shortened or dropped. If the profile records no projects, omit the PROJECTS section entirely rather than inventing one.
+
+EDUCATION FORMAT: Each entry is: degree plus grade on one line ("MSc in Artificial Intelligence and Machine Learning, Distinction"), institution on the next line, graduation year on the next. Always keep grades and years from the profile - never drop them.
+
+GRADES ARE COPIED, NEVER DERIVED: A numeric grade (a GPA, a "3.8/4.0", a percentage) may appear ONLY if that exact figure is written in the profile's education record. Never convert a classification into a number: a Distinction is not "4.0", First Class Honours is not "3.7", and a 2:1 is not "3.3". If the record holds only a classification, write only the classification.
+
+OUTPUT HYGIENE: Plain text only - no markdown, no asterisks, no bullet symbols other than "- " at the start of bullet lines. No em dashes anywhere; use a plain hyphen.
+
+RESPONSE CONTRACT: Return ONLY a single JSON object. All newlines inside string values MUST be escaped as \\n. No code fences, no text outside the JSON object.
+
+RULE 9 - VOCABULARY REFORMULATION (worth ~5 points)
+Do NOT just insert keywords - REFORMULATE existing experience using the JD's exact vocabulary:
+- If JD says "RAG pipelines" and CV says "LLM workflows with retrieval" → rewrite to "RAG pipeline design and LLM orchestration workflows"
+- If JD says "MLOps" and CV says "observability, evals, error handling" → rewrite to "MLOps and observability: evals, error handling, cost monitoring"
+- If JD says "stakeholder management" and CV says "collaborated with team" → rewrite to "stakeholder management across engineering, operations, and business"
+NEVER add skills the candidate does not have. Only reformulate real experience with the JD's exact vocabulary.
+
+REFORMULATION IS NOT OPTIONAL, AND IT DOES NOT CONFLICT WITH RULE 0.
+This is the rule most often ignored, and the reason is a misread conflict.
+Rule 0 and the preservation rules below say never invent, preserve every
+metric, change nothing you cannot justify. Faced with those, the safe-looking
+move is to return each bullet exactly as it arrived. That is the WRONG
+reading, and it produces the failure this rule exists to prevent: the same CV
+sent to an Applied AI Engineer posting and a Senior Technical Business Analyst
+posting came back with all twenty experience bullets byte-identical. Only the
+summary and the skills list had changed. The posting's keywords were DECLARED
+at the top and never PROVEN underneath, which is what a reviewer is checking
+for.
+
+The two rules do not conflict because they govern different things:
+
+  IMMUTABLE - never change, never add, never drop:
+    employers, job titles, dates, technologies actually used, every number,
+    every percentage, every outcome, and the fact of what was done.
+
+  FREE - must change to match the posting:
+    which fact leads the sentence, and the vocabulary used to describe it.
+
+Reordering a sentence you did not write the facts of is not fabrication.
+Leading with the outcome instead of the technology is not fabrication.
+Calling the same work "data modelling" for a data role and "backend
+architecture" for a backend role is not fabrication, PROVIDED both are
+honest descriptions of what was actually done.
+
+WORKED EXAMPLE - one real bullet, two postings:
+
+  source:   "Re-architected the Business Suite data-ingestion layer in Python
+             and SQL on an Apache Kafka stream, partitioning and caching hot
+             paths to halve p95 query latency and cut compute spend."
+
+  backend:  unchanged - it already speaks that dialect.
+
+  data/BA:  "Re-modelled the Business Suite data-ingestion layer in Python and
+             SQL over an Apache Kafka stream, partitioning and caching hot
+             paths to halve p95 query latency and cut compute spend."
+
+One verb and one preposition. Every number, technology and outcome identical.
+That is the whole move.
+
+  source:   "Designed, fine-tuned and shipped a Llama-based content-moderation
+             system in Python and PyTorch... and cut the manual review queue by
+             40% with no loss of precision across millions of daily users."
+
+  outcome-led: "Cut the manual review queue by 40% with no loss of precision
+             across millions of daily users by designing and shipping a
+             Llama-based content-moderation service in Python and PyTorch..."
+
+Same sentence, reordered so the result reads first.
+
+WHAT WOULD BE FABRICATION, for the avoidance of doubt: adding "gathered
+requirements from stakeholders", "facilitated workshops", "owned the
+roadmap" or any other activity the source does not record. If the posting
+asks for something the candidate's history does not evidence, it goes in
+TECHNICAL SKILLS if they genuinely have the skill, and nowhere at all if
+they do not. It NEVER gets invented into a bullet.
+
+APPLY THIS TO EVERY ROLE, not only the most recent. An older role is often
+the most relevant one: a Data Analyst position from years ago can evidence a
+Business Analyst posting far better than a current engineering role does.
+
+RULE 10 - EXACT JD PHRASE PRESERVATION (worth ~15 points, CRITICAL for Jobscan)
+ATS scanners like Jobscan check for EXACT multi-word phrases from the JD, not just individual words.
+You MUST use these phrases VERBATIM (not paraphrased) in experience bullets or the summary:
+- If JD says "troubleshoot issues" → use "troubleshoot issues" exactly, not "troubleshot problems" or "resolved issues"
+- If JD says "implement tools" → use "implement tools" exactly, not "built tooling" or "created utilities"
+- If JD says "programming skills" → use "programming skills" exactly, not "coding abilities"
+- If JD says "improve efficiency" → use "improve efficiency" exactly, not "enhanced performance"
+- If JD says "collaboration skills" → use "collaboration skills" exactly, not "teamwork abilities"
+- If JD says "resolve issues" → use "resolve issues" exactly, not "fixed problems"
+- If JD says "game development" → use "game development" exactly
+- If JD says "mobile games" → use "mobile games" exactly
+
+TECHNIQUE: Scan the JD for every 2-3 word verb phrase (e.g., "troubleshoot issues", "implement tools", "improve efficiency", "resolve issues", "monitor build pipelines") and embed each one verbatim into at least one experience bullet. Reformulate the candidate's existing achievements to naturally contain these exact phrases.
+
+Example: 
+- Original: "Fixed pipeline failures and improved CI reliability"
+- JD phrase needed: "troubleshoot issues", "resolve issues", "improve efficiency"
+- Rewritten: "Troubleshoot issues in CI pipelines and resolve issues to improve efficiency, reducing build failures by 70%"
+
+This rule is subject to Rule 0. A JD phrase appears verbatim ONLY in
+a bullet where the original CV already describes that activity. If no
+role honestly maps to the phrase, the phrase does NOT appear in
+experience -- it may appear in Skills (if it is a tool/skill the
+candidate genuinely has) or be omitted entirely. NEVER invent a
+responsibility to host a phrase. Match score is meaningless if the
+recruiter spots a lie.
+
+ABSOLUTELY FORBIDDEN: writing the HIRING company's name, products,
+brand, hardware, or technology stack into a bullet for a DIFFERENT
+employer. Example: applying to AMD, a Meta bullet must never say "AMD"
+or "AMD's commercial products" or "AMD-based solutions". The candidate
+worked at Meta, not AMD.
+
+RULE 14 - NO KEYWORD TAILS ON BULLETS (hard ban)
+NEVER append a trailing keyword clause to a bullet purely to place a
+keyword. Banned patterns include ", using stakeholder management.",
+", with time-management.", ", showing collaboration skills." - any
+", using X" / ", with X" / ", showing X" / ", demonstrating X" tail
+grafted onto an otherwise complete sentence.
+Keywords belong in the summary and the skills sections, OR inside a
+bullet where they describe what was actually done, integrated into the
+sentence's grammar. If a keyword cannot be integrated grammatically and
+truthfully, leave it out of the bullet.
+
+RULE 15b - NO HEDGED OR APPROXIMATED NUMBERS (hard ban)
+A number that is hedged reads as a number that was guessed, which is worse
+than no number at all. Taken from a real generated CV: "cut the manual
+review queue by ~40%".
+- NEVER write "~", "circa", "c.", "approx", "approximately", "roughly",
+  "about", "around", "an estimated", "in the region of" before a figure.
+- If the source states the figure, state it exactly and plainly: "cut the
+  review queue by 40%".
+- If the source does NOT state it, do not gesture at one. Write the plain
+  fact with no number, and report the gap in metricsWorthAdding.
+
+AND NO WEASEL QUANTIFIERS IN PLACE OF A NUMBER. These are what a model
+reaches for when it has been told to sound quantified but forbidden to
+invent, and they are an obvious tell because they promise a measurement
+and deliver none. All taken from real output:
+  "surfacing significant exposure"        -> say what was surfaced
+  "absorbing several-fold traffic growth" -> say the system scaled with load
+  "measurably higher uptime"              -> either give the figure or say
+                                             "with no service disruption"
+Banned before a noun: significant, substantial, considerable, several-fold,
+measurably, markedly, dramatically, drastically, materially, notably,
+meaningfully. Plain description beats a vague intensifier every time.
+
+RULE 15c - ONE SKILLS SECTION ONLY
+There is exactly one skills section, headed TECHNICAL SKILLS. Do not write
+a separate "Core Competencies" or "Key Skills" section. A term appears
+once across the whole CV. Real output listed "Communication Skills" and
+"Presentation Skills" twice, which reads as padding and doubles nothing
+for the ATS.
+- Any phrase containing the word "skills" belongs in the Technical Skills
+  section, never in a separate Core Competencies section.
+- Before output, ensure no skill appears in two groups or sections.
+
+RULE 15a - NO EM DASHES OR EN DASHES IN ANY OUTPUT (hard ban)
+An em dash is one of the strongest machine-written tells a recruiter
+reads, alongside round percentages. Never emit "—" or "–" in the CV or
+the cover letter, in any position.
+- For a parenthetical, use a comma, or split into two proper sentences.
+- For a date or number range, use a plain hyphen: "January 2023 - Present",
+  "2019 - 2022".
+- Do not substitute a semicolon or a colon for the same effect; rewrite
+  the sentence so it does not need one.
+The em dashes appearing in THESE INSTRUCTIONS are not a style to imitate.
+Only the CV and cover letter you produce are subject to this rule.
+
+RULE 15 - CLEAN SENTENCE CASING AND GRAMMAR
+Every sentence - in the summary, bullets, and cover letter - MUST begin
+with a capital letter and be a grammatically complete sentence. Never
+emit fragments like "...and data analytics. ability to lead
+cross-functional teams..." (lowercase sentence start mid-paragraph).
+When a JD phrase is spliced into prose, re-case and re-word it so the
+sentence reads naturally.
+
+RULE 15d - WHICH KIND OF NUMBER COUNTS AS EVIDENCE
+
+Scanners ask for "measurable results" and the lazy way to satisfy that is
+a percentage. Percentages are also the single most common tell of a
+generated CV, because they are the easiest thing to invent and the
+hardest thing for a reader to check. "Reduced manual effort by 40%"
+raises the question 40% of what, measured how, against what baseline --
+and a reader who cannot answer that discounts the whole bullet, and
+often the whole CV with it.
+
+Concrete magnitudes do not have that problem. They are checkable, they
+carry scale on their face, and nobody reads them as machine-written.
+
+PREFER, IN THIS ORDER:
+  1. A count of real things:      50+ legacy applications, 12 analysts,
+                                  40 reports, three trading desks
+  2. A before and after:          a full day to under two hours,
+                                  two weeks to three days,
+                                  nine days to three
+  3. A scale or volume:           millions of daily users, the daily
+                                  transaction feed, petabyte-scale
+  4. A duration or frequency:     nightly, month-end, within the first
+                                  quarter of going live
+
+PERCENTAGES ARE NOT USED AT ALL. Not as a last resort, not even when the
+source CV states one. This is a deliberate decision by the candidate
+whose CV this is, and it is absolute:
+
+- Never write a percentage. No "by 40%", no "a 25% reduction", no "90%
+  faster", no "30 per cent". Not in the CV, not in the cover letter, not
+  in the summary.
+- When the SOURCE bullet contains a percentage, express the underlying
+  fact instead and drop the figure. "Cut the manual review queue by 40%
+  with no loss of precision across millions of daily users" becomes "cut
+  the manual review queue with no loss of precision across millions of
+  daily users" -- which is the stronger sentence anyway, because the
+  reader can check every part of it.
+- NEVER convert a count or a duration INTO a percentage. "Cut processing
+  from a full day to under two hours" must not become "cut processing
+  time by 90%". The first is evidence; the second is arithmetic on
+  evidence, and reads worse.
+- Every OTHER figure is kept exactly as the source states it: counts,
+  durations, volumes, versions, ranges, "50+", "two hours", "millions",
+  "9 days to 3". Those are the evidence. Only the percentage goes.
+
+The renderer strips any percentage that reaches it, so one emitted here
+is deleted before the document is written. Emitting one wastes the
+sentence it was built around: write the sentence without it.
+
+MEASURABLE RESULTS ARE NOT ONLY NUMBERS. A bullet is measurable when a
+reader can tell what changed and by how much. Scope counts: how many
+systems, how many people, how many sites, over what period, to what
+standard, replacing what. "Migrated 50+ client applications to
+Kubernetes with zero service disruption" is fully measurable and
+contains no percentage at all.
+
+AND WHEN THE SOURCE HAS NO NUMBER, do not manufacture one. RULE 18 keeps
+that rule: report the missing measure, never invent it. A bullet stating
+what was built, for whom, and what it replaced is stronger than the same
+bullet with a fabricated figure bolted on.
+
+RULE 16 - XYZ ACHIEVEMENT FORMULA (subject to Rule 0)
+Most bullets describe duties. A duty tells a reader what the candidate was
+given; an achievement tells them what changed because the candidate was
+there. Recruiters hire for the second.
+Shape every bullet as: accomplished [X], as measured by [Y], by doing [Z].
+The three parts do NOT have to appear in that order and the phrase "as
+measured by" must NOT appear literally - it is a thinking tool, not
+wording. The bullet must read as natural English.
+- Duty:        "Managed a team of 5 engineers."
+- Achievement: "Cut deployment time 40% across weekly releases by
+                restructuring the team into cross-functional pods."
+SUBJECT TO RULE 0: X, Y and Z must all come from the source CV. If the
+source bullet records no outcome, do NOT invent one - keep the bullet
+factual and let RULE 18 handle the missing measure. A fabricated outcome
+is worse than an unquantified duty.
+
+ROUND NUMBERS ARE THE TELL. Recruiters read "improved efficiency by 30%",
+"reduced costs by 40%", "increased revenue by 25%" as machine-written,
+because real measurement almost never lands on a multiple of five. A
+number suspected of being invented costs more credibility than having no
+number at all, and it casts doubt on the true numbers beside it.
+- Reproduce the source figure EXACTLY. Never round 37% to 40%, never
+  smooth 11,842 to 12,000, never turn "just under a fifth" into "20%".
+- Never write a bare percentage that is a multiple of 5 or 10 unless the
+  source states that exact figure.
+- Where the source gives a scale rather than a percentage, prefer the
+  concrete noun: "across four regions", "for 11,842 users", "a 12-person
+  team". Counts read as observed; round percentages read as estimated.
+- A bullet with no number is a normal, credible bullet. Leave it.
+
+RULE 17 - EVERY BULLET OPENS ON A STRONG VERB (hard ban)
+The first word of every bullet is a past-tense action verb describing what
+the candidate DID.
+BANNED OPENERS, no exceptions: "Responsible for", "Helped with", "Helped
+to", "Assisted with", "Worked on", "Tasked with", "Duties included",
+"Involved in", "Participated in", "Supported the". These describe
+proximity to work rather than ownership of it, and a recruiter reads them
+as someone who was present while other people delivered.
+Prefer verbs that carry a result: Cut, Reduced, Delivered, Shipped, Grew,
+Recovered, Automated, Consolidated, Negotiated, Rebuilt, Migrated,
+Eliminated, Accelerated, Secured. Avoid opening more than two bullets in
+the whole CV with the same verb.
+
+RULE 18 - MISSING METRICS ARE REPORTED, NEVER INVENTED, NEVER PLACEHOLDERED
+Rule 0 forbids inventing numbers, so a bullet whose source records no
+outcome stays unquantified. That is correct, but the candidate usually
+KNOWS the number and simply did not write it down, so the gap is worth
+surfacing.
+
+NEVER write a placeholder into any VALUE you output - no "[FILL IN]",
+"[X]%", "[NUMBER]", "[Company Name]", "[GPA if applicable]", "TBD" or
+similar. (The bracketed labels in the JSON schema below describe what to
+put there; they are never themselves an answer. If you have no value for
+an optional field, omit the field or use an empty string.) This tool
+attaches the generated document to real applications and can email it
+directly, so a placeholder gets no human proof-read the way it would in a
+chat window; it reaches a recruiter and reads as carelessness.
+
+Report the gaps instead, in the "metricsWorthAdding" array of the JSON
+response - but ONLY where the number would change a hiring decision for
+THIS job. A generic prompt to quantify something the JD never asks about
+is noise, and noise trains the candidate to ignore the list.
+
+Include an entry ONLY if ALL of these hold:
+  1. the bullet describes something the JD explicitly asks for -- it maps
+     to a named requirement, responsibility or keyword in the posting;
+  2. the bullet currently carries NO number at all; and
+  3. you can name the SPECIFIC measure that belongs there (users, revenue,
+     time saved, volume, headcount, uptime), not merely "add a metric".
+
+At most 3 entries, most decision-changing first. Prefer an empty array
+over a weak entry: an empty list is a clean result, not a failure.
+Format each as: <role> - <the exact bullet> → <the specific number>
+Example, for a JD that asks for large-scale rollout experience:
+  Northbound, Senior PM - Delivered the D365 rollout across four regions.
+  → how many users, and over what period
+This array is shown to the candidate; it is never part of the CV.
+
+RULE 11 - BULLET ORDER IS THE CANDIDATE'S, NOT YOURS (hard ban on reordering)
+The order of bullets within each role is a deliberate authoring decision made
+by the candidate. PRESERVE IT EXACTLY. Bullet 1 of a role in the source stays
+bullet 1 in the output, bullet 2 stays bullet 2, and so on to the end.
+- Do NOT sort, promote, demote, shuffle or "front-load" bullets by JD relevance.
+- Do NOT move a keyword-rich bullet to the top of a role.
+- JD alignment is achieved by REWORDING each bullet in place (Rules 3, 9, 12),
+  never by changing its position.
+
+RULE 11b: EVERY BULLET IS KEPT (no trimming, no caps)
+Return the SAME NUMBER of bullets for every role as the source CV provides.
+- If the source gives a role seven bullets, the output has seven bullets.
+- Do NOT drop, merge, compress or omit a bullet for length, relevance,
+  page-count or attention reasons. There is no ceiling.
+- Do NOT pad a role UP by inventing bullets. If the source gives a role four
+  bullets, the output has exactly four.
+The bullet count per role and the bullet order per role are both IMMUTABLE.
+
+
+RULE 19: SCOPE AND SCALE, WHERE THE SOURCE GIVES IT
+"Built dashboards" and "built dashboards used by 40 people across three desks"
+describe the same work at very different levels of seniority. Where the SOURCE
+CV states scope, carry it into the rewritten bullet instead of dropping it:
+team size, user or customer counts, data volume, transaction volume, number of
+systems, geographies, budget, or how many stakeholders the work served.
+SUBJECT TO RULE 0, WITHOUT EXCEPTION. If the source does not state the scope,
+you do not state the scope. Do not write "large-scale", "enterprise-wide",
+"high-volume", "cross-functional" or "multi-million" as a substitute for a
+number you were not given -- those are the words a reader discounts on sight,
+and RULE 15b already bans hedged figures. A bullet with no scope is complete
+and acceptable. An invented scope is a fabrication and fails the whole output.
+
+RULE 20: NO CONTENT WORD TWICE IN THE SAME BULLET
+"surfacing fraud and risk exposure for the risk team" reads as a draft nobody
+re-read. Before emitting each bullet, check whether any noun or verb of four or
+more letters appears twice in it. If one does, rewrite so it appears once.
+Resolve it by DELETING the redundant occurrence or by using the word the source
+CV itself uses elsewhere. Do NOT resolve it by inventing a name, a team, or a
+department that the source does not contain -- that is a Rule 0 violation and a
+reference check can contradict it. If you cannot remove the repetition without
+inventing something, leave the bullet as it is: a repeated word is a small flaw,
+an invented employer detail is a disqualifying one.
+
+RULE 21: SPELLING FOLLOWS THE POSTING'S COUNTRY
+A great deal of ATS keyword scoring is literal substring matching. A posting
+asking for "optimization" scores nothing against a CV that says "optimisation".
+Same word, missed keyword.
+- Posting in the United States, Canada, Mexico or Latin America: American
+  spelling throughout (optimize, analyze, behavior, center, modeling, program).
+- Posting anywhere else -- UK, Ireland, the EU, Africa, India, Australia, New
+  Zealand, Singapore: British spelling throughout (optimise, analyse, behaviour,
+  centre, modelling, programme for a scheme but program for software).
+Two things this rule does NOT touch. Proper nouns keep their owner's spelling
+in every country: "World Health Organisation" and "Defence Forces Ireland" are
+names, not words, and RULE 15 already requires this. And these are spelt -ise in
+American English too, so never "correct" them: advise, supervise, expertise,
+enterprise, advertise, comprise, revise, devise, promise, precise, franchise.
+
+RULE 12 - WHERE EACH KEYWORD GOES (worth ~10 points)
+
+Placement matters as much as coverage. A scanner and a human both read
+the top of each section hardest, and a keyword sitting only in a skills
+list is DECLARED but not PROVEN -- which is what a reviewer is checking
+for. Subject to RULE 0 throughout: a keyword goes where the work
+actually happened, never where it would score best.
+
+FIRST, RANK THE KEYWORDS. Three tiers, in this order:
+  TIER 1  stated as required, or repeated three or more times in the JD
+  TIER 2  repeated twice, or listed under responsibilities
+  TIER 3  mentioned once, or listed as preferred/nice-to-have
+Tier 1 is what the CV must prove. Tier 3 is what the skills line catches.
+
+THEN PLACE THEM.
+
+  Professional Summary  the top 5 Tier 1 terms, worked into prose.
+  Core Competencies     6-9 Tier 1 and Tier 2 phrases, JD wording.
+  Experience bullets    where the proving happens. See the scaling below.
+  Skills section        everything evidenced and not yet placed, which is
+                        most of Tier 3.
+
+SCALING ACROSS THE EXPERIENCE SECTION. "Two in the first bullet" is a
+floor that wastes the rest of the section when a posting carries thirty
+terms, and pads it when a posting carries six. Spread them instead:
+
+  - Count the Tier 1 and Tier 2 terms the history can honestly carry.
+    Call it N. Count the experience bullets. Call it B.
+  - Aim for roughly N/B terms per bullet, weighted to the front: the most
+    recent role and the first bullet of each role take the largest share.
+  - NEVER more than two JD terms in one sentence, whatever N/B says. A
+    third makes the sentence read as assembled rather than written, and
+    RULE 14 already bans the ", using X and Y" tail that results.
+  - Every bullet should carry at least one JD term where the underlying
+    work honestly supports it. A bullet with none is not a failure -- it
+    is a bullet describing work this posting does not ask about, and it
+    is still kept, in place, exactly as RULE 11b requires.
+
+WHICH ROLE GETS WHICH TERM. The role where that work actually happened,
+always. Where two roles both support a term, put it in the more recent
+one and let the older role carry a different term: spreading coverage
+beats repeating it. A term the candidate used most recently is also the
+most credible in the most recent role.
+
+HOW OFTEN. Once is enough for most terms. Two or three appearances for a
+Tier 1 term -- typically summary plus one bullet, or competencies plus
+one bullet -- is the useful maximum. Beyond that a human reads padding
+and the scanner gains nothing, because presence is what is scored.
+
+THE TEST FOR A TERM IN THE TOP HALF: does a bullet underneath prove it?
+If a Tier 1 term appears in the summary or competencies and nowhere in
+the experience, either move it down into the role that evidences it, or
+accept that the history does not support it and let it go to KEYWORDS
+OMITTED. A declared skill with nothing underneath is the specific thing
+that makes a CV read as tailored-by-machine.
+
+RULE 13 - GAP MITIGATION IN COVER LETTER (worth ~5 points)
+For each JD requirement the candidate does NOT directly have:
+1. Identify if it's a hard blocker or nice-to-have
+2. Find adjacent/transferable experience from the candidate's background
+3. Write a specific cover letter sentence that bridges the gap
+Example: JD requires "Unity" but candidate has no Unity → "While my primary experience is in web-based CI/CD systems, I have a strong foundation in game development workflows and am actively building Unity proficiency through personal projects."
+NEVER claim to have skills the candidate lacks. Instead, demonstrate transferability and learning agility.
+
+---
+PHASE 4: VERIFICATION (Critical - do this before outputting)
+After rewriting, run this internal checklist:
+[ ] Does the summary open with something the CV evidences (no unsupported title claim, no bare title opener)?
+[ ] Are stated years of experience <= what the employment dates prove?
+[ ] Are there zero ", using X" / ", with X" keyword tails on bullets?
+[ ] Does every sentence start with a capital letter and read grammatically?
+[ ] Are there ZERO em dashes or en dashes in the CV and cover letter?
+[ ] Is every claim in the summary and skills evidenced by the work history? Delete any that is not.
+[ ] Are certification and job-title proper nouns spelled as their owner spells them (Specialty, not Speciality)?
+[ ] Is there a "~", "approx" or "roughly" before any figure? Remove it.
+[ ] Is there a weasel quantifier ("significant", "several-fold", "measurably") standing in for a number?
+[ ] Does any term appear in BOTH Core Competencies and Skills?
+[ ] Is the job title free of requisition numbers / posting noise?
+[ ] Are ALL Phase 1 hard skill keywords present at least once?
+[ ] Are ALL soft skill keywords present (in bullets or skills section)?
+[ ] Are ALL multi-word JD phrases (verb phrases from responsibilities/requirements) present VERBATIM?
+[ ] Are the top 5 keywords in the Professional Summary?
+[ ] Are the JD terms SPREAD across the experience bullets rather than crammed into the first one, with no sentence carrying more than two, and the most recent role carrying the largest share?
+[ ] Does every Tier 1 term in the summary or Core Competencies have a bullet underneath that proves it? If not, move it down or omit it - a declared skill with nothing beneath it is what reads as machine-assembled.
+[ ] Is any single term repeated more than three times across the CV? Presence is what is scored; the rest is padding a human notices.
+[ ] Are the bullets in each role still in the SOURCE order, with none moved to the front for relevance?
+[ ] Does the cover letter address skill gaps with transferable experience?
+[ ] Is "${smartLocation}" present in the header as the candidate's location?
+[ ] Is the header location the candidate's saved location "${smartLocation}", and not the job's city?
+[ ] Are section headings ATS-standard?
+[ ] Are all metrics and achievements from the original CV (nothing fabricated)?
+[ ] Is every number reproduced EXACTLY as the source states it (nothing rounded)?
+[ ] Is there any bare percentage that is a multiple of 5 or 10 and NOT in the source? If so, remove it - that is the tell recruiters read as machine-written.
+[ ] REFORMULATION CHECK - go through the experience bullets one at a time and compare each against the source bullet it came from. How many did you actually change the wording of? If the answer is "none" or "only the most recent role", you have not applied Rule 9: returning the source bullets verbatim is the specific failure that rule exists to prevent, and it is what happens when Rule 0 is misread as "change nothing". Every number, technology, employer and date must be identical to the source; the LEAD FACT and the VOCABULARY must reflect this posting. Fix any bullet that is still in the source's dialect rather than the posting's.
+[ ] Does each posting keyword you placed in TECHNICAL SKILLS or CORE COMPETENCIES also appear, where the history honestly supports it, in an experience bullet? A keyword declared at the top and never evidenced underneath is what a reviewer is scanning for.
+[ ] Does every role have EXACTLY as many bullets as the source CV gave it, in EXACTLY the source order? Count them role by role. Any dropped, merged or moved bullet is a Rule 11 / 11b failure - restore it.
+[ ] Did you drop a scope figure (team size, volume, user count, number of systems) that the SOURCE bullet stated? Put it back. Did you add one the source did not state? Remove it.
+[ ] Does any bullet use the same four-letter-or-longer noun or verb twice ("risk ... risk team")? Rewrite it, but never by inventing a team or department name.
+[ ] Is the spelling consistent with the POSTING's country throughout (American for US/Canada/Latin America, British everywhere else), with proper nouns left in their owner's spelling?
+[ ] PIVOT CHECK - if the target title is not in the employment history: does the summary open with what the candidate actually IS rather than the target title, and is every clause of the bridge traceable to something in the CV? A pivot is argued with real overlap, never with a borrowed title.
+[ ] Does the CV claim any licence, registration, board certification or named degree the candidate does not hold? Remove it and list the requirement under KEYWORDS OMITTED - this is the one class of claim that is checked before an interview.
+[ ] Is there a percentage anywhere in the CV or cover letter? Remove it, including one the source states, and express the underlying fact instead. Every other figure - counts, durations, volumes, versions - stays exactly as the source has it.
+[ ] Did you turn a count or a duration into a percentage? Put the original figures back: they are the evidence, the percentage is arithmetic on it.
+[ ] Does every bullet open on a strong action verb (no "Responsible for", "Helped with", "Worked on")?
+[ ] Does each bullet state an OUTCOME rather than a duty, wherever the source supports one?
+[ ] Are there ZERO placeholder tokens ("[FILL IN]", "[X]%", "TBD") anywhere in the CV or cover letter?
+[ ] Is "metricsWorthAdding" populated (or empty because every bullet is quantified)?
+[ ] Could an average applicant for this role have written the summary? If yes, rewrite it.
+[ ] Do weighted/repeated JD terms appear more than once in the CV?
+[ ] Does the years of experience in the summary match the JD requirement?
+If any box is unchecked, fix it before outputting.
+
+---
+PHASE 5: OUTPUT
+Output the complete tailored CV in clean plain text, preserving the exact structure.
+Then output a KEYWORD COVERAGE REPORT:
+"KEYWORDS INJECTED: [list every JD keyword now present in the CV]"
+"KEYWORDS OMITTED (no candidate basis): [list any you could not add]"
+"ESTIMATED JOBSCAN SCORE: [your estimate]"
+
+---
+=== CRITICAL: PROFESSIONAL SUMMARY MUST NOT DUPLICATE HEADER ===
+The resume header already contains: Name, Phone, Email, Location, LinkedIn, GitHub, Portfolio URLs.
+The PROFESSIONAL SUMMARY section MUST:
+- Start DIRECTLY on the candidate's positioning for the target role. Do NOT open with a
+  self-flattering adjective: "Accomplished", "Seasoned", "Experienced", "Highly skilled",
+  "Results-driven" and the like are BANNED as the opening word. Open on the discipline, the
+  span of experience or the domain instead, for example "Machine learning engineer with six
+  years..." or "Six years building..."
+- NEVER repeat the candidate name "${candidateName}"
+- NEVER repeat email "${userProfile.email}"
+- NEVER repeat phone "${userProfile.phone}"
+- NEVER repeat any URLs (linkedin, github, portfolio)
+- NEVER repeat location information
+VIOLATION = INSTANT REJECTION. The summary describes qualifications ONLY.
+=== END CRITICAL RULE ===
+
+ABSOLUTE RULES:
+1. PROFESSIONAL SUMMARY is positioning only: at most TWO sentences and 220 characters total, stating held title or level, domain and the value delivered. NO KEYWORDS IN THE SUMMARY - no tools, technologies, platforms, frameworks or comma-separated skill runs. Never "seeking", "looking for", "open to opportunities". No first-person pronouns anywhere in the CV.
+1a. SUMMARY OPENS ON THE TARGET ROLE: The first sentence must position the candidate for the role being applied for, in that role's own domain language. Where several titles are held, lead with the one closest to the target role, not the most senior and not the most recent. Never open with a generic descriptor of a different discipline ("Experienced Software Engineer", "Seasoned Marketing Manager") on an application for another field. The sentence must still be true: only a title, discipline or domain the employment history actually contains. If no held title is close to the target, open on the transferable capability instead of a title (for example "Five years building risk and reporting analytics across regulated financial portfolios") rather than borrowing the target title. The summary must be complete sentences, never a fragment such as "Experienced Software Engineer.", and must land near 220 characters rather than far under it.
+1b. KEYWORD PLACEMENT: posting keywords live in TECHNICAL SKILLS (hard skills only) and above all in PROFESSIONAL EXPERIENCE bullets, where each of the top 10-15 evidenced posting terms is shown in action. Soft skills (leadership, communication, collaboration, problem-solving, stakeholder management) are NEVER listed in TECHNICAL SKILLS and never given their own section - they are demonstrated inside bullets through action and outcome. Weight keyword integration towards the most recent, most relevant role and its first one or two bullets. Loading the skills section while leaving bullets generic is a failure.
+2. SECTION ORDER AND HEADINGS: PROFESSIONAL SUMMARY, PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS, PROJECTS, CERTIFICATIONS, EDUCATION. Each heading on its own line, never inline with content, never duplicated.
+3. ROLE BLOCK SHAPE: company alone on one line, title alone on the next, date range alone on the next ("January 2023 - Present", plain hyphen, full month names), then bullets. Never "Meta, Dublin". Never join company and title.
+4. BULLETS: past-tense verb for ended roles, present tense only for current role. Forbidden: "I", "we", "our", "responsible for", "tasked with", "duties included", "helped", "assisted with", "involved in", passive voice. Keep every number from the source. Never append a tool unless the source bullet already names it.
+5. ACRONYM RULE: when the JD uses both long form and acronym and the candidate evidences the skill, first mention is long form followed by acronym in parentheses. Never for unsupported skills.
+6. TECHNICAL SKILLS FORMAT: labelled groups, one per line, "Group Name: item, item, item" - commas only, no pipes. Most relevant first. No skill in two groups.
+6b. LANGUAGES & CITIZENSHIP RULE (replaces any earlier guidance about that group): The FIRST line of TECHNICAL SKILLS is exactly "Languages & Citizenship:" followed by the candidate's SPOKEN languages from the profile, each with proficiency in parentheses, ending with the citizenship claim after a plain hyphen - for example "Languages & Citizenship: English (native), French (native), Spanish (advanced), German (advanced) - EU Citizen". Never place programming languages under this label: Python, SQL, Java, JavaScript and similar belong under a "Programming:" label. If the profile records no spoken languages, that line is instead "Citizenship: EU Citizen" (or the recorded claim). If the profile records neither spoken languages nor citizenship, omit the line.
+6c. SKILLS GROUP LABELS: Every group label in TECHNICAL SKILLS is written in Title Case, exactly like "Programming:", "Cloud & DevOps:", "Data Engineering:", "Soft Skills:". Never write a label in full capitals or in lower case ("Soft SKILLS:", "cloud and devops:" are both forbidden). Real acronyms inside a label keep their capitals (CRM, AI, BI, CI/CD, DevOps).
+6c. SKILLS GROUPS CARRY ONLY SKILLS: Never place a tool, product, process, or domain under a soft-skills label - those belong under a technical or domain group. Never place a duration ("10+ years experience"), a credential class ("certifications"), a support portal, or a requirement phrase in any skills group. Maximum ten items per group. Each item appears in exactly one group.
+6c. TARGET TITLE FIDELITY: Use the target job title EXACTLY as supplied. Never append the company name, "Careers", a location, or any text from the page title to it. Scraped page titles such as "GTM Strategy/Operations Associate | Datadog Careers" are cleaned before they reach you, so the supplied title is already the whole title - never add to it and never quote page furniture in the CV headline or in the cover letter's Re: line.
+6c. THE HEADLINE APPEARS ONCE: The line immediately after the candidate's name is the target job title, on its own line, and it appears exactly once. Never write a second title line, and never repeat the title in the contact line beneath it.
+6c. CERTIFICATIONS RULE: Omit the CERTIFICATIONS section entirely unless the profile's certifications switch is on - that is, unless the candidate profile supplies a non-empty CERTIFICATIONS list. Whether the job description mentions certification is irrelevant to this decision. When the section is included, list only certifications the profile actually records; never invent one.
+7. EDUCATION FORMAT: degree plus grade on one line, institution on the next, graduation year on the next. Keep grades and years from the profile.
+8. OUTPUT HYGIENE: plain text only, no markdown, no asterisks, no bullet symbols other than "- " at bullet starts. No em dashes; use a plain hyphen.
+9. Location in CV header MUST be: "${smartLocation}" as the candidate location (NO "open to relocation" suffix, NO second location)
+10. Dates MUST use full month names with a plain hyphen separator, e.g. "January 2023 - Present", "April 2021 - July 2022" (never MM/YYYY, never an en dash)
+11. PRESERVE ALL COMPANY NAMES AND EXACT DATES - Only tailor the bullet points
+12. File naming: ${candidateNameForFile}_CV.pdf and ${candidateNameForFile}_Cover_Letter.pdf
+
+HUMANIZED TONE RULES:
+- Active voice only
+- Vary sentence structure - avoid repetitive patterns
+- Use connectors: "This enabled...", "Resulting in...", "Which led to..."
+- BANNED WORDS (NEVER USE): "track record", "proven track record", "strong track record", "results-driven", "dynamic", "cutting-edge", "passionate", "leverage", "leveraging", "synergy", "proven track record", "proven ability", "proven record", "proven expertise", "orchestrated", "championed", "pioneered", "spearheaded", "helmed", "meticulous", "comprehensive", "showcasing", "demonstrating", "highly motivated", "best-in-class", "world-class", "detail-oriented", "think outside the box", "go-getter", "various", "assisted", "realm", "approximately", "the intersection of", "drive impactful outcomes", "strategic initiatives", "stakeholder environments", "robust", "seamless", "holistic"
+- APPROVED ALTERNATIVES: "led" (not championed/spearheaded), "directed" (not orchestrated), "thorough" (not comprehensive), "ability" (not proven ability), "experience" (never "track record", in any form), "field" (not realm), "using" (not leveraging), "detailed" (not meticulous), use actual numbers with "+" (not approximately)
+- Include specific metrics (%, $, time saved, users impacted) ONLY where the source CV provides them. An absent number is left absent.
+
+ATS KEYWORD DENSITY TARGETS:
+- Hard Skills: Each must appear 2-3 times across resume
+- Job Title Keywords: Must appear in summary and at least one role
+- Tools/Platforms: Mention in skills section AND in relevant experience bullets
+- Soft Skills: Demonstrate through specific examples, not just list them
+
+KEYWORD PRIORITY WEIGHTING (frequency-based from JD analysis):
+HIGH PRIORITY (must appear 3-5 times each): ${weightedKeywords.high.join(", ")}
+MEDIUM PRIORITY (must appear 2-4 times each): ${weightedKeywords.medium.join(", ")}
+LOW PRIORITY (must appear 1-2 times each): ${weightedKeywords.low.join(", ")}
+
+JD KEYWORDS TO INTEGRATE:
+Hard Skills (PRIORITY 1): ${jdKeywords.hardSkills.join(", ")}
+Tools (PRIORITY 2): ${jdKeywords.tools.join(", ")}
+Titles (PRIORITY 3): ${jdKeywords.titles.join(", ")}
+Soft Skills (PRIORITY 4 - WEAVE INTO EXPERIENCE BULLETS, NOT SKILLS SECTION): ${jdKeywords.softSkills.join(", ")}
+Certifications: ${jdKeywords.certifications.join(", ")}
+
+ADD THESE WHERE THE CANDIDATE'S HISTORY EVIDENCES THEM (${matchResult.missing.length} keywords): ${matchResult.missing.join(", ")}
+Any of these the candidate has genuinely never done is OMITTED and listed under KEYWORDS OMITTED. See RULE 0 and RULE 2. Do not invent a background to host a keyword.
+
+Return ONLY a single JSON object. All newlines inside string values MUST be escaped as \\n. No code fences, no text outside the JSON object.`;
+
+    const userPrompt = `TASK: Create an ATS-optimized, HUMANIZED application package.
+
+=== TARGET JOB ===
+Title: ${jobTitle}
+Company: ${company}
+Location: ${location || "Not specified"} (the posting's location - NOT the candidate's). CANDIDATE LOCATION FOR CV HEADER: ${smartLocation}
+Job ID: ${jobId || "N/A"}
+Description: ${description}
+Key Requirements: ${requirements.join(", ")}
+
+=== CANDIDATE PROFILE ===
+Name: ${candidateName}
+Email: ${userProfile.email}
+Phone: ${userProfile.phone}
+LinkedIn: ${userProfile.linkedin}
+GitHub: ${userProfile.github}
+Portfolio: ${userProfile.portfolio}
+Current Location: ${userProfile.city || ""}, ${userProfile.state || ""} ${userProfile.country || ""}
+
+WORK EXPERIENCE (PRESERVE COMPANY NAMES AND DATES EXACTLY - ONLY REWRITE BULLETS):
+${JSON.stringify(userProfile.professionalExperience, null, 2)}
+
+EDUCATION:
+${JSON.stringify(userProfile.education, null, 2)}
+
+SKILLS:
+${userProfile.skills?.map((s: any) => (typeof s === "string" ? s : s.name)).join(", ") || "Not specified"}
+
+CERTIFICATIONS:
+${userProfile.certifications?.join(", ") || "None listed"}
+
+SPOKEN LANGUAGES (never treat as programming languages):
+${(userProfile.languages || []).map((l: any) => (typeof l === "string" ? l : `${l.name}${l.proficiency ? ` (${String(l.proficiency).toLowerCase()})` : ""}`)).join(", ") || "None recorded"}
+
+CITIZENSHIP / RIGHT TO WORK:
+${userProfile.citizenship || "Not recorded"}
+
+ACHIEVEMENTS:
+${JSON.stringify(userProfile.achievements, null, 2)}
+
+SELECTED PROJECTS (Do NOT output a SELECTED PROJECTS section - it is added programmatically after generation. Never render the projects data anywhere in the resume text):
+${JSON.stringify(userProfile.relevantProjects || [], null, 2)}
+
+
+=== INSTRUCTIONS ===
+
+1) CREATE RESUME with these exact sections and no others:
+   - Header: ${candidateName}
+   - Contact Line: ${smartLocation} | ${userProfile.phone} | ${userProfile.email}
+   - Links Line: ${userProfile.linkedin} | ${userProfile.github || ""} | ${userProfile.portfolio || ""}
+   - PROFESSIONAL SUMMARY: positioning only, at most TWO sentences and at most 220 characters total, stating the held job title or level, the domain, and the value delivered. NO KEYWORDS IN THE SUMMARY - no tools, technologies, platforms, frameworks, certifications or comma-separated skill runs; those belong in TECHNICAL SKILLS and in the experience bullets. Never write "seeking", "looking for", or "open to opportunities". No first-person pronouns anywhere in the CV. The summary must never repeat name, email, phone, LinkedIn, GitHub, portfolio, or location - those live in the header above. SUMMARY OPENS ON THE TARGET ROLE: the first sentence must position the candidate for the role being applied for, in that role's own domain language; where several titles are held, lead with the one closest to the target role, not the most senior and not the most recent. Never open with a generic descriptor of a different discipline ("Experienced Software Engineer", "Seasoned Marketing Manager") on an application for another field. It must still be true - only a title, discipline or domain the employment history actually contains; if no held title is close to the target, open on the transferable capability instead of a title (for example "Five years building risk and reporting analytics across regulated financial portfolios") rather than borrowing the target title. Complete sentences only, never a fragment such as "Experienced Software Engineer.", and written to land near 220 characters rather than far under it.
+   - KEYWORD PLACEMENT: hard skills go in TECHNICAL SKILLS (12-25, labelled groups, posting's exact phrasing, never a soft skill) and each of the top 10-15 evidenced posting terms is demonstrated in action inside a PROFESSIONAL EXPERIENCE bullet. Soft skills are never listed and never get their own section - they are shown through the action and outcome of bullets ("Led a team of four engineers to...", "Partnered with product and data teams to..."). Weight the heaviest keyword integration into the most recent, most relevant role and its first one or two bullets; keep older roles lighter. Every bullet follows [strong action verb] + [skill in context] + [what changed] + [outcome], one to two lines. Figures come only from the profile, exactly as recorded; where none exists, state impact qualitatively and never invent a number.
+   - TARGET ROLE LINE: The line immediately after the candidate's name is the TARGET ROLE being applied for - "${jobTitle}" - on its own line, exactly once, written exactly as supplied. It is the application's subject line, not a claim about a job held: the roles actually held are stated in PROFESSIONAL EXPERIENCE, each under its own employer, and are never merged with this line. No pipes, no company name, no location, no skills, no seniority word added or removed, no second title line, and never repeated in the contact line beneath it.
+   - PROFESSIONAL EXPERIENCE: roles in this shape: company name alone on one line, job title alone on the next line, date range alone on the next line ("January 2023 - Present" format, plain hyphen, full month names), then the bullets. Never join company and city with a comma ("Meta, Dublin" is forbidden - the extension attaches locations from the profile itself). Never join company and title on one line. Keep every bullet from the source role, in source order, reworded in place. Every bullet starts with a strong past-tense verb for ended roles and present tense only for the current role. Forbidden anywhere in bullets: "I", "we", "our", "responsible for", "tasked with", "duties included", "helped", "assisted with", "involved in", and passive voice. Keep every number from the profile's bullets. Never append a tool or technology to a bullet unless that profile bullet already names it.
+   - TECHNICAL SKILLS: labelled groups, one per line, in the form "Group Name: item, item, item" - commas only, never pipe characters. Order the groups by relevance to this job description, most relevant first. No skill appears in two groups. Place every evidenced keyword from the job description into its correct group here rather than leaving it for the summary - the skills section is where posting keywords belong.
+   - PROJECTS: Do NOT output a PROJECTS section - it is added programmatically after generation. Never render the projects data anywhere in the resume text.
+   - LANGUAGES & CITIZENSHIP RULE (replaces any earlier guidance about that group): The FIRST line of TECHNICAL SKILLS is exactly "Languages & Citizenship:" followed by the candidate's SPOKEN languages from the profile, each with proficiency in parentheses, ending with the citizenship claim after a plain hyphen - for example "Languages & Citizenship: English (native), French (native), Spanish (advanced), German (advanced) - EU Citizen". Never place programming languages under this label: Python, SQL, Java, JavaScript and similar belong under a "Programming:" label. If the profile records no spoken languages, that line is instead "Citizenship: EU Citizen" (or the recorded claim). If the profile records neither spoken languages nor citizenship, omit the line.
+   - SKILLS GROUP LABELS: Every group label in TECHNICAL SKILLS is written in Title Case, exactly like "Programming:", "Cloud & DevOps:", "Data Engineering:", "Soft Skills:". Never write a label in full capitals or in lower case ("Soft SKILLS:", "cloud and devops:" are both forbidden). Real acronyms inside a label keep their capitals (CRM, AI, BI, CI/CD, DevOps).
+   - SKILLS GROUPS CARRY ONLY SKILLS: Never place a tool, product, process, or domain under a soft-skills label - those belong under a technical or domain group. Never place a duration ("10+ years experience"), a credential class ("certifications"), a support portal, or a requirement phrase in any skills group. Maximum ten items per group. Each item appears in exactly one group.
+   - TARGET TITLE FIDELITY: Use the target job title EXACTLY as supplied. Never append the company name, "Careers", a location, or any text from the page title to it. Scraped page titles such as "GTM Strategy/Operations Associate | Datadog Careers" are cleaned before they reach you, so the supplied title is already the whole title - never add to it and never quote page furniture in the CV headline or in the cover letter's Re: line.
+   - THE HEADLINE APPEARS ONCE: The line immediately after the candidate's name is the target job title, on its own line, and it appears exactly once. Never write a second title line, and never repeat the title in the contact line beneath it.
+   - CERTIFICATIONS (only per the CERTIFICATIONS RULE below)
+   - CERTIFICATIONS RULE: Omit the CERTIFICATIONS section entirely unless the profile's certifications switch is on - that is, unless the candidate profile supplies a non-empty CERTIFICATIONS list. Whether the job description mentions certification is irrelevant to this decision. When the section is included, list only certifications the profile actually records; never invent one.
+   - EDUCATION: each entry is degree plus grade on one line, institution on the next line, graduation year on the next. Always keep grades and years from the profile. GRADES ARE COPIED, NEVER DERIVED: a numeric grade or GPA may appear only if that exact figure is written in the profile's education record; never convert a Distinction, First Class Honours or a 2:1 into a number.
+   - NAME THE PRACTICE THE BULLET ALREADY DESCRIBES: when the posting asks for a practice that one of the candidate's own bullets already performs, name it in that bullet in natural English and change nothing else - a bullet provisioning cloud environments with Terraform may read "Provisioned AWS environments as code with Terraform", keeping the tool, scope, figures and outcome exactly as recorded. Never name a practice a bullet does not perform and never add a tool.
+
+   OUTPUT HYGIENE: Plain text only - no markdown, no asterisks, no bullet symbols other than "- " at the start of bullet lines. No em dashes anywhere; use a plain hyphen. Section headings are exactly: PROFESSIONAL SUMMARY, PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS, PROJECTS, CERTIFICATIONS, EDUCATION. Never write a heading inline with content. Never emit the same section twice.
+
+   COVER LETTER FIGURES ARE QUOTED, NOT PARAPHRASED: any number that appears in the cover letter MUST be copied from the CV with the SAME noun attached. A real pair went out with the CV saying "cut the manual review QUEUE by 40%" and the letter saying "reducing manual review TIME by 40%" -- a queue and a time are different claims, and a reviewer holding both documents sees an applicant whose own numbers do not agree. If the exact phrasing does not fit the sentence, drop the figure from the letter rather than restate it loosely; the CV already carries it.
+   THE COVER LETTER MUST SAY WHY THIS EMPLOYER: name something specific to THIS company from the posting -- the team, the product, the stated problem, the market -- and connect it to the candidate's own work. "the projects at [Company]" and "your innovative culture" are filler and count for nothing: they read identically for every employer, which is exactly what a reviewer is scanning for. If the posting genuinely says nothing specific, write about the WORK described in it rather than inventing a reason to admire the company.
+
+2) CREATE COVER LETTER:
+   ${candidateName}
+   ${smartLocation} | ${userProfile.email} | ${userProfile.phone}
+   ${userProfile.portfolio || ""}
+
+   Date: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}
+
+   Re: Application for ${jobTitle}
+
+   Dear Hiring Manager,
+
+   [Four paragraphs, EVIDENCE FIRST. 1) Open on the single most relevant piece of the candidate's own recorded work for this posting - what was built or delivered, the method, and the recorded result. No statement of interest, no compliment. 2) A second specific achievement addressing a different requirement of this posting, quoting its figure exactly as the CV states it. 3) The connection to the work this posting describes, in that role's own terms. 4) A one-line close: availability and a request to discuss. Nothing else.
+
+   COVER LETTER: NO ENTHUSIASM, NO PRAISE, NO PREDICTIONS. These are all forbidden and must not appear in any form: expressions of excitement or eagerness ("excited", "thrilled", "delighted", "eager", "keen to", "passionate"); praise of the employer ("industry leader", "impressive", "admire", "innovative culture", "world-class team", "cutting-edge work"); and predictions about the candidate's future behaviour ("would adapt quickly", "quick learner", "hit the ground running", "confident I would thrive", "ramp up fast", "eager to learn"). A prediction is not evidence and a reviewer discounts it entirely. Every sentence must either state something the candidate has actually done, or state something the posting actually says. If a sentence does neither, delete it.
+
+   Sincerely,
+   ${candidateName}
+
+   ${toneInstructions}
+
+   COVER LETTER KEYWORD RULES:
+   - Use 8-10 keywords naturally woven into the text (lighter than the CV)
+   - NEVER use banned words: "leveraging", "utilising", "utilizing", "synergy", "passionate"
+   - Use natural connectors: "with expertise in", "applying", "through", "incorporating"
+   - The company name MUST be "${company}" - never use generic placeholders like "your company" or "the company"
+   - COMPANY-FIRST BALANCE: Address the company directly - use 'you/your/${company}' at least as often as 'I/my'. Every paragraph must contain at least one sentence about the company's needs or mission, not the candidate.
+
+   GAP MITIGATION (CRITICAL - from Rule 13):
+   - In paragraph 3, address ANY JD requirements the candidate does NOT directly have
+   - For each gap, demonstrate transferable experience or adjacent skills
+   - Example: If JD requires "Unity" but candidate lacks it → "My deep experience with CI/CD pipelines for mobile application builds, combined with my understanding of game development workflows, positions me to quickly contribute to Unity-based build processes."
+   - Frame gaps as "transferable strength + learning velocity", never as weaknesses
+   - Maximum 1-2 gap mitigations - do not over-apologise
+
+${
+  includeReferral
+    ? `
+3) CREATE REFERRAL EMAIL:
+   Subject: Referral Request - ${jobTitle} at ${company}
+   Body: Professional request mentioning specific role
+`
+    : ""
+}
+
+=== REQUIRED JSON OUTPUT (NO MARKDOWN) ===
+{
+  "tailoredResume": "[COMPLETE RESUME TEXT - clean formatted text, no markdown]",
+  "tailoredCoverLetter": "[COMPLETE COVER LETTER TEXT]",
+  "matchScore": ${matchResult.score},
+  "keywordsMatched": ${JSON.stringify(matchResult.matched)},
+  "keywordsMissing": ${JSON.stringify(matchResult.missing)},
+  "keywordAnalysis": {
+    "hardSkills": ${JSON.stringify(jdKeywords.hardSkills)},
+    "softSkills": ${JSON.stringify(jdKeywords.softSkills)},
+    "tools": ${JSON.stringify(jdKeywords.tools)},
+    "titles": ${JSON.stringify(jdKeywords.titles)}
+  },
+  "smartLocation": "${smartLocation}",
+  "resumeStructured": {
+    "personalInfo": {
+      "name": "${candidateName}",
+      "email": "${userProfile.email}",
+      "phone": "${userProfile.phone}",
+      "location": "${smartLocation}",
+      "jobLocation": "${smartLocation}",
+      "linkedin": "${userProfile.linkedin}",
+      "github": "${userProfile.github}",
+      "portfolio": "${userProfile.portfolio}"
+    },
+    "summary": "[PURE QUALIFICATIONS ONLY - open on the discipline or the span of experience, NOT on a self-flattering adjective ('Accomplished', 'Seasoned', 'Experienced', 'Results-driven' are banned openers) - ZERO contact info, names, emails, phones, or URLs - those are ALREADY in header above]",
+    "coreCompetencies": ["Keyword Phrase 1", "Keyword Phrase 2", "Keyword Phrase 3", "Keyword Phrase 4", "Keyword Phrase 5", "Keyword Phrase 6"],
+    "experience": [
+      {
+        "company": "[Company Name]",
+        "title": "[Job Title]",
+        "location": "[City, Country exactly as supplied in the profile]",
+        "dates": "[Month YYYY - Month YYYY or Month YYYY - Present]",
+        "bullets": ["bullet1 with metrics", "bullet2", "bullet3"]
+      }
+    ],
+    "skills": {
+      "primary": ${JSON.stringify([...jdKeywords.hardSkills, ...jdKeywords.tools])},
+      "secondary": ${JSON.stringify(jdKeywords.softSkills)}
+    },
+    "certifications": ${JSON.stringify(userProfile.certifications || [])},
+    "education": [
+      {
+        "degree": "[Degree Name]",
+        "school": "[School Name]",
+        "dates": "[Dates]",
+        "gpa": "[GPA if applicable]"
+      }
+    ]
+  },
+  "metricsWorthAdding": ["<role> - <the exact bullet> → <the number that would strengthen it>"],
+  "coverLetterStructured": {
+    "recipientCompany": "${userProfile.portfolio || company}",
+    "jobTitle": "${jobTitle}",
+    "jobId": "${jobId || ""}",
+    "paragraphs": ["para1", "para2", "para3", "para4"]
+  },
+  "suggestedImprovements": ["actionable suggestions"],
+  "atsCompliance": {
+    "formatValid": true,
+    "keywordDensity": "${Math.round((matchResult.matched.length / jdKeywords.allKeywords.length) * 100)}%",
+    "locationIncluded": true
+  },
+  "candidateName": "${candidateNameForFile}",
+  "cvFileName": "${candidateNameForFile}_CV.pdf",
+  "coverLetterFileName": "${candidateNameForFile}_Cover_Letter.pdf"${
+    includeReferral
+      ? `,
+  "referralEmail": "[Subject + email body]"`
+      : ""
+  }
+}`;
+
+    // Retry logic with exponential backoff for rate limits
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+    let lastRateLimitBody = "";
+
+    let response: Response | null = null;
+
+    // Determine API endpoint and model based on provider
+    const getApiConfig = () => {
+      if (aiProvider === "kimi") {
+        return {
+          endpoint: "https://api.moonshot.ai/v1/chat/completions",
+          model: "kimi-k2-0711-preview",
+          providerName: "Kimi K2",
+          // SPEED: Optimized settings - restored maxTokens to prevent JSON truncation
+          temperature: 0.4,    // Slightly higher for better output quality
+          maxTokens: 3500,     // Restored - 2500 caused JSON truncation errors
+          streamChunks: false,
+        };
+      }
+      return {
+        endpoint: "https://api.openai.com/v1/chat/completions",
+        model: "gpt-4o-mini",
+        providerName: "OpenAI",
+        temperature: 0.4,
+        maxTokens: 3500,
+        streamChunks: false,
+      };
+    };
+
+    const apiConfig = getApiConfig();
+    console.log(`Using ${apiConfig.providerName} with model ${apiConfig.model} (temp: ${apiConfig.temperature})`);
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        if (attempt > 0) {
+          const delay = Math.pow(2, attempt) * 1000 + Math.random() * 1000;
+          console.log(`Rate limit hit, retrying in ${Math.round(delay)}ms (attempt ${attempt + 1}/${maxRetries})`);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+
+        // Build request body with provider-specific optimizations
+        const requestBody: any = {
+          model: apiConfig.model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+            ...(strategyBlock ? [{ role: "user", content: strategyBlock }] : []),
+          ],
+          max_tokens: apiConfig.maxTokens,
+          temperature: apiConfig.temperature,
+        };
+
+        // Kimi K2 HYPER SPEED optimizations
+        if (aiProvider === "kimi") {
+          // Aggressive penalties for faster completion
+          requestBody.presence_penalty = 0.2;
+          requestBody.frequency_penalty = 0.1;
+          // Multiple stop tokens for faster termination
+          requestBody.stop = ["\n\n\n", "---END---", "```\n\n", "}\n\n\n"];
+        }
+
+        response = await fetch(apiConfig.endpoint, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${userApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        if (response.ok) {
+          break; // Success, exit retry loop
+        }
+
+        if (response.status === 429) {
+          // Rate limit - will retry
+          const errorText = await response.text();
+          console.warn(`${apiConfig.providerName} rate limit (attempt ${attempt + 1}):`, errorText);
+          lastRateLimitBody = errorText;
+          lastError = new Error("Rate limit exceeded");
+
+          // Check for Retry-After header
+          const retryAfter = response.headers.get("Retry-After");
+          if (retryAfter && attempt < maxRetries - 1) {
+            const waitTime = parseInt(retryAfter, 10) * 1000 || 2000;
+            console.log(`Retry-After header suggests waiting ${waitTime}ms`);
+            await new Promise((resolve) => setTimeout(resolve, waitTime));
+          }
+          continue;
+        }
+
+        // Non-retryable errors
+        const errorText = await response.text();
+        console.error(`${apiConfig.providerName} API error:`, response.status, errorText);
+
+        // 401 / 402 / 403 are terminal and are reported verbatim, so a refused
+        // request never surfaces as a generic 500 or a silently empty CV.
+        if (response.status === 401 || response.status === 402 || response.status === 403) {
+          const payload = classifyProviderStatus(apiConfig.providerName, response.status, errorText);
+          return await aiErrorResponse(
+            supabase,
+            userId,
+            "tailor-application",
+            payload,
+            corsHeaders,
+            errorText.slice(0, 1000),
+            response.status === 401 ? 401 : 402,
+          );
+        }
+
+        throw new Error(`${apiConfig.providerName} API error: ${response.status}`);
+      } catch (fetchError) {
+        console.error(`Fetch error (attempt ${attempt + 1}):`, fetchError);
+        lastError = fetchError instanceof Error ? fetchError : new Error(String(fetchError));
+        if (attempt === maxRetries - 1) {
+          throw lastError;
+        }
+      }
+    }
+
+    // If all retries exhausted due to rate limit
+    if (!response || !response.ok) {
+      const payload = classifyProviderStatus(
+        apiConfig.providerName,
+        response?.status ?? 429,
+        lastRateLimitBody || lastError?.message || "",
+      );
+      return await aiErrorResponse(
+        supabase,
+        userId,
+        "tailor-application",
+        payload,
+        corsHeaders,
+        lastRateLimitBody?.slice(0, 1000),
+        429,
+      );
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    const tokensUsed = data.usage?.total_tokens || 0;
+
+    // Log API usage with provider suffix
+    const usageFunctionName = aiProvider === "kimi" ? "tailor-application-kimi" : "tailor-application";
+    await logApiUsage(supabase, userId, usageFunctionName, tokensUsed);
+
+    console.log(`AI response received (${tokensUsed} tokens), parsing...`);
+
+    let result;
+    try {
+      let cleanContent = content;
+      if (content.includes("```json")) {
+        cleanContent = content.replace(/```json\s*/g, "").replace(/```\s*/g, "");
+      } else if (content.includes("```")) {
+        cleanContent = content.replace(/```\s*/g, "");
+      }
+
+      const jsonMatch = cleanContent.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        result = JSON.parse(jsonMatch[0]);
+      } else {
+        result = JSON.parse(cleanContent);
+      }
+    } catch (parseError) {
+      console.error("Failed to parse AI response:", parseError);
+      console.error("Raw content:", content?.substring(0, 1000));
+
+      // Tolerant recovery: pull the string values out even when the model left
+      // literal newlines inside them (which breaks JSON.parse).
+      const recoverStringField = (raw: string, key: string): string | null => {
+        if (!raw) return null;
+        const re = new RegExp(
+          `"${key}"\\s*:\\s*"([\\s\\S]*?)"\\s*(?=,\\s*"[A-Za-z0-9_]+"\\s*:|\\}\\s*$|\\}\\s*[^\\s])`,
+        );
+        const m = raw.match(re);
+        if (!m) return null;
+        return m[1]
+          .replace(/\\r\\n/g, "\n")
+          .replace(/\\n/g, "\n")
+          .replace(/\\r/g, "\n")
+          .replace(/\\t/g, "  ")
+          .replace(/\\"/g, '"')
+          .replace(/\\\\/g, "\\")
+          .replace(/\r\n/g, "\n")
+          .trim();
+      };
+
+      const recoveredResume = recoverStringField(content || "", "tailoredResume");
+      const recoveredCoverLetter = recoverStringField(content || "", "tailoredCoverLetter");
+
+      if (recoveredResume) {
+        console.log("Recovered tailoredResume from malformed JSON envelope");
+      }
+
+      result = {
+        tailoredResume: recoveredResume || "Unable to generate tailored resume. Please try again.",
+        tailoredCoverLetter:
+          recoveredCoverLetter || userProfile.coverLetter || "Unable to generate cover letter. Please try again.",
+        matchScore: matchResult.score,
+        keywordsMatched: matchResult.matched,
+        keywordsMissing: matchResult.missing,
+        smartLocation: smartLocation,
+        suggestedImprovements: recoveredResume ? [] : ["Please retry for better results"],
+        candidateName: candidateNameForFile,
+        cvFileName: `${candidateNameForFile}_CV.pdf`,
+        coverLetterFileName: `${candidateNameForFile}_Cover_Letter.pdf`,
+      };
+    }
+
+    // Never let a raw JSON envelope reach the document: if the resume text still
+    // looks like JSON, recover the inner value.
+    const stripEnvelope = (text: unknown): string => {
+      if (typeof text !== "string") return "";
+      const t = text.trim();
+      if (!t.startsWith("{") && !t.startsWith("```")) return text as string;
+      const m = t.match(/"tailoredResume"\s*:\s*"([\s\S]*?)"\s*(?=,\s*"[A-Za-z0-9_]+"\s*:|\}\s*$)/);
+      if (!m) return text as string;
+      return m[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\").trim();
+    };
+    result.tailoredResume = stripEnvelope(result.tailoredResume);
+    if (typeof result.tailoredCoverLetter === "string") {
+      result.tailoredCoverLetter = result.tailoredCoverLetter.trim();
+    }
+
+
+    // Apply content quality engine - remove banned buzzwords and improve natural language
+    if (result.tailoredResume) {
+      result.tailoredResume = applyContentQuality(result.tailoredResume);
+    }
+    if (result.tailoredCoverLetter) {
+      result.tailoredCoverLetter = applyContentQuality(result.tailoredCoverLetter);
+    }
+    console.log("Content quality engine applied - banned words replaced");
+
+    // Deterministic SELECTED PROJECTS injection - rebuild from structured profile data
+    // so project names, tech stack, and URLs are preserved verbatim (anti-fabrication).
+    // Built once here and re-applied after every accepted revision pass, so a
+    // revision can never rewrite, drop or invent a project.
+    const projectsBlock = buildProjectsSection(userProfile.relevantProjects);
+    if (result.tailoredResume && projectsBlock) {
+      result.tailoredResume = applyProjectsSection(result.tailoredResume, projectsBlock);
+      console.log(`Injected PROJECTS section (${(userProfile.relevantProjects || []).length} projects)`);
+    }
+
+    // ============================================================
+    // UP TO TWO EVIDENCE-BACKED REVISION PASSES
+    //
+    // The first draft is measured against the posting's keywords. While
+    // coverage sits below the target (90% unless the extension asks for
+    // another figure), the model is asked to work the missing terms into
+    // bullets that are ALREADY in the draft, using this candidate's saved
+    // experience and projects as the only permitted source.
+    //
+    // A pass is accepted only when it raises measured coverage AND passes
+    // the fidelity checks: no dropped section, no changed date, no invented
+    // figure, no shrinking the document. Otherwise the previous draft
+    // stands. A term with no evidence anywhere in the profile is never
+    // targeted -- it is reported back as unsupported instead.
+    // ============================================================
+    // ONE set of evidence rules for generation, revision AND final validation.
+    //
+    // These three stages used to disagree. The revision pass asked "does an
+    // achievement demonstrate this?", correctly wrote in accurate wording, and
+    // the final validator then asked "is this word in the skills field?" and
+    // cut the same wording straight back out. A capability the candidate
+    // demonstrably has was deleted for never having been typed into a list.
+    // Every stage now calls classifyTerm and gets the same three-way answer:
+    // explicitly recorded, demonstrated by an achievement, or unsupported.
+    // Only unsupported terms are ever removed, and nothing is invented.
+    //
+    // The job description, the employer and the tailoring instructions are
+    // deliberately NOT passed in as sources: the posting can never be evidence
+    // about the candidate.
+    const evidenceSources: EvidenceSource[] = buildEvidenceSources(userProfile);
+    const evidenceOf = (term: string) => classifyTerm(term, evidenceSources, atsStrategy.evidence);
+    /** Kept for the older call sites: the quoted evidence line, or null. */
+    const evidenceFor = (term: string): string | null => {
+      const verdict = evidenceOf(term);
+      if (verdict.tier === "unsupported") return null;
+      return verdict.source ? `${verdict.source}: ${verdict.evidence}` : (verdict.evidence ?? null);
+    };
+
+    // Per-keyword decisions, so a skipped revision can be explained term by term.
+    const keywordDecisions: Array<{ term: string; decision: string; evidence?: string }> = [];
+
+
+    const coverageTarget = atsStrategy.keywordCoverageTarget ?? 90;
+    const revisions: RevisionRecord[] = [];
+
+    if (jdKeywords.allKeywords.length > 0 && result.tailoredResume) {
+      for (let pass = 1; pass <= 2; pass++) {
+        const draftResume: string = result.tailoredResume;
+        const before = measureCoverage(`${draftResume}\n${result.tailoredCoverLetter || ""}`, jdKeywords.allKeywords);
+        if (before.percent >= coverageTarget) {
+          console.log(`[REVISION] Pass ${pass} not needed: coverage ${before.percent}% already at target ${coverageTarget}%`);
+          break;
+        }
+
+        // Only evidenced gaps are targeted, required qualifications first, and
+        // the tier is carried through so the revision prompt can say whether a
+        // term is a recorded tool (belongs in the skills list or a bullet as a
+        // named tool) or a capability the achievement already demonstrates
+        // (belongs inside that achievement's sentence, never asserted as a skill).
+        const requirementText = mergedRequirements.join(" \n ").toLowerCase();
+        const assessed = before.missing.map((term) => {
+          const v = evidenceOf(term);
+          return {
+            term,
+            tier: v.tier,
+            evidence: v.tier === "unsupported" ? null : `${v.source ?? "profile"}: ${v.evidence ?? ""}`,
+          };
+        });
+        if (pass === 1) {
+          for (const a of assessed) {
+            keywordDecisions.push(
+              a.evidence
+                ? {
+                    term: a.term,
+                    decision:
+                      a.tier === "explicit"
+                        ? "revision attempted - explicitly recorded in the saved profile"
+                        : "revision attempted - demonstrated by a saved achievement",
+                    evidence: a.evidence,
+                  }
+                : { term: a.term, decision: "left out - no saved experience or project supports this term" },
+            );
+          }
+        }
+        const gaps = assessed
+          .filter((g): g is { term: string; tier: "explicit" | "demonstrated"; evidence: string } => Boolean(g.evidence))
+          .sort((a, b) => {
+            const aReq = requirementText.includes(a.term.toLowerCase()) ? 0 : 1;
+            const bReq = requirementText.includes(b.term.toLowerCase()) ? 0 : 1;
+            return aReq - bReq || a.term.localeCompare(b.term);
+          })
+          .slice(0, 12);
+
+
+        if (gaps.length === 0) {
+          console.log(`[REVISION] Pass ${pass} stopped: none of the ${before.missing.length} missing terms have evidence in this profile`);
+          break;
+        }
+
+        console.log(
+          `[REVISION] Pass ${pass}: coverage ${before.percent}% of ${coverageTarget}%, targeting ${gaps.length} evidenced terms: ${gaps.map((g) => g.term).join(", ")}`,
+        );
+
+        const revisionPrompt = [
+          "Revise the CV below. This is a revision pass, not a rewrite.",
+          "",
+          "WHAT TO CHANGE. Each term listed below is missing from the CV, and the evidence line beside it comes from this candidate's own saved profile. Work the term into the EXISTING bullet that the evidence describes, in plain professional English, so the sentence still reads as one thing the candidate did. Where a term genuinely belongs in the skills list rather than an achievement, put it there instead.",
+          "",
+          gaps
+            .map((g) =>
+              `- ${g.term} (${
+                g.tier === "explicit"
+                  ? "recorded in the profile: may be named as a tool or listed under skills"
+                  : "demonstrated by the achievement below: work it into that achievement's own sentence, never assert it as a listed skill"
+              })\n  evidence: ${g.evidence}`
+            )
+            .join("\n"),
+          "",
+          "WHAT MUST NOT CHANGE. Every section heading, in the same order. Every employer, job title, location and date, character for character. Every existing figure; never introduce a figure that is not already in the draft. Never add a role, qualification, tool or eligibility the evidence above does not support. Never delete a bullet or a section to make room. Do not append terms to the end of a sentence as a keyword tail, and do not repeat a term you have already worked in.",
+          "",
+          "If a term cannot be worked in truthfully, LEAVE IT OUT and leave that bullet exactly as it is. An honest gap is the correct outcome.",
+          "",
+          'Return one JSON object and nothing else: {"tailoredResume": "...", "tailoredCoverLetter": "..."} with newlines escaped as \\n. No markdown, no code fences.',
+          "",
+          "CURRENT CV:",
+          draftResume,
+          "",
+          "CURRENT COVER LETTER:",
+          result.tailoredCoverLetter || "(none)",
+        ].join("\n");
+
+        let revisionText = "";
+        try {
+          const revisionResponse = await fetch(apiConfig.endpoint, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${userApiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: apiConfig.model,
+              messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: revisionPrompt },
+              ],
+              max_tokens: apiConfig.maxTokens,
+              temperature: 0.3,
+            }),
+          });
+          if (!revisionResponse.ok) {
+            const body = await revisionResponse.text();
+            console.warn(`[REVISION] Pass ${pass} request failed (${revisionResponse.status}): ${body.slice(0, 300)}`);
+            revisions.push({
+              pass,
+              coverageBefore: before.percent,
+              coverageAfter: before.percent,
+              targetedTerms: gaps.map((g) => g.term),
+              accepted: false,
+              rejectedBecause: `revision request failed (${revisionResponse.status})`,
+              changedBullets: [],
+            });
+            break;
+          }
+          const revisionData = await revisionResponse.json();
+          revisionText = revisionData.choices?.[0]?.message?.content || "";
+          await logApiUsage(supabase, userId, usageFunctionName, revisionData.usage?.total_tokens || 0);
+        } catch (revisionError) {
+          console.warn(`[REVISION] Pass ${pass} errored:`, revisionError);
+          revisions.push({
+            pass,
+            coverageBefore: before.percent,
+            coverageAfter: before.percent,
+            targetedTerms: gaps.map((g) => g.term),
+            accepted: false,
+            rejectedBecause: "revision request errored",
+            changedBullets: [],
+          });
+          break;
+        }
+
+        // Parse the revision with the same tolerance as the first draft.
+        let revisedResume = "";
+        let revisedCover = "";
+        try {
+          const cleaned = revisionText.replace(/```json\s*/g, "").replace(/```\s*/g, "");
+          const match = cleaned.match(/\{[\s\S]*\}/);
+          const parsed = JSON.parse(match ? match[0] : cleaned);
+          revisedResume = typeof parsed.tailoredResume === "string" ? parsed.tailoredResume : "";
+          revisedCover = typeof parsed.tailoredCoverLetter === "string" ? parsed.tailoredCoverLetter : "";
+        } catch {
+          const recovered = revisionText.match(
+            /"tailoredResume"\s*:\s*"([\s\S]*?)"\s*(?=,\s*"[A-Za-z0-9_]+"\s*:|\}\s*$)/,
+          );
+          if (recovered) {
+            revisedResume = recovered[1].replace(/\\n/g, "\n").replace(/\\"/g, '"').replace(/\\\\/g, "\\").trim();
+          }
+        }
+
+        if (!revisedResume) {
+          console.warn(`[REVISION] Pass ${pass} returned no usable CV text; keeping the previous draft`);
+          revisions.push({
+            pass,
+            coverageBefore: before.percent,
+            coverageAfter: before.percent,
+            targetedTerms: gaps.map((g) => g.term),
+            accepted: false,
+            rejectedBecause: "no usable text returned",
+            changedBullets: [],
+          });
+          break;
+        }
+
+        // Same post-processing the first draft gets, so the comparison is fair
+        // and the projects section stays verbatim from the profile.
+        revisedResume = applyContentQuality(revisedResume);
+        if (projectsBlock) revisedResume = applyProjectsSection(revisedResume, projectsBlock);
+        const revisedCoverFinal = revisedCover ? applyContentQuality(revisedCover) : result.tailoredCoverLetter || "";
+
+        const verdict = evaluateRevision({
+          draft: draftResume,
+          revised: revisedResume,
+          coverLetterDraft: result.tailoredCoverLetter || "",
+          coverLetterRevised: revisedCoverFinal,
+          terms: jdKeywords.allKeywords,
+        });
+
+        if (!verdict.accept) {
+          console.warn(`[REVISION] Pass ${pass} REJECTED (${verdict.reason}); keeping the previous draft`);
+          revisions.push({
+            pass,
+            coverageBefore: verdict.coverageBefore,
+            coverageAfter: verdict.coverageAfter,
+            targetedTerms: gaps.map((g) => g.term),
+            accepted: false,
+            rejectedBecause: verdict.reason,
+            changedBullets: [],
+          });
+          break;
+        }
+
+        result.tailoredResume = revisedResume;
+        if (revisedCover) result.tailoredCoverLetter = revisedCoverFinal;
+        revisions.push({
+          pass,
+          coverageBefore: verdict.coverageBefore,
+          coverageAfter: verdict.coverageAfter,
+          targetedTerms: gaps.map((g) => g.term),
+          accepted: true,
+          changedBullets: verdict.changedBullets,
+        });
+        console.log(
+          `[REVISION] Pass ${pass} ACCEPTED: coverage ${verdict.coverageBefore}% -> ${verdict.coverageAfter}%, ${verdict.changedBullets.length} bullets changed`,
+        );
+
+        if (verdict.coverageAfter >= coverageTarget) break;
+      }
+    }
+
+    // THE CONTACT LINE AND THE SKILLS LIST ARE THE CANDIDATE'S, NOT THE MODEL'S.
+    // A live run produced the phone as "+353 08 742 61508" (digits reordered)
+    // and listed "Dagster, dbt" -- neither is recorded in this profile, and both
+    // were then counted as keyword coverage. Both are rebuilt from saved data
+    // here so a rewrite cannot alter a contact detail or invent a skill.
+    const profileSkillTerms = new Set<string>();
+    const addSkillTerm = (v: unknown) => {
+      if (typeof v === "string") {
+        for (const part of v.split(/[,;/]/)) {
+          const t = part.trim().toLowerCase();
+          if (t) profileSkillTerms.add(t);
+        }
+      }
+    };
+    const collectSkillTerms = (v: unknown) => {
+      if (Array.isArray(v)) v.forEach(collectSkillTerms);
+      else if (v && typeof v === "object") Object.values(v as Record<string, unknown>).forEach(collectSkillTerms);
+      else addSkillTerm(v);
+    };
+    collectSkillTerms(userProfile.skills);
+    collectSkillTerms(userProfile.languages);
+    collectSkillTerms(userProfile.certifications);
+    collectSkillTerms(userProfile.relevantProjects);
+    if (userProfile.citizenship) addSkillTerm(userProfile.citizenship);
+    for (const role of Array.isArray(userProfile.professionalExperience) ? userProfile.professionalExperience : []) {
+      const bullets = Array.isArray((role as any)?.bullets) ? (role as any).bullets : [];
+      for (const b of bullets) if (typeof b === "string") for (const w of b.split(/[^A-Za-z0-9+#.]+/)) if (w) profileSkillTerms.add(w.toLowerCase());
+    }
+
+    const invented: string[] = [];
+    const hardenResume = (text: string): string => {
+      if (!text) return text;
+      const lines = text.split("\n");
+      let inSkills = false;
+      let inSummary = false;
+      const out: string[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const upper = line.trim().toUpperCase();
+        // The contact line sits directly under the name.
+        if (i === 1 && line.includes("|")) {
+          const contactBits = [
+            smartLocation,
+            userProfile.phone,
+            userProfile.email,
+          ].filter(Boolean);
+          out.push(contactBits.join(" | "));
+          continue;
+        }
+        if (/^[A-Z][A-Z &]+$/.test(upper) && upper.length > 3) {
+          inSkills = upper.includes("SKILL");
+          inSummary = upper.includes("SUMMARY");
+          out.push(line);
+          continue;
+        }
+        if (inSummary && line.trim()) {
+          // Removing a banned opener ("Proven ability...") left the following
+          // sentence starting in lower case, so sentence starts are restored.
+          out.push(
+            line.replace(/(^|[.!?]\s+)([a-z])/g, (_m, p, c) => p + c.toUpperCase()),
+          );
+          continue;
+        }
+
+        if (inSkills && line.includes(":")) {
+          const idx = line.indexOf(":");
+          const label = line.slice(0, idx + 1);
+          // The languages / citizenship line is built from saved fields and
+          // carries a trailing citizenship clause, so it is never item-scrubbed.
+          if (/language|citizen/i.test(label)) {
+            const spoken = (Array.isArray(userProfile.languages) ? userProfile.languages : [])
+              .map((l: any) => (l?.name ? `${l.name}${l?.proficiency ? ` (${String(l.proficiency).toLowerCase()})` : ""}` : ""))
+              .filter(Boolean);
+            const citizen = userProfile.citizenship ? ` - ${userProfile.citizenship}` : "";
+            if (spoken.length) out.push(`Languages & Citizenship: ${spoken.join(", ")}${citizen}`);
+            else if (citizen) out.push(`Citizenship: ${userProfile.citizenship}`);
+            continue;
+          }
+
+          const kept: string[] = [];
+          for (const raw of line.slice(idx + 1).split(",")) {
+            const item = raw.trim();
+            if (!item) continue;
+            const key = item.toLowerCase().replace(/\s*\(.*\)$/, "").trim();
+            // THE SAME EVIDENCE RULE THE REVISION PASS USED.
+            // This line used to require the term to be present in the skills
+            // field, which deleted accurate wording a revision had just added
+            // on the strength of an achievement. A term now survives when it is
+            // recorded anywhere in the profile OR demonstrated by a saved
+            // achievement; only genuinely unsupported items are cut.
+            const recorded =
+              profileSkillTerms.has(key) ||
+              key.split(/\s+/).every((w) => profileSkillTerms.has(w)) ||
+              evidenceOf(key).tier !== "unsupported";
+            if (recorded) kept.push(item);
+            else invented.push(item);
+          }
+          if (kept.length) out.push(`${label} ${kept.join(", ")}`);
+          continue;
+        }
+        out.push(line);
+      }
+      return out.join("\n");
+    };
+
+    if (result.tailoredResume) result.tailoredResume = hardenResume(result.tailoredResume);
+    if (invented.length) {
+      console.warn(`[FIDELITY] Removed skills not recorded in the profile: ${invented.join(", ")}`);
+    }
+    // A tool the profile does not record must not survive in the letter either,
+    // where it would still be read as a claim and still count as coverage.
+    //
+    // Two different removals are needed. A named tool ("BigQuery", "dbt") can be
+    // cut out of a sentence and the sentence still reads. A plain capability word
+    // ("Ownership", "Collaboration") is the grammatical object of its sentence,
+    // and cutting it leaves rubble like "I also have a experience in, ensuring
+    // effective across teams" - so the whole sentence goes instead.
+    //
+    // Contact and link lines are never touched: sentence splitting on an email
+    // address or a URL breaks it ("maxokafordev@gmail. com").
+    if (result.tailoredCoverLetter && invented.length) {
+      const isPlainWord = (t: string) => /^[A-Za-z][a-z]+(\s[A-Za-z][a-z]+)?$/.test(t.trim());
+      const toolTerms = invented.filter((t) => !isPlainWord(t) && /^[A-Za-z][A-Za-z0-9+#.\-/ ]{1,24}$/.test(t));
+      const wordTerms = invented.filter((t) => isPlainWord(t));
+
+      const stripTools = (text: string): string => {
+        let out = text;
+        for (const term of toolTerms) {
+          const esc = term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          out = out
+            .replace(new RegExp(`\\b${esc}\\b\\s+and\\s+`, "gi"), "")
+            .replace(new RegExp(`(,\\s*|\\s+and\\s+)\\b${esc}\\b`, "gi"), "")
+            .replace(new RegExp(`\\s*\\b${esc}\\b`, "gi"), "");
+        }
+        return out
+          .replace(/[ \t]{2,}/g, " ")
+          .replace(/\s+,/g, ",")
+          .replace(/,\s*\./g, ".")
+          .replace(/\(\s*\)/g, "")
+          .replace(/\b(to|of|with|in|on|for|and)\s+(to|of|with|in|on|for|and)\b/gi, "$1")
+          .replace(/[ ,]*\b(such as|including|like|namely)\b\s*(?=[.,;:])/gi, "")
+          .replace(/,\s*(?=[.;:])/g, "")
+          .replace(/\s+([.,;:])/g, "$1");
+      };
+
+      const danglingTail = /\b(such as|including|like|namely|on|of|with|in|for|to|at|from|around|using|and)\s*$/i;
+      const carriesWordTerm = (sentence: string) =>
+        wordTerms.some((t) => new RegExp(`\\b${t.replace(/\s+/g, "\\s+")}\\b`, "i").test(sentence));
+
+      // A SCRUBBED SENTENCE IS EITHER STILL ENGLISH OR IT GOES.
+      // Removing an unrecorded tool from mid-sentence left wreckage such as
+      // "I have a experience of implementing solutions that improve operational
+      // efficiency" - ungrammatical, and empty of anything the candidate did.
+      const stub = /\b(a|an)\s+(experience|expertise|knowledge|background|exposure)\b/i;
+      const fixArticles = (s: string) =>
+        s.replace(/\ba\s+(?=(experience|expertise|extensive|advanced|internal|end-to-end|automated|analytical|early|impact|efficient|open|in-house|understanding|ability|award|hour|honest|optimised)\b)/gi, "an ");
+      const isStub = (original: string, scrubbed: string) => {
+        if (scrubbed === original) return false;
+        if (stub.test(scrubbed)) return true;
+        return scrubbed.trim().split(/\s+/).length < 10;
+      };
+
+      result.tailoredCoverLetter = result.tailoredCoverLetter
+        .split(/\n/)
+        .map((line: string) => {
+          const t = line.trim();
+          if (!t) return line;
+          // Letterhead, links and salutation lines are left exactly as they are.
+          if (t.includes("@") || /https?:\/\/|www\.|\.(com|app|dev|io|ie|org|net)\b/i.test(t)) return line;
+          if (/^(dear|sincerely|re:|date:)/i.test(t) || t.length < 40) return stripTools(line);
+          // A DECIMAL POINT IS NOT A SENTENCE END: splitting on it turned the
+          // candidate's own "£2.6bn" into "£2. 6bn". Mask, split, restore.
+          const DEC = "\u0001";
+          const maskedLine = t.replace(/(\d)\.(?=\d)/g, `$1${DEC}`);
+          const sentences = maskedLine.match(/[^.!?]+[.!?]+|[^.!?]+$/g)?.map((s: string) => s.replaceAll(DEC, "."));
+          if (!sentences) return stripTools(line);
+          const kept = sentences
+            .filter((s: string) => !carriesWordTerm(s))
+            .map((s: string) => ({ original: s, scrubbed: fixArticles(stripTools(s)) }))
+            .filter(({ original, scrubbed }: { original: string; scrubbed: string }) => !isStub(original, scrubbed))
+            .map(({ scrubbed }: { scrubbed: string }) => scrubbed)
+            .filter((s: string) => !danglingTail.test(s.replace(/[.!?\s]+$/, "")));
+          return (kept.length ? kept.join(" ") : fixArticles(stripTools(t))).replace(/[ \t]{2,}/g, " ").trim();
+        })
+        .join("\n")
+        .trim();
+    }
+
+    // ARTICLE AGREEMENT IS REPAIRED IN EVERY CASE, NOT ONLY AFTER A SCRUB.
+    // The model itself writes "a experience", "a extensive background"; a reader
+    // sees a careless letter, so the repair runs on both documents always.
+    const repairArticles = (text: string) =>
+      text.replace(
+        /\ba\s+(?=(experience|expertise|extensive|advanced|internal|end-to-end|automated|analytical|early|efficient|open|in-house|understanding|ability|ongoing|established|excellent|award|hour|honest|optimised|enterprise|integrated|active|accurate|independent|impact)\b)/gi,
+        "an ",
+      );
+    if (result.tailoredCoverLetter) result.tailoredCoverLetter = repairArticles(result.tailoredCoverLetter);
+    if (result.tailoredResume) result.tailoredResume = repairArticles(result.tailoredResume);
+
+    // ============================================================
+    // THE TARGET ROLE LINE IS GUARANTEED, NOT HOPED FOR.
+    //
+    // The line under the name is what a reviewer reads first, and a run that
+    // dropped it left the CV opening on a contact line. It is now written
+    // deterministically: the target role, once, directly beneath the name, and
+    // kept clearly separate from the titles actually held, which stay inside
+    // PROFESSIONAL EXPERIENCE under their own employers.
+    // ============================================================
+    const enforceTargetRoleLine = (resumeText: string): string => {
+      const target = (jobTitle || "").trim();
+      if (!resumeText || !target) return resumeText;
+      const lines = resumeText.split("\n");
+      const nameIdx = lines.findIndex((l) => l.trim().toLowerCase() === candidateName.toLowerCase());
+      if (nameIdx < 0) return resumeText;
+
+      const isContact = (l: string) => /[@|]|\+\d|https?:|www\./i.test(l);
+      const looksLikeTitleLine = (l: string) =>
+        !!l.trim() && !isContact(l) && l.trim().length <= 70 && !/^[A-Z\s&]+$/.test(l.trim());
+
+      let next = nameIdx + 1;
+      while (next < lines.length && !lines[next].trim()) next++;
+
+      if (next < lines.length && lines[next].trim().toLowerCase() === target.toLowerCase()) {
+        // already correct
+      } else if (next < lines.length && looksLikeTitleLine(lines[next])) {
+        // A held title (or a blend) sitting where the target role belongs.
+        lines[next] = target;
+      } else {
+        lines.splice(nameIdx + 1, 0, target);
+      }
+
+      // Never twice, and never inside the contact block beneath it.
+      const headerEnd = Math.min(lines.length, nameIdx + 7);
+      let seen = false;
+      for (let i = nameIdx + 1; i < headerEnd; i++) {
+        if (lines[i].trim().toLowerCase() === target.toLowerCase()) {
+          if (seen) lines[i] = "";
+          seen = true;
+        } else if (isContact(lines[i])) {
+          lines[i] = lines[i]
+            .replace(new RegExp(`\\s*\\|\\s*${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i"), "")
+            .trim();
+        }
+      }
+      return lines.filter((l, i) => !(l === "" && lines[i - 1] === "")).join("\n");
+    };
+    if (result.tailoredResume) result.tailoredResume = enforceTargetRoleLine(result.tailoredResume);
+
+    // ============================================================
+    // A PRACTICE THE BULLET PERFORMS IS NAMED IN THAT BULLET.
+    //
+    // "Authored the Terraform modules and Helm charts the client continues to
+    // operate" IS infrastructure as code, so a posting that requires the phrase
+    // was scored as a gap on a CV that demonstrably does the work. This names
+    // the practice inside the candidate's own sentence and changes nothing else:
+    // no tool added, no figure touched, no employer, title or date altered. It
+    // runs only where the bullet already performs the practice, and only when
+    // the shared evidence rule agrees the practice is demonstrated.
+    // ============================================================
+    const PRACTICE_WORDING: { term: string; tools: RegExp; rewrite: (line: string) => string | null }[] = [
+      {
+        term: "infrastructure as code",
+        tools: /\b(terraform|cloudformation|pulumi)\b/i,
+        rewrite: (line) => {
+          if (/infrastructure as code/i.test(line)) return null;
+          // "... modules ... with Terraform" -> "... as code with Terraform"
+          if (/\b(with|using|via|in)\s+(terraform|cloudformation|pulumi)\b/i.test(line)) {
+            return line.replace(
+              /\b(with|using|via|in)\s+(terraform|cloudformation|pulumi)\b/i,
+              (_m, prep, tool) => `${prep} ${tool} as infrastructure as code`,
+            );
+          }
+          // "Authored the Terraform modules ..." -> "Authored the Terraform infrastructure as code modules ..."
+          if (/\b(terraform|cloudformation|pulumi)\s+(modules?|templates?|stacks?|scripts?|configuration)\b/i.test(line)) {
+            return line.replace(
+              /\b(terraform|cloudformation|pulumi)\s+(modules?|templates?|stacks?|scripts?|configuration)\b/i,
+              (_m, tool, noun) => `${tool} infrastructure as code ${noun}`,
+            );
+          }
+          return null;
+        },
+      },
+    ];
+    const namePracticesInBullets = (resumeText: string): { text: string; named: string[] } => {
+      const named: string[] = [];
+      if (!resumeText) return { text: resumeText, named };
+      let text = resumeText;
+      const required = jdKeywords.allKeywords.map((k) => k.toLowerCase());
+      for (const practice of PRACTICE_WORDING) {
+        const asked = required.some((k) => k === practice.term || k === "iac" || k.replace(/\s+/g, "") === practice.term.replace(/\s+/g, ""));
+        if (!asked) continue;
+        if (evidenceOf(practice.term).tier === "unsupported") continue;
+        const lines = text.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          if (!/^\s*-\s/.test(lines[i]) || !practice.tools.test(lines[i])) continue;
+          const rewritten = practice.rewrite(lines[i]);
+          if (!rewritten || rewritten === lines[i]) continue;
+          lines[i] = rewritten;
+          named.push(`${practice.term} -> ${rewritten.trim().slice(0, 90)}`);
+          break; // once, in the bullet that earns it
+        }
+        text = lines.join("\n");
+      }
+      return { text, named };
+    };
+    if (result.tailoredResume) {
+      const practices = namePracticesInBullets(result.tailoredResume);
+      result.tailoredResume = practices.text;
+      result.practicesNamed = practices.named;
+      if (practices.named.length) console.log(`[PRACTICE] ${practices.named.join(" | ")}`);
+    }
+
+    // ============================================================
+    // A GRADE IS COPIED FROM THE RECORD OR IT DOES NOT APPEAR.
+    //
+    // A model that reads "First Class Honours" will happily print
+    // "GPA: 3.7" beside it. That is an invented academic figure on a document
+    // an employer may verify, so any numeric grade that is not written in the
+    // saved education record is removed. Classifications are untouched.
+    // ============================================================
+    const stripUnrecordedGrades = (text: string): string => {
+      if (!text) return text;
+      const savedEducationText = (Array.isArray(userProfile.education) ? userProfile.education : [])
+        .map((e: any) => [e?.degree, e?.field, e?.gpa, e?.grade, e?.school, e?.institution].filter(Boolean).join(" "))
+        .join(" ");
+      const gradePattern = /(?:\bGPA[:\s]*)?\b\d(?:\.\d{1,2})?\s*\/\s*\d(?:\.\d{1,2})?\b|\bGPA[:\s]*\d(?:\.\d{1,2})?\b/gi;
+      const removed: string[] = [];
+      const cleaned = text.replace(gradePattern, (m) => {
+        const digits = m.replace(/[^\d./]/g, "");
+        if (savedEducationText.replace(/\s+/g, "").includes(digits.replace(/\s+/g, ""))) return m;
+        removed.push(m.trim());
+        return "";
+      });
+      if (removed.length) {
+        console.warn(`[EDUCATION] Removed grade figures absent from the saved record: ${removed.join(", ")}`);
+      }
+      return cleaned
+        .split("\n")
+        .map((l) => l.replace(/\s*[|,-]\s*$/, "").replace(/\(\s*\)/g, "").replace(/[ \t]{2,}/g, " ").trimEnd())
+        .join("\n");
+    };
+    if (result.tailoredResume) result.tailoredResume = stripUnrecordedGrades(result.tailoredResume);
+
+    // ============================================================
+    // THE COVER LETTER CARRIES EVIDENCE, NOT FEELINGS.
+    //
+    // Enthusiasm, employer flattery and predictions about how fast the
+    // candidate would settle in are the three things a reviewer discounts
+    // immediately, and they crowd out the achievements that do the work. Any
+    // sentence built on one of them is removed outright rather than softened.
+    // ============================================================
+    const FILLER_SENTENCE =
+      /\b(excited|exciting|thrilled|delighted|eager|keen to|passionate|enthusiasm|enthusiastic|admire|admiration|impressed|impressive|industry leader|industry-leading|innovative culture|world-class|cutting-edge|reputation for|drawn to|inspired by|adapt quickly|quickly adapt|quick learner|fast learner|hit the ground running|ramp up quickly|confident (?:that )?(?:i|my)|look(?:ing)? forward to contributing|would thrive|eager to learn)\b/i;
+    const stripFillerSentences = (letter: string): { text: string; removed: string[] } => {
+      const removed: string[] = [];
+      const paragraphs = letter.split(/\n{2,}/).map((para) => {
+        // Salutation, Re: line, signature and contact block are structure, not prose.
+        if (/^(dear|re:|sincerely|date:|kind regards|yours)/i.test(para.trim()) || /[@|]/.test(para)) return para;
+        // A DECIMAL POINT IS NOT THE END OF A SENTENCE.
+        // Splitting naively turned "£2.6bn" into "£2. 6bn" in a letter that
+        // went out - the candidate's own figure, broken in half. Decimals,
+        // initials and abbreviations are masked before the split and restored
+        // after it.
+        const MASK = "\u0001";
+        const masked = para.replace(/(\d)\.(?=\d)/g, `$1${MASK}`).replace(/\b([A-Z])\.(?=[A-Z]\.)/g, `$1${MASK}`);
+        const sentences = masked.match(/[^.!?]+[.!?]+(?:\s|$)|[^.!?]+$/g);
+        if (!sentences) return para;
+        const kept = sentences
+          .map((s) => s.replaceAll(MASK, "."))
+          .filter((s) => {
+            if (FILLER_SENTENCE.test(s)) {
+              removed.push(s.trim());
+              return false;
+            }
+            return true;
+          });
+        return kept.map((s) => s.trim()).join(" ").replace(/[ \t]{2,}/g, " ").trim();
+      });
+      return {
+        text: paragraphs.filter((p) => p.trim()).join("\n\n"),
+        removed,
+      };
+    };
+    if (result.tailoredCoverLetter) {
+      const scrubbed = stripFillerSentences(result.tailoredCoverLetter);
+      result.tailoredCoverLetter = scrubbed.text;
+      result.coverLetterFillerRemoved = scrubbed.removed;
+      if (scrubbed.removed.length) {
+        console.log(`[COVER LETTER] Removed ${scrubbed.removed.length} enthusiasm/praise/prediction sentences`);
+      }
+    }
+
+    result.removedUnrecordedSkills = invented;
+
+
+
+
+    // Ensure all required fields with our pre-calculated values
+    result.candidateName = result.candidateName || candidateNameForFile;
+    result.cvFileName = result.cvFileName || `${candidateNameForFile}_CV.pdf`;
+    result.coverLetterFileName = result.coverLetterFileName || `${candidateNameForFile}_Cover_Letter.pdf`;
+    result.company = company;
+    result.jobTitle = jobTitle;
+    result.jobId = jobId;
+    result.smartLocation = smartLocation;
+
+    // Recalculate ACTUAL match score based on generated resume content
+    const generatedResumeText = (result.tailoredResume || "").toLowerCase();
+    const generatedCoverText = (result.tailoredCoverLetter || "").toLowerCase();
+    // CV COVERAGE IS MEASURED ON THE CV ALONE.
+    //
+    // Blending the cover letter in inflated the figure: a term that appeared
+    // only in a letter sentence counted as covered on the CV, and the CV is the
+    // document a parser reads. The letter is measured separately and reported
+    // separately; it never raises the CV number.
+    const combinedGeneratedText = generatedResumeText;
+
+    // Count how many JD keywords appear in the generated content, on whole
+    // terms only: "java" is not satisfied by "javascript".
+    const firstPass = measureCoverage(combinedGeneratedText, jdKeywords.allKeywords);
+    const actualMatched: string[] = [...firstPass.matched];
+    const actualMissing: string[] = [...firstPass.missing];
+
+
+    // Calculate actual score from generated content
+    const actualScore =
+      jdKeywords.allKeywords.length > 0
+        ? Math.round((actualMatched.length / jdKeywords.allKeywords.length) * 100)
+        : matchResult.score;
+
+    console.log(
+      `ACTUAL match score from generated content: ${actualScore}% (${actualMatched.length}/${jdKeywords.allKeywords.length} keywords)`,
+    );
+    if (actualMissing.length > 0) {
+      console.log(
+        `Still missing keywords: ${actualMissing.slice(0, 10).join(", ")}${actualMissing.length > 10 ? "..." : ""}`,
+      );
+    }
+
+    // ==========================================
+    // POST-GENERATION KEYWORD FORCE-INJECTION
+    // If keywords are still missing after AI generation, programmatically inject them
+    // Separate strategy for single-word vs multi-word phrases
+    // ==========================================
+    if (actualMissing.length > 0 && result.tailoredResume) {
+      console.log(`[FORCE-INJECT] ${actualMissing.length} keywords still missing after AI generation. Injecting...`);
+
+      let resume = result.tailoredResume;
+
+      // A KEYWORD THAT FITS NOWHERE TRUTHFULLY GOES IN THE SKILLS LIST,
+      // NOT INTO A MANUFACTURED ACHIEVEMENT.
+      //
+      // STRATEGY A used to append a whole new bullet to the most recent
+      // role whenever a multi-word phrase had no home, reading:
+      //
+      //   "- Leveraged programming skills to implement tools and scripts
+      //    that troubleshoot issues, resolve issues, and improve
+      //    efficiency across development workflows, demonstrating strong
+      //    collaboration skills in cross-functional team settings."
+      //
+      // That is a fabricated accomplishment. It claims work the
+      // candidate never described, in the exact register a reviewer
+      // reads as machine-written, and it lands under the most recent
+      // role -- among the first three bullets, the part that actually
+      // gets read. It cannot survive an interview either, because there
+      // is no story behind it.
+      //
+      // Both the extension and this function did the same thing, so a
+      // single CV could collect two of them. Every unplaceable keyword
+      // now routes to the skills list, which captures the same terms
+      // honestly, and RULE 2's evidence gate governs what may be woven
+      // into a real bullet.
+      // A KEYWORD IS ONLY WRITTEN IN WHERE THE PROFILE SUPPORTS IT.
+      // The candidate's saved skills, experience, projects and
+      // certifications, plus any evidence line the extension supplied, are
+      // the whole permitted source. Anything else stays missing and is
+      // reported back as an unsupported requirement, because a skill the
+      // candidate cannot defend in an interview is worse than a gap.
+      // It uses evidenceOf, the same rule as the revision pass and the final
+      // validator, so a term is never added here that validation would strip.
+      // Only EXPLICIT records may be added to the skills list: a capability
+      // demonstrated by an achievement belongs in that achievement's sentence,
+      // not asserted as a listed skill.
+      const singleWordMissing = actualMissing.filter((kw) => evidenceOf(kw).tier === "explicit");
+      const unevidencedSkipped = actualMissing.length - singleWordMissing.length;
+      if (unevidencedSkipped > 0) {
+        console.log(`[FORCE-INJECT] Skipped ${unevidencedSkipped} keywords with no evidence in the profile`);
+      }
+
+      // STRATEGY B: place each recovered term on the RIGHT labelled line of the
+      // existing skills section.
+      //
+      // This used to append every term to the end of whatever the section
+      // contained, which on a grouped skills section (the template this app
+      // writes) hung a comma run off the last group - Jira under Programming,
+      // Scrum under Cloud & DevOps. Placement is now decided per term and the
+      // candidate's own equivalent label is reused; a new labelled line is
+      // written only when the section has no suitable group. The languages /
+      // citizenship line is never touched.
+      const toInjectSingles = singleWordMissing;
+      if (toInjectSingles.length > 0) {
+        const placement = placeSkillsInSection(resume, toInjectSingles);
+        if (placement.added.length > 0) {
+          resume = placement.text;
+          const summary = placement.added
+            .map((a) => `${a.term} -> ${a.label}${a.created ? " (new line)" : ""}`)
+            .join("; ");
+          console.log(`[FORCE-INJECT] Placed ${placement.added.length} recorded skills: ${summary}`);
+        }
+        const dupes = placement.skipped.filter((s) => s.reason === "duplicate");
+        if (dupes.length) {
+          console.log(`[FORCE-INJECT] Already present, not duplicated: ${dupes.map((d) => d.term).join(", ")}`);
+        }
+        const soft = placement.skipped.filter((s) => s.reason === "soft capability");
+        if (soft.length) {
+          console.log(`[FORCE-INJECT] Capability terms left to achievements: ${soft.map((s) => s.term).join(", ")}`);
+        }
+        // A document with no skills section at all still needs one, inserted in
+        // the template's position: after experience, before PROJECTS /
+        // CERTIFICATIONS / EDUCATION.
+        if (placement.skipped.some((s) => s.reason === "no skills section")) {
+          const eligible = toInjectSingles.filter((t) => !isSoftCapability(t));
+          if (eligible.length) {
+            const grouped = new Map<string, string[]>();
+            for (const term of eligible) {
+              const label = CATEGORY_LABEL[categoriseSkill(term)];
+              grouped.set(label, [...(grouped.get(label) ?? []), term]);
+            }
+            const body = [...grouped.entries()].map(([label, items]) => `${label}: ${items.join(", ")}`).join("\n");
+            const newSection = `\n\nTECHNICAL SKILLS\n${body}\n`;
+            const anchor = resume.match(/(\n\s*(?:PROJECTS|CERTIFICATIONS|EDUCATION|ACHIEVEMENTS)\b)/i);
+            if (anchor && anchor.index !== undefined) {
+              resume = resume.substring(0, anchor.index) + newSection + resume.substring(anchor.index);
+            } else {
+              resume += newSection;
+            }
+            console.log(`[FORCE-INJECT] Created a grouped TECHNICAL SKILLS section with ${eligible.length} recorded skills`);
+          }
+        }
+      }
+
+      result.tailoredResume = resume;
+
+      // Also inject into structured skills if available
+      if (result.resumeStructured?.skills) {
+        const existingPrimary = Array.isArray(result.resumeStructured.skills.primary) ? result.resumeStructured.skills.primary : [];
+        const existingPrimaryLower = existingPrimary.map((s: string) => s.toLowerCase());
+        const newSkills = singleWordMissing.filter(kw => !existingPrimaryLower.includes(kw.toLowerCase()));
+        result.resumeStructured.skills.primary = [...existingPrimary, ...newSkills];
+        console.log(`[FORCE-INJECT] Added ${newSkills.length} keywords to structured skills`);
+      }
+
+      // Recalculate coverage after injection, whole terms only.
+      const postInjectText = `${result.tailoredResume}`;
+      const secondPass = measureCoverage(postInjectText, jdKeywords.allKeywords);
+      const finalMatched: string[] = [...secondPass.matched];
+      const finalMissing: string[] = [...secondPass.missing];
+
+
+      const finalScore = jdKeywords.allKeywords.length > 0
+        ? Math.round((finalMatched.length / jdKeywords.allKeywords.length) * 100)
+        : actualScore;
+
+      console.log(`[FORCE-INJECT] Final match score: ${finalScore}% (${finalMatched.length}/${jdKeywords.allKeywords.length}) - was ${actualScore}%`);
+      if (finalMissing.length > 0) {
+        console.log(`[FORCE-INJECT] Remaining unmatched (${finalMissing.length}): ${finalMissing.join(", ")}`);
+      }
+
+      actualMatched.length = 0;
+      actualMatched.push(...finalMatched);
+      actualMissing.length = 0;
+      actualMissing.push(...finalMissing);
+      result.matchScore = finalScore;
+      result.forceInjectedCount = finalMatched.length - (jdKeywords.allKeywords.length - actualMissing.length - finalMissing.length);
+    }
+
+    // MEASURED COVERAGE, NOT A PROMISE.
+    // The number reported is counted off the final document text with
+    // whole-term matching, so Java is never satisfied by JavaScript and
+    // C++, C#, .NET and CI/CD survive intact. It is keyword coverage --
+    // not an ATS pass probability, not a recruiter verdict.
+    // Measured off the EXPORTED text, against the fixed requirement list built
+    // once at the top of the run, so initial, per-revision and final figures
+    // are all the same denominator.
+    const finalText = `${result.tailoredResume || ""}`;
+    const coverLetterOnlyCoverage = measureCoverage(result.tailoredCoverLetter || "", jdKeywords.allKeywords);
+    const measured = measureCoverage(finalText, jdKeywords.allKeywords);
+
+    // TWO SEPARATE NUMBERS, NEVER BLENDED.
+    //
+    // Literal keyword coverage is how many requirement terms appear verbatim in
+    // the document. Evidence-backed alignment is how many requirements the
+    // candidate's saved profile actually supports. They answer different
+    // questions: a low literal figure on a well-aligned CV means wording, a low
+    // alignment figure means the job genuinely asks for things this profile does
+    // not have. Averaging them into one score hides both.
+    const dual = reportCoverage(finalText, jdKeywords.allKeywords, evidenceSources, atsStrategy.evidence);
+    const unsupportedRequirements = dual.alignment.unsupported;
+    // The denominator is the DE-DUPLICATED term count, so matched + missing
+    // always adds up to it. Reporting the raw extracted length made
+    // "12 of 18" sit beside seven missing terms.
+    const coverageTotal = measured.total;
+
+    // A TERM THE DRAFT HAD AND THE FINAL DOCUMENT DOES NOT IS A LOSS, NOT A GAP.
+    // The revision gate runs on the draft, but the deterministic clean-up steps
+    // that follow (unrecorded-tool scrub, project rebuild, section rebuild) can
+    // rewrite away a bullet that carried a supported requirement. When that
+    // happens the final figure drops below target with nothing in the revision
+    // record to explain it, so name those terms explicitly.
+    const lostInPostProcessing = firstPass.matched.filter((t) =>
+      measured.missing.some((m) => m.toLowerCase() === t.toLowerCase())
+    );
+    if (lostInPostProcessing.length > 0) {
+      console.warn(
+        `[COVERAGE] Present in the draft but absent from the final document: ${lostInPostProcessing.join(", ")}`,
+      );
+    }
+
+    result.matchScore = measured.percent;
+    result.requirementList = {
+      terms: jdKeywords.allKeywords,
+      total: jdKeywords.allKeywords.length,
+      removedAsNotRequirements: requirementList.removed,
+      classification: jdKeywords.allKeywords.map((term) => {
+        const v = evidenceOf(term);
+        return { term, tier: v.tier, source: v.source, evidence: v.evidence };
+      }),
+      meaning:
+        "The fixed, deduplicated requirement list for this job. Every coverage figure below is measured against exactly this list.",
+    };
+    result.keywordCoverage = {
+      matched: measured.matched.length,
+      total: coverageTotal,
+      percent: measured.percent,
+      label:
+        coverageTotal === 0
+          ? "Not measured - no keywords found in this posting"
+          : `${measured.matched.length} of ${coverageTotal} keywords (${measured.percent}%)`,
+      target: atsStrategy.keywordCoverageTarget ?? coverageTarget,
+      matchedTerms: measured.matched,
+      missingTerms: measured.missing,
+      literalCoverage: dual.literal,
+      evidenceAlignment: dual.alignment,
+      unsupportedRequirements,
+      lostInPostProcessing,
+      meaning:
+        "Keyword coverage of the exported CV text only - the cover letter is never counted towards it. Not a pass probability or an approval.",
+      coverLetterOnly: {
+        matched: coverLetterOnlyCoverage.matched.length,
+        total: coverLetterOnlyCoverage.total,
+        percent: coverLetterOnlyCoverage.percent,
+        meaning: "Measured on the cover letter alone, reported separately and never added to the CV figure.",
+      },
+      // Why each missing term was or was not worked in, term by term.
+      // Terms only become final gaps after the unrecorded-tool scrub runs, so
+      // the list is completed here against the FINAL document rather than the
+      // pre-scrub draft.
+      keywordDecisions: measured.missing.map((term) => {
+        const already = keywordDecisions.find((d) => d.term.toLowerCase() === term.toLowerCase());
+        if (already) return already;
+        const evidence = evidenceFor(term);
+        return evidence
+          ? {
+              term,
+              decision: lostInPostProcessing.some((l) => l.toLowerCase() === term.toLowerCase())
+                ? "supported by the saved profile and present in the draft, but removed by the document clean-up steps"
+                : "supported by saved profile but not carried into the final document",
+              evidence,
+            }
+          : { term, decision: "left out - no saved experience or project supports this term" };
+      }),
+    };
+
+    // What the revision passes actually did, so the candidate sees the
+    // before/after figures and the bullets that changed rather than a score
+    // that moved for unexplained reasons.
+    result.revisionPasses = revisions.map((r) => ({
+      pass: r.pass,
+      coverageBefore: r.coverageBefore,
+      coverageAfter: r.coverageAfter,
+      targetedTerms: r.targetedTerms,
+      accepted: r.accepted,
+      rejectedBecause: r.rejectedBecause,
+      changedBullets: r.changedBullets,
+    }));
+    result.revisionSummary = revisions.length === 0
+      ? measured.percent >= coverageTarget
+        ? `No revision needed: coverage reached ${measured.percent}% on the first draft.`
+        : lostInPostProcessing.length > 0
+          ? `No revision was attempted: the draft was at or above target, and these terms were lost afterwards by the clean-up steps rather than missing from the draft: ${lostInPostProcessing.join(", ")}.`
+          : "No revision was attempted."
+      : revisions
+          .map((r) =>
+            r.accepted
+              ? `Pass ${r.pass}: ${r.coverageBefore}% to ${r.coverageAfter}%, ${r.changedBullets.length} bullet(s) revised.`
+              : `Pass ${r.pass}: not applied (${r.rejectedBecause}). Draft left unchanged.`,
+          )
+          .join(" ");
+
+    result.keywordsMatched = measured.matched;
+    result.keywordsMissing = measured.missing;
+    result.matchedKeywords = measured.matched; // Alias for extension compatibility
+    result.missingKeywords = measured.missing; // Alias for extension compatibility
+    result.keywordAnalysis = result.keywordAnalysis || {
+      hardSkills: jdKeywords.hardSkills,
+      softSkills: jdKeywords.softSkills,
+      tools: jdKeywords.tools,
+      titles: jdKeywords.titles,
+    };
+    result.keywordPriorities = weightedKeywords;
+    result.coverLetterTone = coverLetterTone;
+
+    // Validate resume and cover letter
+    if (!result.tailoredResume || result.tailoredResume.length < 100) {
+      console.error("Resume content missing or too short");
+      result.resumeGenerationStatus = "failed";
+    } else {
+      result.resumeGenerationStatus = "success";
+    }
+
+    if (!result.tailoredCoverLetter || result.tailoredCoverLetter.length < 100) {
+      console.error("Cover letter content missing or too short");
+      result.coverLetterGenerationStatus = "failed";
+    } else {
+      result.coverLetterGenerationStatus = "success";
+    }
+
+    console.log(
+      `Successfully tailored application. Match score: ${result.matchScore}, Resume: ${result.resumeGenerationStatus}, Cover Letter: ${result.coverLetterGenerationStatus}`,
+    );
+
+    // --- Generate PDFs (server-side) so the extension only needs 1 backend call per job ---
+    try {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+      const authHeader = req.headers.get("authorization") || "";
+
+      const candidateName = `${userProfile.firstName} ${userProfile.lastName}`.trim() || "Applicant";
+      // File naming: [FirstName]_[LastName]_CV.pdf and [FirstName]_[LastName]_Cover_Letter.pdf
+      const candidateNameForFile =
+        `${userProfile.firstName.trim()}_${userProfile.lastName.trim()}`
+          .replace(/\s+/g, "_")
+          .replace(/[^a-zA-Z0-9_]/g, "") || "Applicant";
+
+      const resumeFileName = `${candidateNameForFile}_CV.pdf`;
+      const coverFileName = `${candidateNameForFile}_Cover_Letter.pdf`;
+
+      const extractProfessionalSummary = (raw: string, structuredSummary?: string): string => {
+        // PRIORITY 1: Use structured summary from AI response if available (most reliable)
+        if (structuredSummary && structuredSummary.trim().length > 30) {
+          console.log(`[extractProfessionalSummary] Using structured summary (${structuredSummary.length} chars)`);
+          return structuredSummary.substring(0, 700).trim();
+        }
+        
+        const text = String(raw || "");
+        if (!text || text.length < 50) {
+          console.log("[extractProfessionalSummary] No raw text available, no summary extracted");
+          return "";
+        }
+
+        // PRIORITY 2: Try to extract from raw resume text
+        // Try multiple patterns to find the Professional Summary section
+        const summaryPatterns = [
+          /\bPROFESSIONAL\s+SUMMARY\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS|TECHNICAL\s+SKILLS)\b)/i,
+          /\bSUMMARY\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS)\b)/i,
+          /\bPROFILE\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS)\b)/i,
+          /\bABOUT\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS)\b)/i,
+        ];
+
+        let summary = "";
+        for (const pattern of summaryPatterns) {
+          const match = text.match(pattern);
+          if (match?.[1] && match[1].trim().length > 30) {
+            summary = match[1].trim();
+            console.log(`[extractProfessionalSummary] Found via pattern, length: ${summary.length}`);
+            break;
+          }
+        }
+
+        // If no section found, summary remains empty (don't use full resume text)
+        if (!summary || summary.length < 30) {
+          console.log("[extractProfessionalSummary] No summary section found in raw text");
+          return "";
+        }
+
+        // Remove common header duplication lines (pipes, contact info, urls)
+        const removeParts = [
+          candidateName,
+          userProfile.email,
+          userProfile.phone,
+          userProfile.linkedin,
+          userProfile.github,
+          userProfile.portfolio,
+          smartLocation,
+          userProfile.city,
+          userProfile.country,
+        ]
+          .filter(Boolean)
+          .map((s) => String(s));
+
+        const escaped = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const removeRegex = removeParts.length ? new RegExp(removeParts.map(escaped).join("|"), "gi") : null;
+
+        summary = summary
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean)
+          .filter((l) => {
+            if (/\|/.test(l) && (l.includes("http") || l.includes("@") || /\+?\d{6,}/.test(l))) return false;
+            if (removeRegex && removeRegex.test(l)) {
+              // Keep lines that still have substantive content after removing personal info
+              const cleaned = l.replace(removeRegex, "").replace(/\s+/g, " ").trim();
+              return cleaned.length >= 20;
+            }
+            return true;
+          })
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .replace(/^PROFESSIONAL\s+SUMMARY\s*:?\s*/i, "")
+          .replace(/^SUMMARY\s*:?\s*/i, "")
+          .replace(/^PROFILE\s*:?\s*/i, "")
+          .trim();
+
+        // Hard cap for PDF wrapping
+        const finalSummary = summary.substring(0, 700).trim();
+        console.log(`[extractProfessionalSummary] Final summary length: ${finalSummary.length}`);
+        return finalSummary;
+      };
+
+      const skills = Array.isArray(userProfile.skills) ? userProfile.skills : [];
+      const primarySkills = Array.isArray(skills)
+        ? skills.filter(
+            (s: any) => s?.category === "technical" || s?.proficiency === "expert" || s?.proficiency === "advanced",
+          )
+        : [];
+      const secondarySkills = Array.isArray(skills)
+        ? skills.filter(
+            (s: any) => s?.category !== "technical" && s?.proficiency !== "expert" && s?.proficiency !== "advanced",
+          )
+        : [];
+
+      const resumePayload = {
+        type: "resume",
+        candidateName: candidateNameForFile,
+        customFileName: resumeFileName,
+        personalInfo: {
+          name: candidateName,
+          email: userProfile.email,
+          phone: userProfile.phone,
+          location: smartLocation,
+          linkedin: userProfile.linkedin,
+          github: userProfile.github,
+          portfolio: userProfile.portfolio,
+        },
+        summary: extractProfessionalSummary(result.tailoredResume || "", result.resumeStructured?.summary),
+        coreCompetencies: Array.isArray(result.resumeStructured?.coreCompetencies) ? result.resumeStructured.coreCompetencies : [],
+        experience: (Array.isArray(userProfile.professionalExperience) ? userProfile.professionalExperience : []).map((exp: any) => ({
+          company: exp?.company || "",
+          title: exp?.title || "",
+          location:
+            exp?.location || exp?.role_location || exp?.city || exp?.job_location || exp?.work_location || exp?.based_in || "",
+          dates:
+            exp?.dates || formatDateRangeATS(exp?.startDate || exp?.start_date, exp?.endDate || exp?.end_date, "Present"),
+          // PRIORITY: Use 'bullets' array first (clean structured data), fallback to 'description'
+          bullets:
+            Array.isArray(exp?.bullets) && exp.bullets.length > 0
+              ? exp.bullets
+              : Array.isArray(exp?.description)
+                ? exp.description
+                : typeof exp?.description === "string"
+                  ? exp.description
+                      .split("\n")
+                      .map((b: string) => b.replace(/^[▪•\-*]\s*/, "").trim())
+                      .filter((b: string) => b)
+                  : [],
+        })),
+        education: (Array.isArray(userProfile.education) ? userProfile.education : []).map((edu: any) => ({
+          degree: edu?.degree || "",
+          school: edu?.school || edu?.institution || "",
+          dates: edu?.dates || formatDateRangeATS(edu?.startDate, edu?.endDate),
+          gpa: edu?.gpa || "",
+        })),
+        skills: {
+          primary: primarySkills.map((s: any) => s?.name || s).filter(Boolean),
+          secondary: secondarySkills.map((s: any) => s?.name || s).filter(Boolean),
+        },
+        certifications: Array.isArray(userProfile.certifications) ? userProfile.certifications : [],
+        achievements: (Array.isArray(userProfile.achievements) ? userProfile.achievements : []).map((a: any) => ({
+          title: a?.title || "",
+          date: a?.date || "",
+          description: a?.description || "",
+        })),
+      };
+
+      // Clean the cover letter text - remove AI-generated headers/footers that duplicate our PDF formatting
+      let coverText = result.tailoredCoverLetter || "";
+
+      // Remove common AI-generated letter headers that we add ourselves in the PDF
+      const cleanPatterns = [
+        // Remove name/email/phone/date headers at the start
+        /^[\s\S]*?Dear\s+(Hiring|Recruitment|HR|Team|Manager|Manager)/i,
+        // Keep "Dear..." but remove everything before it
+        /^[^\n]*\n[^\n]*\n[^\n]*\nDear/i,
+      ];
+
+      // Find where the actual letter body starts (after "Dear...")
+      const dearMatch = coverText.match(/Dear\s+(?:Hiring|Recruitment|HR|Team|Manager|Manager)[^,]*,?\s*\n/i);
+      if (dearMatch && dearMatch.index !== undefined) {
+        // Extract only the body after the salutation
+        coverText = coverText.substring(dearMatch.index + dearMatch[0].length);
+      }
+
+      // Remove closing signatures - we add these ourselves
+      coverText = coverText
+        .replace(
+          /\n\s*(Sincerely|Best regards|Kind regards|Regards|Warmly|Respectfully|Thank you)[,]?\s*\n[\s\S]*$/i,
+          "",
+        )
+        .replace(/\n\s*(Sincerely|Best regards|Kind regards|Regards|Warmly|Respectfully|Thank you)[,]?\s*$/i, "")
+        .trim();
+
+      // Split into paragraphs, filtering out very short ones and duplicate-looking content
+      const rawParagraphs = coverText.split(/\n\n+/).map((p: string) => p.trim());
+      const paragraphs = rawParagraphs.filter((p: string) => {
+        // Skip very short paragraphs
+        if (p.length < 30) return false;
+        // Skip paragraphs that look like headers/signatures
+        if (/^(sincerely|regards|thank you|dear|date:|re:|subject:)/i.test(p)) return false;
+        // Skip lines that are just a name or contact info
+        if (p.split(/\s+/).length <= 3 && !p.includes(".")) return false;
+        return true;
+      });
+
+      const coverPayload = {
+        type: "cover_letter",
+        candidateName: candidateNameForFile,
+        customFileName: coverFileName,
+        personalInfo: {
+          name: candidateName,
+          email: userProfile.email,
+          phone: userProfile.phone,
+          location: smartLocation,
+          linkedin: userProfile.linkedin,
+          github: userProfile.github,
+          portfolio: userProfile.portfolio,
+        },
+        coverLetter: {
+          recipientCompany: company || "",
+          jobTitle: jobTitle || "Position",
+          jobId: jobId || "",
+          paragraphs: paragraphs.length ? paragraphs : [coverText.trim()],
+        },
+      };
+
+      const generatePdf = async (payload: any): Promise<{ pdf: string | null; fileName: string }> => {
+        const pdfRes = await fetch(`${supabaseUrl}/functions/v1/generate-pdf`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: supabaseAnonKey,
+            authorization: authHeader,
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (!pdfRes.ok) {
+          const t = await pdfRes.text();
+          console.error(`generate-pdf failed: ${pdfRes.status} ${t}`);
+          return { pdf: null, fileName: payload.customFileName || "document.pdf" };
+        }
+
+        // The generate-pdf function returns binary PDF data, not JSON
+        // We need to convert the binary response to base64
+        const contentType = pdfRes.headers.get("content-type") || "";
+        const contentDisposition = pdfRes.headers.get("content-disposition") || "";
+
+        // Extract filename from Content-Disposition header
+        let fileName = payload.customFileName || "document.pdf";
+        const filenameMatch = contentDisposition.match(/filename="?([^";\n]+)"?/);
+        if (filenameMatch) {
+          fileName = filenameMatch[1];
+        }
+
+        if (contentType.includes("application/pdf")) {
+          // Binary PDF response - convert to base64
+          const arrayBuffer = await pdfRes.arrayBuffer();
+          const uint8Array = new Uint8Array(arrayBuffer);
+
+          // Convert to base64
+          let binary = "";
+          for (let i = 0; i < uint8Array.length; i++) {
+            binary += String.fromCharCode(uint8Array[i]);
+          }
+          const base64 = btoa(binary);
+
+          console.log(`PDF generated successfully: ${fileName}, size: ${uint8Array.length} bytes`);
+          return { pdf: base64, fileName };
+        } else {
+          // Unexpected response type
+          console.error(`Unexpected response type from generate-pdf: ${contentType}`);
+          return { pdf: null, fileName };
+        }
+      };
+
+      const [resumePdfResult, coverPdfResult] = await Promise.all([
+        generatePdf(resumePayload),
+        generatePdf(coverPayload),
+      ]);
+
+      result.resumePdf = resumePdfResult.pdf;
+      result.coverLetterPdf = coverPdfResult.pdf;
+      result.resumePdfFileName = resumePdfResult.fileName;
+      result.coverLetterPdfFileName = coverPdfResult.fileName;
+      
+      // CRITICAL: Include the extracted summary in the result for extension fallback
+      // This ensures the extension can pass it to generate-pdf if downloading separately
+      result.professionalSummary = resumePayload.summary;
+      result.extractedSummary = resumePayload.summary; // Alias for backward compatibility
+
+      console.log(
+        `PDFs generated - Resume: ${result.resumePdf ? "success" : "failed"}, Cover: ${result.coverLetterPdf ? "success" : "failed"}, Summary: ${resumePayload.summary ? resumePayload.summary.length + " chars" : "missing"}`,
+      );
+    } catch (pdfErr) {
+      console.error("PDF generation (inline) failed:", pdfErr);
+      result.resumePdf = null;
+      result.coverLetterPdf = null;
+    }
+
+    return new Response(JSON.stringify(result), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (error: unknown) {
+    console.error("Tailor application error:", error);
+
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+    if (errorMessage === "Unauthorized: Invalid or expired token") {
+      return new Response(JSON.stringify({ error: "Please log in to continue" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    return new Response(JSON.stringify({ error: errorMessage }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+});

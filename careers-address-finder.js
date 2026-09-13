@@ -1,172 +1,131 @@
-/**
- * Job Genie - Published Recruiting Address Finder
- *
- * When a job posting carries no contact email, this looks for one the
- * employer PUBLISHED on their own website -- careers@, talent@,
- * recruiting@, jobs@ and friends. Those mailboxes exist precisely so
- * applicants can write to them, which is why this is a safe fallback:
- * every address it can return is one the company put on a public page
- * itself, aimed at candidates.
- *
- * It does NOT guess or construct addresses (no firstname.lastname@
- * pattern-building) and it does not look anybody up in a third-party
- * contact database. If the company published nothing, it returns nothing.
- *
- * Runs in the background service worker, which is the only context that
- * can fetch cross-origin pages.  window.CareersAddressFinder
- */
+/** Free public-source recruiting contact discovery. No guessed mailboxes or broker calls. */
 (function (global) {
   'use strict';
-
-  const TAG = '[JG-Careers]';
-
-  // Mailboxes intended for candidates, best first.
-  const CANDIDATE_LOCAL = [
-    'recruiting', 'recruitment', 'talent', 'talentacquisition', 'careers',
-    'career', 'jobs', 'job', 'hiring', 'apply', 'applications', 'hr',
-    'people', 'resume', 'resumes', 'cv',
-  ];
-  const CANDIDATE_RE = new RegExp('^(' + CANDIDATE_LOCAL.join('|') + ')([._-]?[a-z]{0,12})?$', 'i');
-
-  // Never contact these, even when published.
-  const BLOCKED_LOCAL = /^(noreply|no-reply|donotreply|postmaster|abuse|privacy|legal|compliance|dpo|gdpr|security|press|media|investor|sales|marketing|billing|support|unsubscribe|webmaster)$/i;
-
-  const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}/g;
-
-  // ATS hosts are never the employer's own domain.
-  const ATS_HOST = /(greenhouse|lever|ashbyhq|workday|myworkdayjobs|smartrecruiters|icims|taleo|jobvite|bamboohr|recruitee|jazzhr|workable|teamtailor|breezy|personio|rippling|successfactors|avature|eightfold|csod|brassring|linkedin|indeed|glassdoor)\./i;
-
-  /**
-   * The employer's own domain. ATS URLs encode the company slug
-   * (job-boards.greenhouse.io/celonis/... -> celonis), which is a far more
-   * reliable seed than the display name.
-   */
-  function guessDomains(companyName, jdUrl) {
-    const out = [];
-    const push = (d) => { if (d && out.indexOf(d) === -1) out.push(d); };
-
-    const u = String(jdUrl || '');
+  const ATS = /(^|\.)(greenhouse\.io|lever\.co|ashbyhq\.com|myworkdayjobs\.com|workday\.com|smartrecruiters\.com|icims\.com|taleo\.net|jobvite\.com|bamboohr\.com|workable\.com|recruitee\.com|teamtailor\.com|personio\.(com|de)|linkedin\.com|indeed\.com|glassdoor\.com|jobright\.ai)$/i;
+  const EMAIL = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,24}/gi;
+  const RECRUITING = /\b(recruit(?:er|ing|ment)|talent acquisition|hiring|careers|job applications)\b/i;
+  const BLOCKED = /(?:noreply|no-reply|privacy|legal|accommodat|disabilit|accessib|support|security|press|media|sales|billing|unsubscribe|dpo|gdpr)/i;
+  // WHAT THE SURROUNDING SENTENCE MAY VETO, AND WHAT IT MAY NOT.
+  //
+  // The whole list above was tested against the 240 characters AROUND
+  // the address as well as against the mailbox name, and those words are
+  // ordinary careers-page furniture. "We support flexible working. Email
+  // careers@acme.com", "For media enquiries see below. Careers:
+  // careers@acme.com" and "Our office is accessible. Apply via
+  // talent@acme.com" all threw the address away -- the exact addresses
+  // this file exists to find.
+  //
+  // A mailbox called careers@ or talent@ states its own purpose, and
+  // prose near it cannot overrule that. What prose CAN establish is that
+  // the address is published for a DIFFERENT purpose: an adjustments
+  // inbox exists so a candidate can request a disability accommodation,
+  // and a job follow-up sent there misuses it however the mailbox is
+  // spelled. Only those words veto. The full list still applies to the
+  // mailbox name itself, where "accommodations@" is caught outright.
+  const BLOCKED_CONTEXT = /(?:accommodat|disabilit|accessib|\beeo\b|affirmative action|reasonable[-\s]?adjust)/i;
+  const PATHS =['/careers', '/jobs', '/careers/contact', '/contact', '/about/careers', '/company/careers'];
+  const decode = s => String(s || '').replace(/&amp;/gi, '&').replace(/&#(x[0-9a-f]+|\d+);/gi, (_, n) => { const v = n[0].toLowerCase() === 'x' ? parseInt(n.slice(1),16) : Number(n); return v <= 0x10ffff ? String.fromCodePoint(v) : ''; });
+  const plain = s => decode(s).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  function publicUrl(raw, base) {
     try {
-      const parsed = new URL(u);
-      if (!ATS_HOST.test(parsed.hostname)) {
-        // Careers site on the employer's own domain.
-        push(parsed.hostname.replace(/^(www|jobs|careers|apply|boards|job-boards)\./i, ''));
-      } else {
-        // ATS slug -> company.com is the overwhelmingly common case.
-        const slug = (parsed.pathname.split('/').filter(Boolean)[0] || '').toLowerCase();
-        if (/^[a-z0-9][a-z0-9-]{1,40}$/.test(slug) && slug !== 'embed') push(slug + '.com');
-      }
-    } catch (e) {}
-
-    const name = String(companyName || '').toLowerCase()
-      .replace(/\b(inc|llc|ltd|limited|gmbh|plc|corp|corporation|co|company|group|holdings|technologies|technology|labs|ai)\b/g, '')
-      .replace(/[^a-z0-9]/g, '');
-    if (name.length >= 3) { push(name + '.com'); push(name + '.io'); }
-    return out.slice(0, 3);
+      const u = new URL(decode(raw), base);
+      const h = u.hostname.toLowerCase();
+      if (u.protocol !== 'https:' || u.username || u.password || (u.port && u.port !== '443') || !h.includes('.') || /^[\d.]+$/.test(h) || h.includes(':') || /\.(local|localhost|internal|test|invalid)$/.test(h)) return null;
+      u.hash = ''; return u;
+    } catch (_) { return null; }
   }
-
+  const sameDomain = (host, domain) => host === domain || host.endsWith('.' + domain);
   function _score(email) {
-    const parts = String(email).toLowerCase().split('@');
-    const local = parts[0];
-    if (!local || parts.length !== 2) return -1;
-    if (BLOCKED_LOCAL.test(local)) return -1;
-    const m = local.match(CANDIDATE_RE);
-    if (!m) return -1;
-    const idx = CANDIDATE_LOCAL.indexOf(m[1].toLowerCase());
-    return 100 - (idx < 0 ? 50 : idx);   // earlier in the list = better
+    const local = String(email).split('@')[0];
+    if (BLOCKED.test(local)) return -1;
+    return /^(recruiting|recruitment|talent|talentacquisition|careers?|jobs?|hiring|apply|applications|hr|people|resumes?|cv)([._-][a-z]{1,20})?$/i.test(local) ? 100 : -1;
   }
-
-  // Pages where a company publishes a candidate-facing mailbox.
-  const PATHS = ['/careers', '/careers/contact', '/jobs', '/about/careers', '/contact', '/company/careers', '/'];
-
-  async function _fetchText(url, timeoutMs) {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs || 6000);
+  // Retained for callers: only a supplied first-party URL is a domain source.
+  function guessDomains(companyName, jdUrl) {
+    const u = publicUrl(jdUrl);
+    return u && !ATS.test(u.hostname) ? [u.hostname.replace(/^(www|jobs|careers|apply)\./i, '')] : [];
+  }
+  async function fetchPage(url) {
+    const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 5000);
     try {
-      const res = await fetch(url, { signal: ctrl.signal, redirect: 'follow', credentials: 'omit' });
-      if (!res.ok) return '';
-      const type = res.headers.get('content-type') || '';
-      if (!/text|html/i.test(type)) return '';
-      const text = await res.text();
-      return text.slice(0, 400000);
-    } catch (e) {
-      return '';
-    } finally {
-      clearTimeout(timer);
-    }
+      // Do not follow an unvalidated redirect into a different origin or local service.
+      const r = await fetch(url, {signal: ctrl.signal, credentials:'omit', redirect:'error', cache:'no-store'});
+      if (!r.ok || !/text\/html|application\/xhtml/i.test(r.headers.get('content-type') || '')) return '';
+      return (await r.text()).slice(0,400000);
+    } catch (_) { return ''; } finally { clearTimeout(timer); }
   }
-
-  function _harvestFromHtml(html, domain) {
-    const found = [];
-    const seen = new Set();
-    const consider = (raw) => {
-      const e = String(raw || '').trim().replace(/^mailto:/i, '').split('?')[0];
-      const key = e.toLowerCase();
-      if (!key || seen.has(key)) return;
-      seen.add(key);
-      // Only the employer's own domain -- avoids agency/vendor addresses
-      // that appear in page footers.
-      const host = key.split('@')[1] || '';
-      const root = domain.split('.').slice(-2).join('.');
-      if (!host.endsWith(root)) return;
-      const score = _score(e);
-      if (score > 0) found.push({ email: e, score });
-    };
-
-    // mailto: links are the strongest signal -- an explicit invitation.
-    const mailtos = html.match(/mailto:[^"'>\s]+/gi) || [];
-    for (const m of mailtos) consider(m);
-    const plain = html.match(EMAIL_RE) || [];
-    for (const p of plain) consider(p);
-
-    found.sort((a, b) => b.score - a.score);
-    return found;
-  }
-
-  /**
-   * @returns {{email,source,candidates,domainsTried}} -- email is '' when
-   * the company published nothing candidate-facing.
-   */
-  async function find({ companyName, jdUrl, maxPages } = {}) {
-    const domains = guessDomains(companyName, jdUrl);
-    const limit = maxPages || 4;
-    const all = [];
-    const tried = [];
-
-    for (const domain of domains) {
-      for (let i = 0; i < PATHS.length && tried.length < limit; i++) {
-        const url = 'https://' + domain + PATHS[i];
-        tried.push(url);
-        const html = await _fetchText(url);
-        if (!html) continue;
-        const hits = _harvestFromHtml(html, domain);
-        if (hits.length) {
-          all.push(...hits.map((h) => Object.assign({}, h, { source: url })));
-          // A mailto on the careers page is as good as it gets; stop early.
-          if (hits[0].score >= 95) {
-            all.sort((a, b) => b.score - a.score);
-            return {
-              email: all[0].email,
-              source: all[0].source,
-              candidates: all.slice(0, 5).map((x) => x.email),
-              domainsTried: tried,
-            };
-          }
+  function employerUrls(html) {
+    const urls = [];
+    const walk = node => {
+      if (!node || typeof node !== 'object') return;
+      if ([].concat(node['@type'] || []).includes('JobPosting')) {
+        const org = node.hiringOrganization;
+        if (org && typeof org === 'object') for (const raw of [org.url, ...[].concat(org.sameAs || [])]) {
+          const u = publicUrl(raw);
+          if (u && !ATS.test(u.hostname)) urls.push(u.href);
         }
       }
-      if (all.length) break;
-    }
-
-    all.sort((a, b) => b.score - a.score);
-    return {
-      email: all.length ? all[0].email : '',
-      source: all.length ? all[0].source : '',
-      candidates: all.slice(0, 5).map((x) => x.email),
-      domainsTried: tried,
+      Object.values(node).forEach(v => { if (v && typeof v === 'object') walk(v); });
     };
+    for (const m of html.matchAll(/<script\b[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+      try { walk(JSON.parse(m[1])); } catch (_) {}
+    }
+    return [...new Set(urls)];
   }
-
-  const CareersAddressFinder = { find, guessDomains, _score };
-  global.CareersAddressFinder = CareersAddressFinder;
-  if (typeof module !== 'undefined' && module.exports) module.exports = CareersAddressFinder;
-})(typeof window !== 'undefined' ? window : (typeof globalThis !== 'undefined' ? globalThis : this));
+  function harvest(html, domain, source) {
+    const clean = html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
+    const contacts = new Map();
+    function add(raw, context, kind) {
+      let email; try { email = decodeURIComponent(decode(raw)).replace(/^mailto:/i,'').split('?')[0].trim().toLowerCase(); } catch (_) { return; }
+      if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,24}$/i.test(email)) return;
+      if (!sameDomain(email.split('@')[1], domain) || BLOCKED.test(email.split('@')[0]) || BLOCKED_CONTEXT.test(context)) return;
+      const generic = _score(email) > 0;
+      if (!generic && (kind !== 'mailto' || !RECRUITING.test(context))) return;
+      contacts.set(email, {email, source, context:context.slice(0,240), contactType:generic ? 'recruiting-inbox' : 'published-recruiting-contact', score:generic ? 100 : 90, verification:'published-source', checkedAt:new Date().toISOString(), mailboxVerified:false, requiresReview:true});
+    }
+    for (const m of clean.matchAll(/<a\b[^>]*href\s*=\s*["']mailto:([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+      const start = Math.max(clean.lastIndexOf('<p',m.index),clean.lastIndexOf('<li',m.index),clean.lastIndexOf('<div',m.index));
+      const nearby = clean.slice(Math.max(start, m.index - 160),m.index + m[0].length);
+      add(m[1], plain(nearby), 'mailto');
+    }
+    for (const m of clean.matchAll(EMAIL)) add(m[0],plain(clean.slice(Math.max(0,m.index-100),m.index+m[0].length+100)), 'text');
+    return [...contacts.values()];
+  }
+  async function find({companyName, jdUrl, orgUrl, maxPages = 8} = {}) {
+    const limit = Math.min(12,Math.max(1,Number(maxPages)||8));
+    const tried = [], found = new Map(); let seeds = [];
+    const supplied = publicUrl(orgUrl);
+    if (supplied && !ATS.test(supplied.hostname)) seeds.push(supplied.href);
+    const jd = publicUrl(jdUrl);
+    if (!seeds.length && jd) {
+      if (!ATS.test(jd.hostname)) seeds.push(jd.origin);
+      else { tried.push(jd.href); seeds = employerUrls(await fetchPage(jd.href)); }
+    }
+    const queues = seeds.slice(0,3).map(raw => {
+      const u = publicUrl(raw); const domain = u.hostname.replace(/^(www|jobs|careers|apply)\./i,'');
+      return {domain, urls:[u.href,...PATHS.map(p=>u.origin+p)]};
+    });
+    const visited = new Set(tried);
+    // Round-robin keeps one unavailable website from consuming every request.
+    while (tried.length < limit && queues.some(q=>q.urls.length)) {
+      for (const q of queues) {
+        if (tried.length >= limit || !q.urls.length) continue;
+        const url = q.urls.shift(); if (visited.has(url)) continue;
+        visited.add(url); tried.push(url);
+        const html = await fetchPage(url); if (!html) continue;
+        for (const c of harvest(html,q.domain,url)) if (!found.has(c.email)) found.set(c.email,c);
+        for (const m of html.matchAll(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+          if (!/careers?|recruit|talent|hiring|contact|our team/i.test(plain(m[2]))) continue;
+          const next = publicUrl(m[1],url);
+          if (next && sameDomain(next.hostname,q.domain) && !visited.has(next.href) && !q.urls.includes(next.href)) q.urls.unshift(next.href);
+        }
+      }
+      if (found.size) break;
+    }
+    const contacts=[...found.values()].sort((a,b)=>b.score-a.score).slice(0,5);
+    return {email:contacts[0]?.email || '', source:contacts[0]?.source || '', candidates:contacts.map(c=>c.email), contacts, domainsTried:tried, status:contacts.length?'published-contact-found':seeds.length?'no-published-contact':'employer-domain-unconfirmed'};
+  }
+  const api={find,guessDomains,_score,employerUrls,harvest,publicUrl};
+  global.CareersAddressFinder=api;
+  if(typeof module!=='undefined' && module.exports) module.exports=api;
+})(typeof window!=='undefined'?window:globalThis);

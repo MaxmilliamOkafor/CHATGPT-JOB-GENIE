@@ -72,6 +72,7 @@
   // ---- XML helpers -----------------------------------------------------
   function xmlEscape(s) {
     return String(s == null ? '' : s)
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -181,29 +182,33 @@
   function normalizePhoneToken(seg) {
     const raw = String(seg || '');
     const cleaned = raw.replace(/[^\d+]/g, '');
-    if (!/\d{7,}/.test(cleaned)) return seg; // not a phone
+    if (!/\d{7,}/.test(cleaned)) return raw.trim();     // not a phone
 
     // MEASURED AGAINST BOTH PARSERS, NOT ONE.
     //
-    // An earlier version of this emitted "+353: 0874261508". The colon
-    // was chosen because OpenResume's rule,
-    // /\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}/, then extracts a clean
-    // "0874261508" instead of running through the country code. That was
-    // right about OpenResume and wrong about everything else:
-    // libphonenumber, which is what Workday and Greenhouse validate
-    // phone fields with, REJECTS that string under IE, DE, GB, US and
-    // with no region set. Optimising for the parser I could read the
-    // source of, and never testing the validator the real portals use.
+    // Passing the number through untouched was defended as never
+    // inventing a digit. It costs the number entirely: a contact line
+    // reading "+353 874261508" is scanned by OpenResume's published
+    // rule, /\(?\d{3}\)?[\s-]?\d{3}[\s-]?\d{4}/, which finds NOTHING --
+    // so the CV goes out with no extractable phone number on it. An
+    // earlier attempt emitted "+353: 0874261508", which OpenResume
+    // reads correctly and libphonenumber -- what Workday and Greenhouse
+    // actually validate phone fields with -- rejects under IE, DE, GB,
+    // US and with no region set.
     //
     //   "+353: 0874261508"     OpenResume "0874261508"   libphonenumber FAILS
     //   "+353 0874261508"      OpenResume "353 0874261"  a WRONG number
+    //   "+353 874261508"       OpenResume no match       no phone at all
     //   "+353 087 426 1508"    OpenResume "087 426 1508" libphonenumber valid
     //
     // Three things are each load-bearing. The TRUNK ZERO makes the
-    // national number ten digits, which a 3-3-4 rule needs. The SPACE
-    // after the country code keeps it readable and dialable. And the
-    // GROUPING inside the national part is what stops the match spanning
-    // the country code: without those spaces the regex takes
+    // national number ten digits, which a 3-3-4 rule needs -- and it is
+    // that country's own national notation, not an invented digit: it
+    // is added only where the country code is known AND the national
+    // part is exactly the length that country's numbers are. The SPACE
+    // after the country code keeps the number readable and dialable.
+    // And the GROUPING inside the national part is what stops the match
+    // spanning the country code: without those spaces the regex takes
     // "353 0874261" and a recruiter calls a number that is not yours.
     const D = { 353: 9, 44: 10, 33: 9, 61: 9, 91: 10 };
 
@@ -223,7 +228,7 @@
     }
     // Already national and contiguous: leave it exactly as it is.
     if (/^\d{7,}$/.test(cleaned)) return cleaned;
-    return seg;
+    return raw.trim();
   }
 
   // Does this segment look like a phone number? (mostly digits + phone punct)
@@ -239,7 +244,15 @@
   // parsers (Workday, Greenhouse, Sovren, HireAbility) handle most
   // reliably when splitting a contact line into email/phone/location.
   function contactParagraph(text, relsCollector, opts = {}) {
-    const segs = text.split(/\s*[|·]\s*/).map((s) => s.trim()).filter(Boolean);
+    const seen = new Set();
+    const segs = text.split(/\s*[|·]\s*/).map(s => s.trim()).filter(Boolean).map(seg => {
+      if (seg.includes('@') || /https?:|www\./i.test(seg) || looksLikePhone(seg)) return seg;
+      return seg.split(/\s*,\s*/).filter(part => {
+        const key = part.toLocaleLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+      }).join(', ');
+    }).filter(Boolean);
     const sep = '  |  ';
     const pieces = [];
     segs.forEach((seg, i) => {
@@ -1755,6 +1768,36 @@
     };
   }
 
+  function normalizeText(text) {
+    const lines = foldDashes(String(text || '')).replace(/\r\n?/g, '\n')
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+      .replace(/\\([@.])/g, '$1')
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '$2')
+      .split('\n');
+    let header = true;
+    return lines.map(line => {
+      if (/^(PROFESSIONAL SUMMARY|SUMMARY|EXPERIENCE|PROFESSIONAL EXPERIENCE|Dear\b)/i.test(line.trim())) header = false;
+      if (!header || !line.includes('|')) return line.trimEnd();
+      const seen = new Set();
+      return line.split(/\s*\|\s*/).map(segment => {
+        if (/@|https?:|\d/.test(segment)) return segment.trim();
+        const parts = segment.split(/\s*,\s*/);
+        return parts.filter(part => {
+          const key = part.trim().toLowerCase();
+          if (!key || seen.has(key) || (key === 'ie' && /\bIreland\b/i.test(line))) return false;
+          seen.add(key); return true;
+        }).join(', ');
+      }).filter(Boolean).join(' | ');
+    }).join('\n').trim();
+  }
+
+  function exportedText(xml) {
+    const decode = value => value.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+    return (xml.match(/<w:p[ >][\s\S]*?<\/w:p>/g) || []).map(p =>
+      (p.match(/<w:t(?: [^>]*)?>[\s\S]*?<\/w:t>/g) || []).map(t => decode(t.replace(/<[^>]+>/g, ''))).join('')
+    ).join('\n').trim();
+  }
+
   function fromCvText(cvText, opts = {}) {
     try {
       if (!cvText || typeof cvText !== 'string') {
@@ -1799,7 +1842,7 @@
       const baseName = (opts.name || 'Resume').replace(/\s+/g, '_').replace(/[^A-Za-z0-9_]/g, '');
       const filename = opts.filename || `${baseName}_CV.docx`;
       return {
-        success: true, base64, filename, size: zipBytes.length,
+        success: true, base64, filename, size: zipBytes.length, text: exportedText(bodyXml),
         density, heightTwips, pageHeightTwips: usableH,
         fitsOnePage: heightTwips <= usableH,
       };
@@ -1843,7 +1886,7 @@
       const base64 = bytesToBase64(zipBytes);
       const baseName = (opts.name || 'Cover_Letter').replace(/\s+/g, '_').replace(/[^A-Za-z0-9_]/g, '');
       const filename = opts.filename || `${baseName}_Cover_Letter.docx`;
-      return { success: true, base64, filename, size: zipBytes.length };
+      return { success: true, base64, filename, size: zipBytes.length, text: exportedText(bodyXml) };
     } catch (e) {
       console.warn(TAG, 'cover-letter generation failed:', e);
       return { success: false, error: e.message };
@@ -1898,7 +1941,7 @@
   // this as its last pass, so what is previewed is what is sent. Running
   // it twice changes nothing -- text already in this shape is returned
   // untouched.
-  global.DocxGenerator = { fromCvText, fromCoverLetterText, buildFileBase,
+  global.DocxGenerator = { normalizeText, fromCvText, fromCoverLetterText, buildFileBase,
     measureCv, normalizeSections: reorderSections,
     normalizePhone: normalizePhoneToken };
   if (typeof module !== 'undefined' && module.exports) {

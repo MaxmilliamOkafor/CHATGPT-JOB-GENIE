@@ -46,7 +46,7 @@
     if (BLOCKED_DOMAIN.test(domain)) return -1;
     // Checked before the human-name heuristic below, which it would
     // otherwise satisfy.
-    if (PURPOSE_LOCAL.test(local)) return 20;
+    if (PURPOSE_LOCAL.test(local)) return -1;
     // A named human on the hiring side gets read; a shared inbox gets
     // triaged. Both are legitimate published targets, so prefer the person.
     if (/(recruit|talent|hiring)/.test(local) && /[._]/.test(local)) return 100;
@@ -56,6 +56,20 @@
     if (RECRUITING_LOCAL.test(local)) return 88;
     if (/^[a-z]{3,20}$/.test(local)) return 50;
     return 30;
+  }
+
+  function contextualCandidate(email, context, source) {
+    const score = _scoreEmail(email);
+    if (score <= 0) return null;
+    const local = email.split('@')[0];
+    const evidence = String(context || '').trim();
+    if (/accommodat|accessibility|technical (?:issue|support)|privacy|data protection|unsubscribe/i.test(evidence)) return null;
+    const hiring = /recruit|hiring|talent acquisition|applicationContact|contact.{0,45}(?:role|position|job)|(?:role|position|job).{0,45}contact|send.{0,30}(?:cv|resume|application)/i.test(evidence);
+    const mailbox = RECRUITING_LOCAL.test(local) || /recruit|talent|hiring/i.test(local);
+    if (!hiring && !mailbox) return null;
+    return {email, score: score + (hiring ? 15 : 0), source,
+      context: evidence.slice(0, 240), contactName: hiring ? extractContactName(evidence) : '',
+      relevance: hiring ? 'job-context' : 'recruiting-mailbox'};
   }
 
   /**
@@ -200,8 +214,11 @@
       const key = e.toLowerCase();
       if (seen.has(key) || key === own) continue;
       seen.add(key);
-      const score = _scoreEmail(e);
-      if (score > 0) found.push({ email: e, score });
+      const start = Math.max(jdText.lastIndexOf('\n', m.index), jdText.lastIndexOf(';', m.index));
+      const end = jdText.indexOf('\n', m.index);
+      const context = jdText.slice(Math.max(start + 1, m.index - 160), end < 0 ? m.index + e.length + 100 : Math.min(end, m.index + e.length + 100));
+      const candidate = contextualCandidate(e, context, 'job-description');
+      if (candidate) found.push(candidate);
     }
     // PAGE-PUBLISHED SOURCES.
     // The text scan only sees visible prose. An employer who puts their
@@ -225,12 +242,12 @@
       for (const h of harvested.emails) {
         const key = String(h.email || '').toLowerCase();
         if (!key || key === own) continue;
-        const base = _scoreEmail(h.email);
-        if (base <= 0) continue;                 // noreply/legal rejected as ever
-        const score = base + (SOURCE_BONUS[h.source] || 0);
+        const candidate = contextualCandidate(h.email, h.context, h.source);
+        if (!candidate) continue;
+        const score = candidate.score + (SOURCE_BONUS[h.source] || 0);
         const existing = found.find((f) => f.email.toLowerCase() === key);
         if (existing) { existing.score = Math.max(existing.score, score); existing.source = h.source; }
-        else { seen.add(key); found.push({ email: h.email, score, source: h.source }); }
+        else { seen.add(key); found.push({...candidate, score}); }
       }
     }
 
@@ -247,7 +264,10 @@
       emailSource: best ? (best.source || 'job-description') : '',
       allEmails: found.map((f) => f.email).slice(0, 5),
       jobId: extractJobId(jdText, url) || (harvested && harvested.jobId) || '',
-      contactName: extractContactName(jdText) || harvestedName,
+      contactName: best?.contactName || '',
+      contactEvidence: best?.context || '',
+      contactRelevance: best?.relevance || '',
+      requiresReview: true,
       // Every name the page published, with the LinkedIn profile handle
       // when the hiring-team card carried one. Carried through so an
       // opt-in lookup can resolve THAT person rather than guessing at the

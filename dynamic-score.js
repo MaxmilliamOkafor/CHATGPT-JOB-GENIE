@@ -7,36 +7,40 @@
 
   /**
    * Calculate dynamic match score based on keywords found in CV
-   * Score fluctuates between 85-100% based on real keyword injection
+   * Reports literal keyword coverage, not a vendor ATS score or hiring probability
    * @param {string} cvText - The CV/resume text
    * @param {Array} jobKeywords - Array of keywords from job description
    * @returns {Object} Score details with matched/missing keywords
    */
   function calculateDynamicMatch(cvText, jobKeywords) {
-    if (!cvText || !jobKeywords || jobKeywords.length === 0) {
+    jobKeywords = [...new Map((Array.isArray(jobKeywords) ? jobKeywords : [])
+      .filter(k => typeof k === 'string' && k.trim())
+      .map(k => [k.normalize('NFKC').trim().toLowerCase(), k.trim()])).values()];
+    cvText = typeof cvText === 'string' ? cvText : '';
+    // Genuine aliases share a requirement; distinct tools keep their own entries.
+    const TX = (typeof global !== 'undefined' && global.KeywordTaxonomy)
+      || (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
+    if (TX && typeof TX.measure === 'function') {
+      const result = TX.measure(cvText, jobKeywords);
       return {
-        score: 0,
-        matched: [],
-        missing: jobKeywords || [],
-        matchCount: 0,
-        totalKeywords: jobKeywords?.length || 0
+        score: result.percent,
+        matched: result.matched,
+        missing: result.missing,
+        matchCount: result.matched.length,
+        totalKeywords: result.total,
       };
     }
 
-    const cvLower = cvText.toLowerCase();
-    const cvWords = extractWords(cvLower);
+    const cvLower = cvText.normalize('NFKC').toLowerCase();
     const matched = [];
     const missing = [];
+    jobKeywords = [...new Map(jobKeywords
+      .filter(k => typeof k === 'string' && k.trim())
+      .map(k => [k.normalize('NFKC').trim().toLowerCase(), k.trim()])).values()];
 
     jobKeywords.forEach(keyword => {
-      const keywordLower = keyword.toLowerCase();
-      // Check for exact word boundary match
-      const regex = new RegExp(`\\b${escapeRegex(keywordLower)}\\b`, 'i');
-      
-      // Also check for partial matches in compound words
-      const hasMatch = regex.test(cvLower) || 
-                       cvWords.some(word => word.includes(keywordLower) || keywordLower.includes(word));
-      
+      const hasMatch = keywordPattern(keyword).test(cvLower);
+
       if (hasMatch) {
         matched.push(keyword);
       } else {
@@ -55,6 +59,13 @@
       matchCount: matched.length,
       totalKeywords: jobKeywords.length
     };
+  }
+
+  // Preserve punctuation in C++, C#, .NET and reject Java/JavaScript-style
+  // substring matches. Flexible whitespace supports wrapped PDF text.
+  function keywordPattern(keyword) {
+    const term = escapeRegex(keyword.normalize('NFKC').trim().toLowerCase()).replace(/\s+/g, '\\s+');
+    return new RegExp('(?<![\\p{L}\\p{N}_+#])' + term + '(?![\\p{L}\\p{N}_+#])', 'giu');
   }
 
   /**
@@ -210,7 +221,7 @@
 
       let count = 0;
       for (const kw of matchedKeywords) {
-        const regex = new RegExp('\\b' + kw.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
+        const regex = keywordPattern(kw);
         const hits = sectionLower.match(regex);
         count += hits ? hits.length : 0;
       }
@@ -240,7 +251,7 @@
     const frequency = {};
 
     for (const kw of keywords) {
-      const regex = new RegExp('\\b' + kw.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'gi');
+      const regex = keywordPattern(kw);
       const matches = cvLower.match(regex);
       frequency[kw] = matches ? matches.length : 0;
     }
@@ -261,3 +272,4 @@
   };
 
 })(typeof window !== 'undefined' ? window : global);
+

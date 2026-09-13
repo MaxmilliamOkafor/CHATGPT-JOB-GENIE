@@ -1,0 +1,93 @@
+/* Compact midnight application popup with violet and cyan accents. */
+:root {
+  --bg-primary:#0b0b18; --bg-secondary:#111122; --bg-card:#151527;
+  --bg-card-hover:#202039; --text-primary:#f1f5f9; --text-secondary:#cbd5e1;
+  --text-muted:#b4b4ca; --border-subtle:#34344f; --border-accent:#a5b4fc;
+  --accent-primary:#a5b4fc; --accent-secondary:#67e8f9;
+  --accent-gradient:linear-gradient(110deg,#a78bfa,#67e8f9); --accent-glow:transparent;
+  --success:#a7f3d0;
+}
+body { width:380px; min-height:500px; max-height:600px; font-size:13px; line-height:1.45; }
+.container { padding:14px; }
+.header { margin-bottom:12px; }
+.logo-text h1 { font-size:21px; }
+.logo-icon { width:34px; height:34px; }
+.job-title { font-size:17px; }
+.job-card,.actions-card,.documents-card,.ai-provider-panel,.settings-panel { background:var(--bg-card); border-color:var(--border-subtle); padding:12px; margin-bottom:12px; }
+button,.btn,.fu-btn { min-height:34px; font-size:13px; }
+.btn-large { min-height:42px; }
+.btn-primary,.btn-gradient,.btn-accent,.fu-btn.fu-btn-primary,.ai-toggle-btn.selected { background:#a5b4fc; color:#10213b; border-color:#a5b4fc; box-shadow:none; }
+.btn-secondary,.btn-outline,.fu-btn { background:#202039; color:#f1f5f9; border:1px solid #505074; }
+.btn-success { background:#a5b4fc; color:#10213b; }
+.btn-link,a { color:#67e8f9; }
+input:not([type=checkbox]):not([type=radio]),select,textarea { background:#0b0b18; color:#f1f5f9; border:1px solid #505074; font-size:13px; max-width:100%; }
+input::placeholder,textarea::placeholder { color:#b4b4ca; }
+:where(button,a,input,select,textarea,summary):focus-visible { outline:2px solid #67e8f9; outline-offset:2px; }
+.document-item { display:flex; gap:8px; align-items:center; }
+.document-info { min-width:0; flex:1; }
+.document-name { overflow-wrap:anywhere; white-space:normal; font-size:12px; }
+.document-actions { flex-shrink:0; display:flex; gap:4px; }
+.btn-icon-only { width:32px; min-width:32px; padding:4px; }
+.ai-match-analysis,.keywords-container,.ats-match-gauge { background:#111122; }
+.gauge-circle { width:76px; height:76px; }
+.gauge-title { font-size:15px; }
+.gauge-percentage { font-size:22px; }
+.gauge-subtitle,.keyword-description,.panel-subtitle { font-size:12px; color:#cbd5e1; }
+/* GREEN IS ON THE CV, RED IS NOT.
+   Both states used the same slate background, so a panel of thirty
+   chips read as one undifferentiated block and the tick and the cross
+   were the only difference -- at 12px, next to each other. Colour
+   carries it now, and the tick and cross stay for anyone who cannot
+   rely on the colour. */
+.keyword-chips { display:flex; flex-wrap:wrap; gap:5px; }
+.keyword-chip { display:inline-flex; align-items:center; gap:4px; padding:3px 7px; border-radius:6px; font-size:12px; font-weight:500; border:1px solid transparent; background:#202039; color:#cbd5e1; }
+.keyword-chip.matched { color:#6ee7b7; background:rgba(16,185,129,0.14); border-color:rgba(16,185,129,0.45); }
+.keyword-chip.missing { color:#fca5a5; background:rgba(239,68,68,0.12); border-color:rgba(239,68,68,0.40); }
+.keyword-chip .chip-icon { font-weight:700; opacity:.9; }
+.preview-content { color:#f1f5f9; background:#0b0b18; white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.5; max-height:240px; overflow:auto; }
+.preview-tab.active { background:#a5b4fc; color:#10213b; }
+.workspace-guidance,.ats-guidance,.boost-description,.btn-time,.stats-card { display:none; }
+.workspace-settings > section input,.workspace-settings > section textarea { width:100%; margin:8px 0; padding:8px; }
+@media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
+
+.document-details { min-width:0; }
+.btn-icon-only { background:#202039; color:#f1f5f9; border:1px solid #505074; border-radius:6px; }
+#previewDocumentSelect { display:block; width:100%; padding:7px; margin:6px 0 10px; }
+
+.btn-primary,.btn-gradient,.btn-accent,.fu-btn.fu-btn-primary { background:var(--accent-gradient); color:#111122; border:1px solid #a5b4fc; }
+.logo-text h1 { background:var(--accent-gradient); background-clip:text; -webkit-background-clip:text; color:transparent; }
+input[type=checkbox],input[type=radio] { accent-color:#67e8f9; }
+button:disabled { opacity:.6; cursor:not-allowed; }
+.btn-primary:hover:not(:disabled),.btn-accent:hover:not(:disabled) { filter:brightness(1.08); }
+
+/* Coverage gaps are neutral review items, not error states. */
+.priority-high .section-title,.priority-medium .section-title,.priority-low .section-title { color:var(--text-secondary); }
+
+/* ── The profile gap ───────────────────────────────────────────────────
+   Terms the posting asked for that the profile does not record. They
+   are not failures of the tailoring and must not read as red errors:
+   they are an invitation to complete the profile once. Amber, chips
+   that toggle, and a claimed one turns green like any other match. */
+.priority-gap { border-top: 1px solid rgba(148,163,184,0.18); padding-top: 10px; margin-top: 4px; }
+.priority-gap .section-title { color: #fcd34d; }
+.priority-gap .section-count {
+  color: #fcd34d; background: rgba(251,191,36,0.14);
+  border: 1px solid rgba(251,191,36,0.38); border-radius: 999px; padding: 1px 8px;
+}
+.gap-help {
+  color: var(--text-secondary); font-size: 12px; line-height: 1.45;
+  margin: 6px 0 8px;
+}
+.keyword-chip.gap {
+  color: #fcd34d; background: rgba(251,191,36,0.10);
+  border-color: rgba(251,191,36,0.38); cursor: pointer;
+}
+.keyword-chip.gap:hover { background: rgba(251,191,36,0.20); }
+.keyword-chip.gap.claimed {
+  color: #6ee7b7; background: rgba(16,185,129,0.16); border-color: rgba(16,185,129,0.50);
+}
+#claimGapBtn { margin-top: 10px; width: 100%; padding: 8px; }
+.gap-status {
+  display: block; margin-top: 8px; font-size: 12px; color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}

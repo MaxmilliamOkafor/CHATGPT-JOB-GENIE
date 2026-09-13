@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Job Genie \u2014 Smart CV, Cover Letter & AI Page Autofill",
-  "version": "3.4.0",
-  "description": "Automatically tailor your CV and cover letter to every job posting, plus 1-click AI Page Autofill across 150+ ATS platforms. Intelligent keyword matching, ATS-optimised PDF generation, cover letter builder, STAR-format behavioral answers, 500+ pre-seeded responses, and knockout-question intelligence \u2014 with a master toggle for full user control over API usage.",
+  "version": "3.4.1",
+  "description": "Tailor CVs and cover letters, review keyword coverage, and autofill applications from your profile with user-controlled settings.",
   "permissions": [
     "storage",
     "unlimitedStorage",
@@ -265,7 +265,8 @@
         "https://*.ukg.com/*",
         "https://*.myadp.com/*",
         "https://*.bullhorncdn.com/*",
-        "https://*.comeet.com/*"
+        "https://*.comeet.com/*",
+        "https://*.stripe.com/careers/*"
       ],
       "js": [
         "ats-platforms.js",
@@ -282,6 +283,7 @@
         "unique-cv-engine.js",
         "tailor-universal.js",
         "validation-engine.js",
+        "keyword-taxonomy.js",
         "dynamic-score.js",
         "turbo-pipeline.js",
         "location-db.js",
@@ -307,8 +309,10 @@
         "recruiter-audit.js",
         "application-validator.js",
         "docx-generator.js",
+        "text-pdf.js",
         "workday-handlers.js",
         "autofill-controller.js",
+        "document-attachments.js",
         "content.js"
       ],
       "css": [
@@ -395,6 +399,7 @@
         "unique-cv-engine.js",
         "tailor-universal.js",
         "validation-engine.js",
+        "keyword-taxonomy.js",
         "dynamic-score.js",
         "turbo-pipeline.js",
         "location-db.js",
@@ -427,25 +432,11 @@
         "cv-preview-enhanced.html",
         "integration-example.html",
         "workday-handlers.js",
-        "autofill-controller.js",
-        "autofill-engine/jg-gate.js",
-        "autofill-engine/ua-enhancement.js",
-        "autofill-engine/constants.js",
-        "autofill-engine/filler.js",
-        "autofill-engine/contents.js",
-        "autofill-engine/answer.js",
-        "autofill-engine/contents.css",
-        "autofill-engine/inter.css"
+        "autofill-controller.js"
       ],
       "matches": [
         "<all_urls>"
       ]
     }
-  ],
-  "oauth2": {
-    "client_id": "YOUR_CHROME_EXTENSION_OAUTH_CLIENT_ID.apps.googleusercontent.com",
-    "scopes": [
-      "https://www.googleapis.com/auth/gmail.send"
-    ]
-  }
+  ]
 }

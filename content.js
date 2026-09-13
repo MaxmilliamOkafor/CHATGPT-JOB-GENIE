@@ -134,7 +134,7 @@
   }
   
   // Global success banner message (100% for ALL platforms) - FIXED: removed duplicate prefix
-  const SUCCESS_BANNER_MSG = '✅ Done! Match: 100% - Files attached!';
+  const SUCCESS_BANNER_MSG = 'Documents prepared. Review keyword coverage and attachments on the form.';
 
   const SUPPORTED_HOSTS = [
     // Standard ATS platforms. Kept only as a fallback for when
@@ -476,6 +476,10 @@
   let cvFile = null;
   let coverFile = null;
   let coverLetterText = '';
+  // The reviewed plain text behind each file, kept so a field that
+  // refuses DOCX can be given the SAME document as a PDF or as plain
+  // text rather than nothing at all.
+  let cvPlainText = '';
   let hasTriggeredTailor = false;
   let tailoringInProgress = false;
 
@@ -785,13 +789,13 @@
           ? createDocxFile(message.cvDocx, message.cvDocxFileName || 'Resume.docx')
           : (buildDocxFileFromText(message.cvText || '', message.cvFileName, 'cv')
              || (message.cvPdf ? createPDFFile(message.cvPdf, message.cvFileName || 'Resume.pdf') : null));
-        if (cvF) { cvFile = cvF; filesLoaded = true; }
+        cvFile = cvF; filesLoaded = !!cvF;
         // Cover letter: same priority
         const coF = message.coverDocx
           ? createDocxFile(message.coverDocx, message.coverDocxFileName || 'Cover_Letter.docx')
           : (buildDocxFileFromText(message.coverText || '', message.coverFileName, 'cover')
              || (message.coverPdf ? createPDFFile(message.coverPdf, message.coverFileName || 'Cover_Letter.pdf') : null));
-        if (coF) coverFile = coF;
+        coverFile = coF;
         console.log('[ATS Tailor] Attach payload set -- CV:', cvFile && cvFile.name,
           '| Cover:', coverFile && coverFile.name);
         sendResponse({ ok: true, cvFileName: cvFile && cvFile.name, coverFileName: coverFile && coverFile.name });
@@ -1149,7 +1153,7 @@
             const _coverTxt = (typeof coverContent !== 'undefined' && coverContent && coverContent.text) ? coverContent.text : '';
             coverFile = (_coverTxt && buildDocxFileFromText(_coverTxt, pdfResult.cover && pdfResult.cover.filename, 'cover'))
               || (pdfResult.cover ? createPDFFile(pdfResult.cover.base64 || pdfResult.cover, pdfResult.cover.filename || 'Cover_Letter.pdf') : null);
-            filesLoaded = true;
+            filesLoaded = !!cvFile;
             
             forceEverything();
             ultraFastReplace();
@@ -1157,7 +1161,7 @@
             const elapsed = Math.round(performance.now() - start);
             
             // Unified success banner (all ATS)
-            const displayScore = 100;
+            const displayScore = matchScore;
 
             updateBanner(SUCCESS_BANNER_MSG, 'success');
             sendResponse({ status: 'attached', timing: elapsed, matchScore: displayScore, keywords: keywords.length });
@@ -1241,59 +1245,40 @@
             return;
           }
           
-          // Store in global variables for attachment functions
-          if (type === 'cv') {
-            cvFile = file;
-            filesLoaded = true;
-            // Attach CV
-            forceCVReplace();
-          } else if (type === 'cover') {
-            coverFile = file;
-            coverLetterText = text || '';
-            filesLoaded = true;
-            // Attach Cover Letter
-            forceCoverReplace();
-          }
-          
-          // Force everything to ensure attachment
-          forceEverything();
-          
-          // Check if attachment was successful
-          const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
-          let attached = false;
-          
-          if (type === 'cv') {
-            attached = fileInputs.some(input => isCVField(input) && input.files && input.files.length > 0);
-          } else if (type === 'cover') {
-            attached = fileInputs.some(input => isCoverField(input) && input.files && input.files.length > 0);
-            // Also check textareas for cover letter text
-            if (!attached && text) {
-              const textareas = document.querySelectorAll('textarea');
-              attached = Array.from(textareas).some(ta => {
-                const label = (ta.labels?.[0]?.textContent || ta.name || ta.id || '').toLowerCase();
-                return /cover/i.test(label) && (ta.value || '').trim().length > 0;
-              });
+          // Manual attach is a fresh replacement, independent of automatic cooldowns.
+          if (type !== 'cv' && type !== 'cover') throw new Error('Unknown document type');
+          stopAttachLoops();
+          await revealUploadFields();
+          if (!window.JobGenieAttachments) throw new Error('Reload this application page to load the updated attachment engine.');
+          window.__JG_FILE_ATTACH_AUTHORISED__ = true;
+          try {
+            let result = await window.JobGenieAttachments.replace({
+              doc: document, file, kind: type, matches: type === 'cv' ? isCVField : isCoverField,
+              alternatives: alternativeFiles(text || '', file.name),
+            });
+            // No upload field for the cover letter means the form wants
+            // it typed. See pasteCoverLetterText.
+            if (type === 'cover' && !result.success && result.skipped) {
+              result = pasteCoverLetterText(text || coverLetterText) || result;
             }
-          }
-          
-          if (attached) {
-            console.log(`[ATS Tailor] ${type} attached successfully`);
+            if (result.success) {
+              if (type === 'cv') { cvFile = file; cvPlainText = text || cvPlainText; }
+              else { coverFile = file; coverLetterText = text || ''; }
+              filesLoaded = !!cvFile;
+            }
             // WHAT HAPPENS NEXT DEPENDS ENTIRELY ON THE PLATFORM.
             //
             // A live audit of ten ATS found only three that parse an
-            // uploaded CV into the form. Every one was being treated the
-            // same, so on the seven that do not, the user watched an
-            // attached file and a blank form and had no way to know
-            // whether that was the site or us.
-            sendResponse(Object.assign(
-              { success: true, message: `${type} attached successfully` },
-              type === 'cv' ? describeAutofill() : {}
-            ));
-          } else {
-            console.log(`[ATS Tailor] ${type} attachment failed - no upload field found`);
-            sendResponse({ success: false, skipped: true, message: 'No upload field found for ' + type });
-          }
-          
+            // uploaded CV into the form. Every one was being reported
+            // the same way, so on the seven that do not, the applicant
+            // saw an attached file beside a blank form and had no way
+            // to know whether that was the site or us. The capability
+            // travels with the reply again.
+            sendResponse(result.success && type === 'cv'
+              ? Object.assign({}, result, describeAutofill())
+              : result);
+          } finally { window.__JG_FILE_ATTACH_AUTHORISED__ = false; }
+
         } catch (error) {
           console.error('[ATS Tailor] attachDocument error:', error);
           sendResponse({ success: false, message: error.message || 'Attachment failed' });
@@ -1521,11 +1506,8 @@
           } catch (e) {}
           cvFile = buildDocxFileFromText(_cvTxt, result.cvPDF.filename, 'cv')
             || createPDFFile(result.cvPDF.base64 || result.cvPDF, result.cvPDF.filename || 'Resume.pdf');
-          if (result.coverPDF) {
-            coverFile = (_covTxt && buildDocxFileFromText(_covTxt, result.coverPDF.filename, 'cover'))
-              || createPDFFile(result.coverPDF.base64 || result.coverPDF, result.coverPDF.filename || 'Cover_Letter.pdf');
-          }
-          filesLoaded = true;
+          coverFile = buildDocxFileFromText(_covTxt, result.coverPDF?.filename || 'Cover_Letter.docx', 'cover');
+          filesLoaded = !!cvFile;
           
           // Cache in storage
           chrome.storage.local.set({
@@ -2046,13 +2028,14 @@
 
   // ============ PDF FILE CREATION ============
   function createPDFFile(base64, name) {
-    return createBlobFile(base64, name, 'application/pdf');
+    // Legacy callers must never attach a stale PDF. Regenerate DOCX from text.
+    return null;
   }
 
   function createDocxFile(base64, name) {
     return createBlobFile(
       base64,
-      name,
+      String(name || 'Document').replace(/\.(pdf|docx|txt)$/i, '') + '.docx',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     );
   }
@@ -2078,6 +2061,53 @@
     return null;
   }
 
+  // ============ WHEN THE FORM WILL NOT TAKE A DOCX ============
+  //
+  // A meaningful number of employers publish accept=".pdf" on the
+  // resume field. Until now that ended the run with "This upload field
+  // does not accept DOCX", and the applicant had to leave the page,
+  // find the file, convert it and come back -- for a document the
+  // extension was already holding in full.
+  //
+  // Both fallbacks are built from the SAME reviewed text as the DOCX,
+  // so nothing can drift between the format the employer takes and the
+  // one that was reviewed. DOCX stays first in every list; these are
+  // only ever reached when the field refuses it.
+  function buildPdfFileFromText(text, name) {
+    try {
+      if (!text || typeof TextPdf === 'undefined') return null;
+      const pdf = TextPdf.build(text);
+      if (!pdf) return null;
+      const bytes = new Uint8Array(pdf.length);
+      for (let i = 0; i < pdf.length; i++) bytes[i] = pdf.charCodeAt(i) & 0xff;
+      const baseName = String(name || 'Document').replace(/\.(pdf|docx|txt)$/i, '');
+      return new File([bytes], baseName + '.pdf', { type: 'application/pdf' });
+    } catch (e) {
+      console.warn('[ATS Tailor] PDF fallback build failed:', e && e.message);
+      return null;
+    }
+  }
+
+  function buildTxtFileFromText(text, name) {
+    try {
+      if (!text || !String(text).trim()) return null;
+      const baseName = String(name || 'Document').replace(/\.(pdf|docx|txt)$/i, '');
+      return new File([String(text)], baseName + '.txt', { type: 'text/plain' });
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** DOCX first, then the formats a stricter field might accept instead. */
+  function alternativeFiles(text, name) {
+    const out = [];
+    const pdf = buildPdfFileFromText(text, name);
+    if (pdf) out.push(pdf);
+    const txt = buildTxtFileFromText(text, name);
+    if (txt) out.push(txt);
+    return out;
+  }
+
   function createBlobFile(base64, name, mime) {
     try {
       if (!base64) return null;
@@ -2088,6 +2118,7 @@
       }
 
       const byteString = atob(data);
+      if (!byteString.startsWith('PK\x03\x04')) return null;
       const buffer = new ArrayBuffer(byteString.length);
       const view = new Uint8Array(buffer);
       for (let i = 0; i < byteString.length; i++) {
@@ -2301,7 +2332,7 @@
 
   /** True when this input already holds the file, by either signal. */
   function inputHoldsFile(input, file) {
-    if (input.files && input.files.length > 0) return true;
+    if (input.files && input.files.length > 0) return !!file && Array.from(input.files).some(actual => actual.name === file.name && actual.size === file.size);
     return !!(file && pageShowsAttachment(file.name));
   }
 
@@ -3396,44 +3427,174 @@
     }, 4000);
   }
 
+  // ============ REVEAL THE UPLOAD FIELDS ============
+  //
+  // Greenhouse, Workable and Lever render the resume and cover-letter
+  // file inputs only once their "Attach" control is clicked, and
+  // several ATS keep the input permanently display:none behind a styled
+  // button. The old attach path clicked those controls first; when the
+  // retry loop was replaced by a single scoped pass, that step went
+  // with it -- so a form whose input had not been revealed yet reported
+  // "No matching upload field found" and the applicant's previously
+  // uploaded CV stayed exactly where it was.
+  //
+  // Nothing here submits anything or clicks a remove control. It opens
+  // upload widgets and unhides inputs, and it stops as soon as a file
+  // input is present.
+  async function revealUploadFields() {
+    const count = () => document.querySelectorAll('input[type="file"]').length;
+    const before = count();
+    try {
+      document.querySelectorAll('[data-qa-upload], [data-qa="upload"], [data-qa="attach"]').forEach((btn) => {
+        const parent = btn.closest('.field') || btn.closest('[class*="upload"]') || btn.parentElement;
+        const existing = parent && parent.querySelector('input[type="file"]');
+        if (!existing || existing.offsetParent === null) {
+          try { btn.click(); } catch (e) {}
+        }
+      });
+    } catch (e) {}
+    try { clickGreenhouseCoverAttach(); } catch (e) {}
+    try { clickResumeAttach(); } catch (e) {}
+    // Give the page a beat to render whatever those clicks opened.
+    if (count() === before) {
+      for (let i = 0; i < 8 && count() === before; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    }
+    // A hidden input still accepts a DataTransfer write, but its own
+    // scope reads as empty to the confirmation check, so unhide it.
+    document.querySelectorAll('input[type="file"]').forEach((input) => {
+      if (input.offsetParent === null) {
+        input.style.cssText = 'display:block !important; visibility:visible !important; opacity:1 !important; position:relative !important;';
+      }
+    });
+    return count();
+  }
+
+  /** The resume half of the same problem: an "Attach" button with no input behind it yet. */
+  function clickResumeAttach() {
+    const nodes = document.querySelectorAll('label, h1, h2, h3, h4, h5, span, div, fieldset');
+    for (const node of nodes) {
+      const t = (node.textContent || '').trim().toLowerCase();
+      if (!t || t.length > 60) continue;
+      if (!/(^|[^a-z])(resume|cv|curriculum vitae)([^a-z]|$)/.test(t)) continue;
+      if (t.includes('cover')) continue;
+      const container = node.closest('fieldset') || node.closest('.field') || node.closest('section') || node.parentElement;
+      if (!container) continue;
+      const existing = container.querySelector('input[type="file"]');
+      if (existing && existing.offsetParent !== null) return true;
+      for (const btn of container.querySelectorAll('button, a[role="button"], [role="button"]')) {
+        const bt = (btn.textContent || '').trim().toLowerCase();
+        // "Attach" and "Upload" only. A "Remove" or "Delete" control in
+        // the same box must never be clicked from here.
+        if (/^(attach|upload|attach file|upload file|choose file|browse)$/.test(bt)) {
+          try { btn.click(); return true; } catch (e) {}
+        }
+      }
+    }
+    return false;
+  }
+
+  // ============ A COVER LETTER WITH NOWHERE TO UPLOAD IT ============
+  //
+  // Many forms ask for the cover letter as a textarea and offer no file
+  // input for it at all. The scoped replacement path only knows about
+  // file inputs, so it reported "No matching upload field found" and
+  // stopped -- leaving a written letter in the popup beside the empty
+  // box that was asking for it.
+  //
+  // Only a box the form itself labels as the cover letter is written
+  // to, and only when it is empty or holds a previous letter of ours;
+  // anything the applicant has typed is left alone.
+  function pasteCoverLetterText(text) {
+    const body = String(text || '').trim();
+    if (!body) return null;
+    for (const area of document.querySelectorAll('textarea')) {
+      if (area.disabled || area.readOnly) continue;
+      const label = [
+        area.labels && area.labels[0] ? area.labels[0].textContent : '',
+        area.getAttribute('aria-label') || '', area.name || '', area.id || '',
+        area.placeholder || '',
+      ].join(' ').toLowerCase();
+      if (!/cover\s*letter|why .{0,24}(?:this role|you|interested)|motivation/.test(label)) continue;
+      const current = String(area.value || '').trim();
+      if (current && current !== body) {
+        return { success: false, message: 'A cover letter box already has text in it. Clear it and attach again.' };
+      }
+      if (current === body) return { success: true, filename: 'cover letter text', confirmation: 'textarea' };
+      const setter = Object.getOwnPropertyDescriptor(
+        area.ownerDocument.defaultView.HTMLTextAreaElement.prototype, 'value');
+      if (setter && setter.set) setter.set.call(area, body); else area.value = body;
+      for (const type of ['input', 'change']) {
+        area.dispatchEvent(new Event(type, { bubbles: true }));
+      }
+      if (String(area.value || '').trim() !== body) continue;
+      return { success: true, filename: 'cover letter text', confirmation: 'textarea',
+        message: 'Cover letter pasted into the form (this employer has no upload field for it).' };
+    }
+    return null;
+  }
+
   // ============ LOAD FILES AND START ==========
+  async function attachPreparedDocuments() {
+    stopAttachLoops();
+    // The field has to exist before it can be replaced. See
+    // revealUploadFields above for why this call is not optional.
+    if (typeof revealUploadFields === 'function') {
+      try { await revealUploadFields(); } catch (e) {
+        console.warn('[ATS Tailor] reveal step skipped:', e && e.message);
+      }
+    }
+    if (!window.JobGenieAttachments) return { success: false, message: 'Reload this application page to load the attachment engine.' };
+    const outcomes = {};
+    window.__JG_FILE_ATTACH_AUTHORISED__ = true;
+    try {
+      for (const [kind, file, matches, source] of [
+        ['cv', cvFile, isCVField, cvPlainText],
+        ['cover', coverFile, isCoverField, coverLetterText],
+      ]) {
+        try {
+          outcomes[kind] = file
+            ? await window.JobGenieAttachments.replace({
+              doc: document, file, kind, matches,
+              alternatives: alternativeFiles(source, file.name),
+            })
+            : { success: false, message: 'No current DOCX. Tailor this document again.' };
+          // A COVER LETTER WITH NO UPLOAD FIELD IS NOT A DEAD END.
+          //
+          // Plenty of forms take the cover letter as a textarea and
+          // offer no file input for it at all. Reporting "No matching
+          // upload field found" and stopping left a written letter
+          // sitting in the popup beside an empty box that was asking
+          // for exactly it.
+          if (kind === 'cover' && !outcomes.cover.success && outcomes.cover.skipped
+            && typeof pasteCoverLetterText === 'function') {
+            const pasted = pasteCoverLetterText(coverLetterText);
+            if (pasted) outcomes.cover = pasted;
+          }
+        } catch (error) { outcomes[kind] = { success: false, message: error.message || 'Attachment failed.' }; }
+      }
+    } finally { window.__JG_FILE_ATTACH_AUTHORISED__ = false; }
+    const success = !!outcomes.cv.success && !!outcomes.cover.success;
+    const describe = (label, result) => `${label}: ${result.success ? 'attached' : result.message || 'not attached'}`;
+    return { success, ...outcomes, message: `${describe('CV', outcomes.cv)}. ${describe('Cover letter', outcomes.cover)}` };
+  }
+
   function loadFilesAndStart() {
     chrome.storage.local.get([
       'cvDocx', 'cvDocxFileName', 'coverDocx', 'coverDocxFileName',
-      'cvPDF', 'coverPDF', 'cvText', 'coverLetterText', 'cvFileName', 'coverFileName',
-    ], (data) => {
-      // DOCX is the ONLY attached format. Priority: pre-built DOCX base64
-      // from the popup -> build DOCX on the spot from the CV/cover text ->
-      // (last resort) PDF only if there is no text at all to build from.
-      cvFile = data.cvDocx
-        ? createDocxFile(data.cvDocx, data.cvDocxFileName || 'Tailored_Resume.docx')
-        : (buildDocxFileFromText(data.cvText || '', data.cvFileName, 'cv')
-           || createPDFFile(data.cvPDF, data.cvFileName || 'Tailored_Resume.pdf'));
-      coverFile = data.coverDocx
-        ? createDocxFile(data.coverDocx, data.coverDocxFileName || 'Tailored_Cover_Letter.docx')
-        : (buildDocxFileFromText(data.coverLetterText || '', data.coverFileName, 'cover')
-           || createPDFFile(data.coverPDF, data.coverFileName || 'Tailored_Cover_Letter.pdf'));
-      console.log('[ATS Tailor] Attaching CV:', cvFile && cvFile.name, '| Cover:', coverFile && coverFile.name);
+      'cvText', 'coverLetterText', 'cvFileName', 'coverFileName',
+    ], async (data) => {
+      // Rebuild invalid or absent DOCX payloads from this payload's text only.
+      cvFile = createDocxFile(data.cvDocx, data.cvDocxFileName || 'Tailored_Resume.docx')
+        || buildDocxFileFromText(data.cvText || '', data.cvFileName, 'cv');
+      coverFile = createDocxFile(data.coverDocx, data.coverDocxFileName || 'Tailored_Cover_Letter.docx')
+        || buildDocxFileFromText(data.coverLetterText || '', data.coverFileName, 'cover');
       coverLetterText = data.coverLetterText || '';
-      filesLoaded = true;
-
-      console.log('[ATS Tailor] Files loaded, starting attach');
-
-      // Immediate attach attempt
-      forceEverything();
-
-      // Workday: DO NOT start rapid attach loops (Workday clears input after upload)
-      if (isWorkdayHost()) {
-        console.log('[ATS Tailor Workday] Skipping attach loops (one-time attach mode)');
-        // Show success immediately for Workday after single attach
-        showSuccessRibbon();
-        updateBanner(SUCCESS_BANNER_MSG, 'success');
-        hideBanner();
-        return;
-      }
-
-      // Start guarded loop (non-Workday) - success shown inside after attach completes
-      ultraFastReplace();
+      cvPlainText = data.cvText || '';
+      filesLoaded = !!cvFile;
+      const result = await attachPreparedDocuments();
+      updateBanner(result.message, result.success ? 'success' : 'error');
     });
   }
 
@@ -3714,8 +3875,8 @@
         // Store and attach files -- DOCX-first from the tailored text.
         cvFile = buildDocxFileFromText(typeof tailoredCV === 'string' ? tailoredCV : '', pdfResult.cv.filename, 'cv')
           || createPDFFile(pdfResult.cv.base64 || pdfResult.cv, pdfResult.cv.filename || 'Resume.pdf');
-        coverFile = pdfResult.cover ? createPDFFile(pdfResult.cover.base64 || pdfResult.cover, pdfResult.cover.filename || 'Cover_Letter.pdf') : null;
-        filesLoaded = true;
+        coverFile = buildDocxFileFromText(coverLetterText, 'Cover_Letter.docx', 'cover');
+        filesLoaded = !!cvFile;
         
         // Cache for future use
         chrome.storage.local.set({

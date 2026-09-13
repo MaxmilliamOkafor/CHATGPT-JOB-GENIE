@@ -815,7 +815,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     injectAutofillEngine(tabId)
-      .then((r) => sendResponse({ ok: true, ...r }))
+      .then((r) => sendResponse({ ok: r?.injected === true, ...r }))
       .catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
     return true;
   }
@@ -831,17 +831,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 const AUTOFILL_SCRIPT_ID = 'jg-autofill-engine-v1_5_4';
 const AUTOFILL_STYLE_ID = 'jg-autofill-engine-v1_5_4-css';
-const AUTOFILL_VENDOR_FILES = [
-  'autofill-engine/jg-gate.js',
-  'autofill-engine/ua-enhancement.js',
-  'autofill-engine/constants.js',
-  'autofill-engine/filler.js',
-  'autofill-engine/contents.js',
-];
-const AUTOFILL_VENDOR_CSS = [
-  'autofill-engine/inter.css',
-  'autofill-engine/contents.css',
-];
+const AUTOFILL_VENDOR_FILES = ['ats-platforms.js', 'autofill-core.js', 'application-validator.js', 'autofill-runner.js'];
+const AUTOFILL_VENDOR_CSS = [];
 
 // Hosts where the 7.5 MB vendor bundle would crash heavy SPAs.  Mirror of
 // the EXCLUDE_MATCHES list used for static registration.
@@ -906,7 +897,7 @@ async function injectAutofillEngine(tabId) {
   }
 
   try {
-    await chrome.scripting.insertCSS({
+    if (AUTOFILL_VENDOR_CSS.length) await chrome.scripting.insertCSS({
       target: { tabId, allFrames: true },
       files: AUTOFILL_VENDOR_CSS,
     });
@@ -914,7 +905,7 @@ async function injectAutofillEngine(tabId) {
     console.warn('[JG-Autofill] CSS insert failed:', e.message);
   }
   await chrome.scripting.executeScript({
-    target: { tabId, allFrames: false },
+    target: { tabId, allFrames: true },
     files: AUTOFILL_VENDOR_FILES,
     world: 'ISOLATED',
   });
@@ -962,6 +953,7 @@ async function registerAutofillContentScripts() {
     'https://*.apple.com/careers/*',
     'https://*.salesforce.com/company/careers/*',
     'https://*.stripe.com/jobs/*',
+    'https://*.stripe.com/careers/*',
     'https://*.tiktok.com/careers/*',
     // Generic apply-page heuristic: many ATS embed under /apply or /job paths.
     // We can't safely match these without overmatching, so keep the host list
@@ -996,7 +988,7 @@ async function registerAutofillContentScripts() {
     matches: ATS_MATCHES,
     excludeMatches: EXCLUDE_MATCHES,
     runAt: 'document_idle',
-    allFrames: false,
+    allFrames: true,
     persistAcrossSessions: true,
   };
 
@@ -1218,7 +1210,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const r = await CareersAddressFinder.find({
         companyName: message.companyName || '',
         jdUrl: message.jdUrl || '',
-        maxPages: 4,
+        orgUrl: message.orgUrl || '',
+        maxPages: 8,
       });
       console.log('[JG-Careers] lookup:', message.companyName, '->', r.email || '(none)');
       sendResponse({ ok: true, ...r });
@@ -1228,3 +1221,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   })();
   return true;   // async response
 });
+
