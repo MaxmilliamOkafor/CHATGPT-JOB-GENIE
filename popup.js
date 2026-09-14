@@ -5832,12 +5832,108 @@ class ATSTailor {
   }
 
   /** The posting's requirements, with the furniture taken out. */
+  // ORDINARY ENGLISH IS NOT A SKILL.
+  //
+  // The extractor scores single words as well as phrases, so a benefits
+  // paragraph produced nine chips of its own:
+  //
+  //   "We offer a competitive salary, 25 days paid time off, private
+  //    health insurance and a pension."
+  //   -> offer, competitive, days, paid, time, off, private, health,
+  //      insurance
+  //
+  // and "work closely with analysts and product managers" produced four
+  // more. The junk list only held the PHRASES -- "competitive salary",
+  // "paid time off" -- so none of the words matched, and every one of
+  // them sat in the denominator as a requirement no CV could satisfy.
+  //
+  // The rule is not a bigger list of junk. It is that a single ORDINARY
+  // WORD which the taxonomy does not recognise is not a requirement.
+  // "Python", "dbt" and "Dagster" are not ordinary words. "Data",
+  // "experience", "managers" and "off" are, and none of them names
+  // anything a candidate could evidence. Two-word requirements are
+  // untouched, so "Data Engineering" and "Product Management" survive
+  // while "data" and "product" do not.
+  static get _ORDINARY_WORDS() {
+    if (!this.__ordinaryWords) {
+      this.__ordinaryWords = new Set([
+        'a', 'an', 'the', 'and', 'or', 'but', 'if', 'then', 'than', 'that', 'this',
+        'these', 'those', 'with', 'without', 'for', 'from', 'into', 'onto', 'across',
+        'about', 'over', 'under', 'between', 'within', 'through', 'during', 'while',
+        'able', 'ability', 'access', 'account', 'across', 'action', 'active', 'add',
+        'advanced', 'all', 'also', 'analysts', 'any', 'approach', 'area', 'areas',
+        'around', 'available', 'back', 'base', 'based', 'basic', 'become', 'best',
+        'better', 'big', 'both', 'build', 'building', 'business', 'call', 'candidate',
+        'candidates', 'care', 'career', 'change', 'clear', 'clearly', 'close',
+        'closely', 'colleagues', 'come', 'commercial', 'company', 'competitive',
+        'complete', 'complex', 'confident', 'consider', 'context', 'core', 'correct',
+        'critical', 'culture', 'current', 'data', 'day', 'days', 'deep', 'deliver',
+        'department', 'design', 'detail', 'details', 'different', 'direct', 'drive',
+        'each', 'early', 'easy', 'effective', 'efficient', 'either', 'employee',
+        'employees', 'end', 'end-to-end', 'engineer', 'engineers', 'ensure',
+        'environment', 'equally', 'essential', 'every', 'excellent', 'exciting',
+        'experience', 'expert', 'fast', 'fast-growing', 'field', 'find', 'first',
+        'flexible', 'focus', 'full', 'further', 'future', 'general', 'get', 'give',
+        'global', 'goal', 'goals', 'good', 'great', 'group', 'grow', 'growing',
+        'growth', 'hand', 'hands', 'health', 'help', 'high', 'highly', 'hours',
+        'ideal', 'impact', 'important', 'improve', 'include', 'including',
+        'individual', 'industry', 'insurance', 'internal', 'issue', 'issues', 'join',
+        'key', 'kind', 'know', 'known', 'large', 'lead', 'learn', 'level', 'like',
+        'line', 'long', 'looking', 'love', 'main', 'make', 'manager', 'managers',
+        'many', 'market', 'match', 'matter', 'may', 'meet', 'member', 'members',
+        'mind', 'modern', 'month', 'months', 'more', 'most', 'move', 'much', 'must',
+        'need', 'needs', 'new', 'next', 'non', 'now', 'number', 'off', 'offer',
+        'office', 'often', 'one', 'open', 'order', 'other', 'others', 'out',
+        'outcome', 'outcomes', 'own', 'paid', 'part', 'partner', 'pension', 'people',
+        'per', 'person', 'place', 'plan', 'play', 'point', 'policy', 'position',
+        'possible', 'post', 'practice', 'private', 'problem', 'process', 'product',
+        'products', 'professional', 'programme', 'project', 'provide', 'public',
+        'quality', 'quick', 'range', 'rate', 'ready', 'real', 'really', 'reason',
+        'record', 'related', 'relevant', 'rely', 'report', 'require', 'required',
+        'requirement', 'requirements', 'responsibilities', 'result', 'results',
+        'right', 'role', 'roles', 'run', 'salary', 'same', 'see', 'senior', 'service',
+        'set', 'share', 'short', 'should', 'side', 'similar', 'simple', 'single',
+        'site', 'skill', 'skills', 'small', 'solution', 'solutions', 'some',
+        'someone', 'something', 'soon', 'specific', 'staff', 'stage', 'standard',
+        'start', 'state', 'step', 'still', 'strong', 'success', 'suitable', 'sure',
+        'system', 'systems', 'take', 'task', 'tasks', 'team', 'teams', 'technical',
+        'tell', 'term', 'these', 'thing', 'things', 'think', 'third-party', 'three',
+        'time', 'today', 'together', 'tool', 'tools', 'top', 'total', 'towards',
+        'true', 'try', 'two', 'type', 'understand', 'up', 'us', 'use', 'used',
+        'useful', 'user', 'users', 'using', 'value', 'various', 'very', 'want',
+        'way', 'ways', 'week', 'welcome', 'well', 'what', 'when', 'where', 'which',
+        'who', 'whole', 'why', 'wide', 'will', 'work', 'working', 'world', 'would',
+        'year', 'years', 'you', 'your',
+        // Bare verbs. A posting's "Design, build and maintain ELT
+        // pipelines" scores every one of them as a word; none names a
+        // requirement. The requirement it means says so: System Design,
+        // Data Pipelines.
+        'manage', 'managing', 'support', 'supporting', 'maintain', 'maintaining',
+        'develop', 'developing', 'create', 'creating', 'own', 'owning', 'define',
+        'defining', 'drive', 'driving', 'deliver', 'delivering', 'lead', 'leading',
+        'collaborate', 'communicate', 'contribute', 'partner', 'operate', 'monitor',
+        'optimise', 'optimize', 'scale', 'ship', 'shipping', 'execute', 'enable',
+      ]);
+    }
+    return this.__ordinaryWords;
+  }
+
   static requirementsOnly(list) {
     const junk = this._JUNK_KEYWORDS;
+    const ordinary = this._ORDINARY_WORDS;
+    const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
     return (Array.isArray(list) ? list : []).filter((kw) => {
       const k = String(kw == null ? '' : kw).toLowerCase().trim();
       if (!k || junk.has(k)) return false;
-      return !this.isCriterion(kw);
+      if (this.isCriterion(kw)) return false;
+      // A single ordinary word survives only if the taxonomy knows it as
+      // a requirement -- which is how "Go" and "R" stay while "off" and
+      // "managers" do not.
+      if (k.indexOf(' ') === -1 && ordinary.has(k)) {
+        const known = TX && typeof TX.groupOf === 'function' && TX.groupOf(k);
+        if (!known) return false;
+      }
+      return true;
     });
   }
 

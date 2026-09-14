@@ -36,6 +36,17 @@ for (const f of ['keyword-taxonomy.js', 'dynamic-score.js']) {
 }
 const TX = global.KeywordTaxonomy;
 const DS = global.DynamicScore;
+// requirementsOnly is a static on the popup class, and the rule it
+// applies is part of what a keyword IS, so it is exercised here too.
+const vm = require('vm');
+const _sandbox = {
+  window: { addEventListener() {}, KeywordTaxonomy: TX, DynamicScore: DS },
+  KeywordTaxonomy: TX, document: { addEventListener() {} },
+  console: { log() {}, warn() {}, error() {} },
+};
+vm.runInNewContext(fs.readFileSync(path.join(DIR, 'popup.js'), 'utf8')
+  + '\nthis.P = ATSTailor;', _sandbox);
+const ATSTailor = _sandbox.P;
 
 // The CV from the reported run, in the shape it actually ships.
 const CV = [
@@ -222,6 +233,65 @@ console.log('\nAND A REQUIREMENT WITH NO GROUP CAN NEVER BE SATISFIED');
   for (const term of ['ownership', 'operational efficiency', 'decision making',
     'customer success', 'scrappy']) {
     t('  "' + term + '" has a group', !!TX.groupOf(term), 'still ungrouped');
+  }
+}
+
+console.log('\nORDINARY ENGLISH IS NOT A SKILL');
+{
+  // The extractor scores single WORDS as well as phrases, so a benefits
+  // paragraph produced nine chips of its own -- offer, competitive,
+  // days, paid, time, off, private, health, insurance -- and "work
+  // closely with analysts and product managers" produced four more. The
+  // junk list only held the PHRASES ("competitive salary", "paid time
+  // off"), so none of the words matched and each sat in the denominator
+  // as a requirement nothing could satisfy.
+  const raw = ['python', 'sql', 'aws', 'redshift', 'airflow', 'dagster', 'dbt',
+    'bigquery', 'snowflake', 'clickhouse', 'communication', 'data quality',
+    'excellent communication', 'data engineering', 'data', 'experience', 'SaaS',
+    'fast-growing', 'third-party', 'self-organised', 'pipelines', 'end-to-end',
+    'senior', 'engineer', 'offer', 'competitive', 'days', 'paid', 'time', 'off',
+    'private', 'health', 'insurance', 'closely', 'analysts', 'product', 'managers'];
+  const kept = ATSTailor.requirementsOnly(raw);
+  const labels = TX.dedupe(kept).map((e) => e.label);
+
+  t('  thirty-seven strings are fifteen requirements', labels.length === 15,
+    labels.length + ': ' + labels.join(', '));
+  for (const gone of ['offer', 'competitive', 'days', 'paid', 'time', 'off', 'private',
+    'health', 'insurance', 'closely', 'analysts', 'managers', 'senior', 'engineer',
+    'data', 'experience']) {
+    t('    "' + gone + '" is not a requirement',
+      kept.indexOf(gone) === -1, 'still counted');
+  }
+  for (const want of ['Python', 'SQL', 'AWS', 'Snowflake', 'BigQuery', 'Redshift',
+    'ClickHouse', 'Airflow', 'Dagster', 'dbt', 'Data Engineering', 'Data Quality',
+    'Data Pipelines', 'Communication', 'SaaS']) {
+    t('    ' + want.padEnd(18) + ' survives', labels.indexOf(want) !== -1, labels.join(', '));
+  }
+}
+
+console.log('\nBUT A SHORT WORD THE TABLE KNOWS IS STILL A REQUIREMENT');
+{
+  // The rule is "ordinary AND unknown", not "short". Dropping either
+  // half of that takes a real language with it.
+  for (const want of ['Go', 'R', 'C', 'AI', 'SQL', 'Testing', 'Linux', 'Docker']) {
+    t('  ' + want.padEnd(10) + ' survives because the table knows it',
+      ATSTailor.requirementsOnly([want]).length === 1, 'dropped');
+  }
+  // "Design" and "Lead" are verbs as often as nouns -- this JD's own
+  // "Design, build and maintain ELT pipelines" is the verb -- and the
+  // table does not list either alone, so they go. The requirement a
+  // posting actually means says so: System Design, Product Design.
+  for (const verb of ['design', 'lead', 'build', 'manage', 'support']) {
+    t('  "' + verb + '" alone is not a requirement',
+      ATSTailor.requirementsOnly([verb]).length === 0, 'kept');
+  }
+  t('  ...but "System Design" is',
+    ATSTailor.requirementsOnly(['System Design']).length === 1, 'dropped');
+  // ...and a tool name is not ordinary English, so it never needed the
+  // table to survive in the first place.
+  for (const want of ['Dagster', 'Prefect', 'ClickHouse', 'Snowplow', 'Grafana']) {
+    t('  ' + want.padEnd(10) + ' survives as a proper noun',
+      ATSTailor.requirementsOnly([want]).length === 1, 'dropped');
   }
 }
 

@@ -115,6 +115,10 @@
     ['Linux', 'Linux/Unix', 'Unix', 'Linux Kernel'],
     ['Nginx'], ['Apache'], ['Kafka', 'Apache Kafka'], ['RabbitMQ'],
     ['Airflow', 'Apache Airflow'], ['dbt'], ['Spark', 'Apache Spark'],
+    // Orchestrators a data posting names alongside Airflow. Separate
+    // requirements, because they are separate products: knowing Airflow
+    // is not knowing Dagster, and a CV must not claim otherwise.
+    ['Dagster'], ['Prefect'], ['Luigi'], ['Mage'], ['Flyte'],
     ['Temporal'],
 
     // --- observability and reliability --------------------------------
@@ -135,11 +139,15 @@
     ['Machine Learning', 'ML'],
     ['Deep Learning'], ['NLP', 'Natural Language Processing'],
     ['LLM', 'Large Language Models', 'GenAI', 'Generative AI'],
-    ['Data Engineering'], ['Data Pipelines', 'Data Pipeline'],
+    ['Data Engineering'],
+    ['Data Pipelines', 'Data Pipeline', 'Pipelines', 'Pipeline', 'Ingestion Pipelines'],
     ['ETL', 'Extract Transform Load'], ['ELT', 'Extract Load Transform'],
     ['Data Analysis', 'Data Analytics', 'Analytics'],
     ['Data Science'], ['Data Modelling', 'Data Modeling'],
     ['Data Warehousing', 'Data Warehouse'],
+    // "pipelines" on a data posting means data pipelines. It had no
+    // group at all, so it stood as its own unmatchable requirement.
+    ['Data Quality', 'Data Accuracy', 'Data Integrity', 'Data Validation'],
     ['Power BI', 'PowerBI'], ['Tableau'], ['Looker'], ['Qlik', 'QlikView'],
     ['pandas'], ['NumPy'], ['scikit-learn', 'sklearn'],
     ['TensorFlow'], ['PyTorch'],
@@ -258,7 +266,10 @@
       'Team Leadership', 'Managing a Team'],
     ['Stakeholder Communication', 'Stakeholder Updates'],
     ['SOP', 'Standard Operating Procedures', 'Process Documentation'],
-    ['Data Accuracy', 'Accuracy', 'Quality Control'],
+    // "Accuracy" in an operations posting is care over the output, not
+    // the data-engineering discipline. Data Accuracy belongs to Data
+    // Quality above; this one keeps the general sense.
+    ['Accuracy', 'Quality Control'],
 
     // --- people -------------------------------------------------------
     // "Team leadership" sits with People Leadership above: a posting that
