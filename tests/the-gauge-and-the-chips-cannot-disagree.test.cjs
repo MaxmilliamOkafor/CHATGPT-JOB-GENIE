@@ -39,9 +39,11 @@ require(path.join(DIR, 'keyword-taxonomy.js'));
 require(path.join(DIR, 'dynamic-score.js'));
 
 const el = {};
-const mk = (id) => ({ id, textContent: '', innerHTML: '', setAttribute() {},
-  getAttribute: () => null, addEventListener() {}, querySelectorAll: () => [],
-  classList: { add() {}, remove() {}, contains: () => false } });
+const mk = (id) => { const n = { id, textContent: '', innerHTML: '',
+  setAttribute(k, v) { n[k] = v; },
+  getAttribute: (k) => (k in n ? n[k] : null), addEventListener() {},
+  querySelectorAll: () => [],
+  classList: { add() {}, remove() {}, contains: () => false } }; return n; };
 for (const id of ['matchGaugeCircle', 'matchPercentage', 'matchSubtitle', 'keywordCountBadge',
   'matchPanelProvider', 'highPriorityChips', 'highPriorityCount', 'mediumPriorityChips',
   'mediumPriorityCount', 'lowPriorityChips', 'lowPriorityCount', 'documentsCard',
@@ -181,6 +183,58 @@ console.log('\nFURNITURE IS NOT DRAWN AS A CHIP EITHER');
   t('  ...so it reads 100%', el.matchPercentage.textContent === '100%',
     el.matchPercentage.textContent);
   t('  no benefits line appears as a chip', !/401k|dental|salary/i.test(chipHtml()), chipHtml());
+}
+
+console.log('\nAND MID-RUN IT SHOWS NOTHING AT ALL');
+{
+  // Coverage is measured four times during a tailoring run: on the raw
+  // response, after the evidence pass, after the spelling pass, and on
+  // the delivered document. Each render put a number on screen that was
+  // true of a document that was not finished, so it appeared early,
+  // changed twice and settled somewhere else.
+  popup._coverageFinal = false;
+  render(CV, TIERS);
+  t('  no percentage while the run is in flight',
+    el.matchPercentage.textContent === '\u2026', el.matchPercentage.textContent);
+  t('  ...and no colour on the dial',
+    el.matchGaugeCircle.stroke === '#3f3f5a', String(el.matchGaugeCircle.stroke));
+  t('  ...with the dial empty rather than part-filled',
+    Math.abs(Number(el.matchGaugeCircle['stroke-dashoffset']) - 2 * Math.PI * 45) < 0.01,
+    String(el.matchGaugeCircle['stroke-dashoffset']));
+  t('  ...and the badge says why', /Measuring/.test(el.keywordCountBadge.textContent),
+    el.keywordCountBadge.textContent);
+  t('  ...as does the subtitle',
+    /once the document is final/.test(el.matchSubtitle.textContent),
+    el.matchSubtitle.textContent);
+
+  // And the moment the run finishes, the real answer.
+  popup._coverageFinal = true;
+  render(CV, TIERS);
+  t('  the number appears when the document is final',
+    el.matchPercentage.textContent === '58%', el.matchPercentage.textContent);
+  t('  ...with its colour back', el.matchGaugeCircle.stroke !== '#3f3f5a',
+    String(el.matchGaugeCircle.stroke));
+
+  // A popup reopened after a completed run has no in-memory flag. It
+  // must show the result it stored, not a blank dial.
+  delete popup._coverageFinal;
+  render(CV, TIERS);
+  t('  a restored run shows its result rather than a blank dial',
+    el.matchPercentage.textContent === '58%', el.matchPercentage.textContent);
+}
+
+console.log('\nAND THE FLOW ACTUALLY SETS THE FLAG');
+{
+  const src = fs.readFileSync(path.join(DIR, 'popup.js'), 'utf8');
+  t('  cleared when a tailoring run starts',
+    /async tailorDocuments\([\s\S]{0,1400}this\._coverageFinal = false;/.test(src),
+    'the gauge would never go pending');
+  t('  ...and set when it reaches the end',
+    /Documents prepared[\s\S]{0,400}this\._coverageFinal = true;/.test(src),
+    'the gauge would never come back');
+  t('  ...followed by one more render, so the answer is drawn',
+    /this\._coverageFinal = true;\s*\n\s*this\.updateMatchAnalysisUI\(\);/.test(src),
+    'the flag flips but nothing redraws');
 }
 
 console.log('\nAND AN EMPTY RUN SAYS NOTHING RATHER THAN ZERO');

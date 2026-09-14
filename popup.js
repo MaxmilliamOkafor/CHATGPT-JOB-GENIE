@@ -4754,12 +4754,27 @@ class ATSTailor {
     const count = Math.max(0, Math.floor(Number(total) || 0));
     const hits = Math.min(count, Math.max(0, Math.floor(Number(matched) || 0)));
     const coverage = count ? Math.round(hits / count * 100) : 0;
+    // Mid-run the coverage describes a document that is not finished:
+    // the evidence pass, the spelling pass and the renderer are all
+    // still to come. Drawn grey and empty until it is the real answer.
+    // Defaults to final, so a run restored from storage after the popup
+    // is reopened shows its result rather than a blank dial.
+    const pending = this._coverageFinal === false;
     const circle = document.getElementById('matchGaugeCircle');
     if (circle) {
-      circle.setAttribute('stroke-dashoffset', String(2 * Math.PI * 45 * (1 - coverage / 100)));
-      circle.setAttribute('stroke', coverage >= 90 ? '#6ee7b7' : '#fcd34d');
+      circle.setAttribute('stroke-dashoffset',
+        String(2 * Math.PI * 45 * (pending ? 1 : 1 - coverage / 100)));
+      circle.setAttribute('stroke',
+        pending ? '#3f3f5a' : (coverage >= 90 ? '#6ee7b7' : '#fcd34d'));
     }
     const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+    if (pending) {
+      set('matchPercentage', '\u2026');
+      set('matchSubtitle', 'Tailoring. Coverage is measured once the document is final.');
+      set('keywordCountBadge', 'Measuring\u2026');
+      set('matchPanelProvider', this.aiProvider === 'kimi' ? 'Kimi K2' : 'OpenAI');
+      return;
+    }
     set('matchPercentage', count ? `${coverage}%` : '\u2014');
     const shortfall = Math.max(0, count - hits);
     set('matchSubtitle', count
@@ -6518,6 +6533,19 @@ class ATSTailor {
       this.showToast('No job detected', 'error');
       return;
     }
+    // THE GAUGE IS AN ANSWER, NOT A PROGRESS BAR.
+    //
+    // Coverage is measured four times during a run -- once on the raw
+    // response, again after the evidence pass, again after the spelling
+    // pass, and again on the delivered document. Each one rendered the
+    // panel, so a number appeared early, changed twice, and settled
+    // somewhere else. Every one of those intermediate readings is true
+    // of a document that is not finished, and none of them is the
+    // answer to the question the gauge is asked.
+    //
+    // It stays colourless and blank until the run ends. Everything is
+    // still computed and logged on the way through.
+    this._coverageFinal = false;
 
     // ATOMIC guard: prevent concurrent tailoring runs.  Multiple call
     // sites (Extract & Apply button, post-login auto-trigger, content.js
@@ -7563,6 +7591,11 @@ class ATSTailor {
       }
 
       updateProgress(100, 'Documents prepared. Review missing requirements and confirm all facts before applying.');
+
+      // The document is final, so the number now describes something
+      // that will not change. Show it.
+      this._coverageFinal = true;
+      this.updateMatchAnalysisUI();
 
       // WITHOUT THE BLOBS. This key exists so the popup can redisplay the
       // last run after it is reopened; it does not need the base64,
