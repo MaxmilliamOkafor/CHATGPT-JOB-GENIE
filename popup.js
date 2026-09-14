@@ -5940,7 +5940,11 @@ class ATSTailor {
       // its own.
       const BARE_LEVEL = /^(?:b\.?sc|m\.?sc|b\.?a|m\.?a|b\.?eng|m\.?eng|mba|m\.?b\.?a|ph\.?d|llb|llm|hnd|bachelor(?:'?s)?(?:\s+degree)?|master(?:'?s)?(?:\s+degree)?|doctorate|diploma|certificate)\.?$/i;
       if (field && degree && BARE_LEVEL.test(degree)) {
-        degree = degree + ' ' + field;
+        // "BSc Computer Science" reads correctly; "Bachelor's degree
+        // Computer Science" does not. A spelled-out level takes "in",
+        // an abbreviation does not.
+        const spelled = /(?:bachelor|master|doctorate|diploma|certificate)/i.test(degree);
+        degree = degree + (spelled ? ' in ' : ' ') + field;
       } else if (field && !degree) {
         degree = field;
       }
