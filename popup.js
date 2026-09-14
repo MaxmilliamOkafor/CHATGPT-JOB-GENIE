@@ -4539,6 +4539,16 @@ class ATSTailor {
       'preferred', 'required', 'requirements', 'responsibilities', 'plus', 'etc',
       'years', 'year', 'new', 'well', 'high', 'must', 'ideal', 'ideally', 'you',
       'your', 'our', 'we', 'they', 'this', 'that', 'with', 'and', 'for', 'the']);
+    // THE RESCUE RAN AFTER THE RULE IT WAS RESCUING FROM.
+    //
+    // This was two passes: the first dropped any single word under three
+    // characters, the second let "ai", "ml", "bi", "qa" and friends back
+    // in. The second only ever saw what the first had already kept, so
+    // AI was deleted and never restored. The CHIPS do not use this
+    // helper, so a posting asking for AI drew a green AI chip above a
+    // badge counting one fewer than the chips showed. One pass now, with
+    // the allow-list part of the same decision.
+    const SHORT_BUT_REAL = new Set(['ai', 'ml', 'bi', 'qa', 'ux', 'ui', 'go', 'r', 'c']);
     const seen = new Set();
     const cleaned = (Array.isArray(list) ? list : []).filter((raw) => {
       const k = String(raw == null ? '' : raw).trim();
@@ -4548,15 +4558,10 @@ class ATSTailor {
       // A single short word that is grammar rather than a skill.
       if (lc.indexOf(' ') === -1) {
         if (junk.has(lc)) return false;
-        if (lc.length < 3) return false;           // "ai" and "ml" are real; guarded below
+        if (lc.length < 3 && !SHORT_BUT_REAL.has(lc)) return false;
       }
       seen.add(lc);
       return true;
-    }).filter((k) => {
-      // Two-letter terms that ARE skills survive the length rule above.
-      const lc = String(k).toLowerCase();
-      return lc.indexOf(' ') !== -1 || lc.length >= 3
-        || ['ai', 'ml', 'bi', 'qa', 'ux', 'ui', 'go', 'r', 'c'].indexOf(lc) !== -1;
     });
     // ONE ENTRY PER REQUIREMENT, UNDER ITS OWN NAME.
     //
@@ -4590,7 +4595,14 @@ class ATSTailor {
     const claimed = new Set();
     const tier = (list) => {
       const out = [];
-      for (const entry of TX.dedupe(Array.isArray(list) ? list : [])) {
+      // THE CHIPS AND THE GAUGE HAVE TO BE COUNTING THE SAME THINGS.
+      //
+      // The gauge measured requirementsOnly(all) and the chips rendered
+      // the raw tiers, so benefits lines and screening criteria appeared
+      // as chips that the gauge had already discarded. Nineteen chips
+      // over a badge reading "10 of 10" is that disagreement on screen.
+      const asked = ATSTailor.requirementsOnly(Array.isArray(list) ? list : []);
+      for (const entry of TX.dedupe(asked)) {
         if (claimed.has(entry.key)) continue;      // already shown, higher up
         claimed.add(entry.key);
         out.push(entry.label);
@@ -4629,16 +4641,30 @@ class ATSTailor {
 
   _renderMatchAnalysis() {
     this.prepareDocumentText();
-    const tracked = this.generatedDocuments.keywords?.all;
-    if (tracked?.length) {
-      const current = this.calculateMatchScore(this.generatedDocuments.cv || '', { all: tracked });
+    // ONE REQUIREMENT SET, MEASURED ONCE, SHOWN ONCE.
+    //
+    // The gauge used to measure requirementsOnly(keywords.all) while the
+    // chips rendered the raw tiers through a separate dedupe and then
+    // re-tested each label against the CV on its own. Two lists, two
+    // matchers, two answers: nineteen chips above a badge reading
+    // "10 of 10".
+    //
+    // The tiers are canonicalised FIRST, and whatever survives is both
+    // what gets measured and what gets drawn. The two cannot disagree
+    // because there is only one list.
+    const rawKeywords = this.generatedDocuments.keywords || null;
+    const canonical = rawKeywords ? this.canonicaliseTiers(rawKeywords) : null;
+    if (canonical?.all?.length) {
+      const current = this.calculateMatchScore(this.generatedDocuments.cv || '',
+        { all: canonical.all });
       Object.assign(this.generatedDocuments, current);
     }
     const matchScore = this.generatedDocuments.matchScore || 0;
     const matchedKeywords = this.cleanKeywordList(this.generatedDocuments.matchedKeywords);
     const missingKeywords = this.cleanKeywordList(this.generatedDocuments.missingKeywords);
-    const keywords = this.generatedDocuments.keywords || null;
-    const totalKeywords = matchedKeywords.length + missingKeywords.length;
+    const keywords = canonical;
+    const totalKeywords = canonical?.all?.length
+      || (matchedKeywords.length + missingKeywords.length);
     
     // ALWAYS show the AI Match Analysis panel when we have any match data
     const documentsCard = document.getElementById('documentsCard');
@@ -4712,57 +4738,36 @@ class ATSTailor {
   // are counted, named and shown on their own line, because a candidate
   // deciding whether to apply needs to see them -- they are just not
   // scored as a failure of the tailoring, which is not what they are.
+  // ██ THE GAUGE COUNTS THE CHIPS ██
+  //
+  // 100% has to mean every chip is green. Anything else and the two
+  // halves of the same panel contradict each other in front of the
+  // person trying to read them.
+  //
+  // An earlier version divided by "requirements the profile can
+  // support" instead of by all of them, so a run could read 100% with
+  // red chips underneath it. It also depended on _unevidencedKeywords,
+  // which lives in memory and is gone when the popup is reopened -- so
+  // the SAME document scored differently on a refresh. Both are gone:
+  // the denominator is the requirement list, nothing else.
   updateMatchGauge(score, matched, total) {
     const count = Math.max(0, Math.floor(Number(total) || 0));
     const hits = Math.min(count, Math.max(0, Math.floor(Number(matched) || 0)));
-    // Only those still absent: a term the generator placed after the
-    // injection pass is on the CV and is not a gap any more.
-    const stillMissing = new Set((Array.isArray(this.generatedDocuments?.missingKeywords)
-      ? this.generatedDocuments.missingKeywords : [])
-      .map((k) => String(k == null ? '' : k).trim().toLowerCase()));
-    const outside = (Array.isArray(this._unevidencedKeywords) ? this._unevidencedKeywords : [])
-      .map((k) => String(k == null ? '' : k).trim())
-      // Intersected with what is STILL missing, never trusted on its own.
-      // The list is written by the injection pass and survives until the
-      // next one, so without a current missing list to check it against
-      // it may describe a previous job -- and a stale name here shrinks
-      // the denominator for a requirement that was actually satisfied.
-      .filter((k) => k && stillMissing.has(k.toLowerCase()));
-    const supportable = Math.max(hits, count - outside.length);
-    const coverage = supportable ? Math.round(hits / supportable * 100) : (count ? 0 : 0);
+    const coverage = count ? Math.round(hits / count * 100) : 0;
     const circle = document.getElementById('matchGaugeCircle');
     if (circle) {
       circle.setAttribute('stroke-dashoffset', String(2 * Math.PI * 45 * (1 - coverage / 100)));
       circle.setAttribute('stroke', coverage >= 90 ? '#6ee7b7' : '#fcd34d');
     }
     const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
-    set('matchPercentage', count ? `${coverage}%` : '—');
-    // WHY IT IS SHORT, NOT JUST THAT IT IS.
-    //
-    // "8 more supported keywords needed" names a number and no action.
-    // The coverage pass already added everything the saved profile
-    // evidences, so whatever is still missing is missing for one
-    // reason: the profile does not record it. Saying so turns the gauge
-    // into an instruction -- add it to the profile and re-run -- rather
-    // than a score to stare at.
-    const shortfall = Math.max(0, supportable - hits);
-    // WHAT IS SHORT, NOT A VERDICT ON THE CANDIDATE.
-    //
-    // This used to enumerate the requirements his background does not
-    // cover, which is a list nobody asked for and reads as a judgement
-    // rather than a status. The panel says whether the DOCUMENT is
-    // finished. The chips above already show every requirement and which
-    // of them the CV carries.
+    set('matchPercentage', count ? `${coverage}%` : '\u2014');
+    const shortfall = Math.max(0, count - hits);
     set('matchSubtitle', count
-      ? (supportable === 0
-        ? `None of the ${count} requirements in this posting are recorded in your profile.`
-        : shortfall === 0
-          ? (supportable < count
-            ? 'Fully tailored: every requirement your profile records is on the CV.'
-            : 'Fully tailored: every requirement the posting listed is on the CV.')
-          : `${shortfall} supported requirement(s) not yet on the CV.`)
+      ? (shortfall === 0
+        ? 'Every requirement the posting listed is on the CV.'
+        : `${shortfall} of ${count} requirement(s) not on the CV.`)
       : 'No keywords available to measure.');
-    set('keywordCountBadge', `${hits} of ${supportable || count} keywords matched`);
+    set('keywordCountBadge', `${hits} of ${count} keywords matched`);
     set('matchPanelProvider', this.aiProvider === 'kimi' ? 'Kimi K2' : 'OpenAI');
   }
 
