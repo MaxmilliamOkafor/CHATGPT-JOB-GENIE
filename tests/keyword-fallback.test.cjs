@@ -35,7 +35,15 @@ t('AI extraction was found', ai.length>500);
 t('an empty response is retried while attempts remain',
   /!keywords\.all\.length && attempt < MAX_RETRIES/.test(ai), 'a transient empty became a hard failure');
 t('but it still returns on the last attempt, so the caller can fall back',
-  /attempt < MAX_RETRIES\)\s*\{[\s\S]{0,200}\}\s*return keywords;/.test(ai), 'would throw past the fallback');
+  /attempt < MAX_RETRIES\)\s*\{[\s\S]{0,200}\}[\s\S]{0,800}?\n\s*return [\s\S]{0,240}keywords;/.test(ai),
+  'would throw past the fallback');
+// And an empty result must stay empty on the way out. The taxonomy sweep
+// runs on this path, and sweeping nothing into sixteen requirements would
+// read as success and suppress the fallback -- which sweeps too, on top of
+// its own results, and so returns the better list.
+t('...and an empty result is not filled in on the way past',
+  /keywords\.all\.length\s*\?[\s\S]{0,240}:\s*keywords;/.test(ai),
+  'an empty AI result would look like an answer');
 
 // ---- 3. an empty result must never be cached --------------------------
 // The local extractor caches by job URL. Caching an empty result means one

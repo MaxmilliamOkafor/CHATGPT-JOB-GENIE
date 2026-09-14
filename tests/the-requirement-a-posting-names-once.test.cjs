@@ -125,10 +125,32 @@ console.log('\nIT ADDS TO THE EXTRACTOR, IT DOES NOT REPLACE IT');
     JSON.stringify({ all: after.all.length, h: after.highPriority.length,
       m: after.mediumPriority.length, l: after.lowPriority.length }));
 
-  t('  ...and the flow runs it inside extraction',
-    /this\.sweepKnownRequirements\(jobDescription, keywords\)/
-      .test(fs.readFileSync(path.join(DIR, 'popup.js'), 'utf8')),
-    'the pass exists but nothing calls it');
+  t('  anything the caller carried through survives',
+    popup.sweepKnownRequirements(POSTING,
+      Object.assign({ structured: { hard: ['x'] } }, before)).structured.hard[0] === 'x',
+    'the AI path\'s structured breakdown was dropped');
+}
+
+console.log('\nAND IT RUNS ON WHICHEVER PATH PRODUCED THE KEYWORDS');
+{
+  // The AI endpoint is the PRIMARY path -- local extraction is only its
+  // fallback -- so a sweep wired into extractKeywordsOptimized alone ran
+  // on almost no real tailoring run. A model reading a posting misses a
+  // requirement stated once for the same reason a frequency score does:
+  // it summarises what the posting is about.
+  const src = fs.readFileSync(path.join(DIR, 'popup.js'), 'utf8');
+  const calls = (src.match(/this\.sweepKnownRequirements\(/g) || []).length;
+  t('  local extraction runs it',
+    /this\.sweepKnownRequirements\(jobDescription, keywords\)/.test(src),
+    'the pass exists but local extraction does not call it');
+  t('  the AI tailoring path runs it too',
+    /this\.sweepKnownRequirements\(this\.currentJob\.description, keywords\)/.test(src),
+    'the primary path returns the model\'s list unswept');
+  t('  ...but leaves an empty AI result empty, so the fallback still fires',
+    /keywords\.all\.length\s*\?[\s\S]{0,240}:\s*keywords;/.test(src),
+    'sweeping nothing into requirements would hide the failure');
+  t('  ...and so does the AI keywords button',
+    calls >= 3, 'only ' + calls + ' of the three keyword paths sweep');
 }
 
 console.log('\nEVERY REQUIREMENT IT CAN ADD HAS A SKILLS LINE TO LAND ON');

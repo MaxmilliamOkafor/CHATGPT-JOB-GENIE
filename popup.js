@@ -5336,7 +5336,10 @@ class ATSTailor {
     const base = keywords && Array.isArray(keywords.all) ? keywords : {
       all: [], highPriority: [], mediumPriority: [], lowPriority: [],
     };
-    if (!TX || typeof TX.sweep !== 'function') return base;
+    // The taxonomy is a plain script with no network and no failure mode,
+    // but this runs on the path that produces every tailoring, so it
+    // returns what it was given rather than taking the run down with it.
+    if (!TX || typeof TX.sweep !== 'function' || !jobDescription) return base;
 
     // The taxonomy's own identity for a requirement, so a group already
     // represented is not added a second time under its canonical name,
@@ -5352,12 +5355,15 @@ class ATSTailor {
     }
     if (!added.length) return base;
 
-    const out = {
+    // Spread first, so anything the caller carried that this pass knows
+    // nothing about -- the AI path's `structured` breakdown, above all --
+    // survives rather than being silently dropped on the way through.
+    const out = Object.assign({}, base, {
       all: base.all.concat(added.map((a) => a.label)),
       highPriority: (base.highPriority || []).slice(),
       mediumPriority: (base.mediumPriority || []).slice(),
       lowPriority: (base.lowPriority || []).slice(),
-    };
+    });
     for (const { label, hits } of added) {
       // Named more than once is the posting emphasising it; named once is
       // still a requirement, just not the loudest one.
@@ -5577,14 +5583,17 @@ class ATSTailor {
       }
       
       // Store structured keywords for UI display
-      const keywords = {
+      // Swept for the same reason the tailoring path is: what the button
+      // shows and what the tailoring uses have to be the same list, or
+      // the chips disagree with the document.
+      const keywords = this.sweepKnownRequirements(this.currentJob.description, {
         all: result.all,
         highPriority: result.highPriority || [],
         mediumPriority: result.mediumPriority || [],
         lowPriority: result.lowPriority || [],
         structured: result.structured, // Full Resume-Matcher style breakdown
-      };
-      
+      });
+
       this.generatedDocuments.structuredKeywords = keywords;
       this.generatedDocuments.keywords = keywords;
       this.generatedDocuments.missingKeywords = keywords.all;
@@ -5728,7 +5737,21 @@ class ATSTailor {
         if (!keywords.all.length && attempt < MAX_RETRIES) {
           throw new Error('AI returned no keywords (attempt ' + (attempt + 1) + ')');
         }
-        return keywords;
+        // THE SWEEP HAS TO RUN ON WHICHEVER PATH PRODUCED THE KEYWORDS.
+        //
+        // This is the PRIMARY path -- local extraction is only its
+        // fallback -- so a sweep wired only into extractKeywordsOptimized
+        // ran on almost no real tailoring run. A language model reading a
+        // posting misses a requirement stated once for the same reason a
+        // frequency score does: it summarises what the posting is about.
+        //
+        // An EMPTY result is still returned empty. The sweep would fill it
+        // and hide the failure, when what the caller does with nothing is
+        // fall back to local extraction -- which runs the sweep too, on
+        // top of its own results, and so is strictly the better list.
+        return keywords.all.length
+          ? this.sweepKnownRequirements(this.currentJob.description, keywords)
+          : keywords;
         
       } catch (error) {
         lastError = error;
