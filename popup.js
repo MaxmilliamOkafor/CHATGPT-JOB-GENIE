@@ -4605,10 +4605,42 @@ class ATSTailor {
   /**
    * OPTIMIZED: Update match gauge with animation
    */
+  // ██ THE METER MEASURES THE TAILORING, NOT THE CANDIDATE ██
+  //
+  // It used to divide by every requirement the posting listed, which
+  // meant a short-term-rental company asking for short-term-rental
+  // experience capped the reading at 47% no matter how perfectly the CV
+  // was written. That number answered a question nobody asked: it rated
+  // how well a career matches a job, on a panel whose only job is to
+  // say whether the document was tailored properly.
+  //
+  // So the gauge now reads COMPLETENESS: of the requirements this
+  // background can actually support, how many reached the page. That
+  // hits 100% exactly when the tool has done everything available to
+  // it, which is the thing worth knowing and the thing worth acting on.
+  //
+  // Nothing is hidden to get there. Requirements outside the background
+  // are counted, named and shown on their own line, because a candidate
+  // deciding whether to apply needs to see them -- they are just not
+  // scored as a failure of the tailoring, which is not what they are.
   updateMatchGauge(score, matched, total) {
     const count = Math.max(0, Math.floor(Number(total) || 0));
     const hits = Math.min(count, Math.max(0, Math.floor(Number(matched) || 0)));
-    const coverage = count ? Math.round(hits / count * 100) : 0;
+    // Only those still absent: a term the generator placed after the
+    // injection pass is on the CV and is not a gap any more.
+    const stillMissing = new Set((Array.isArray(this.generatedDocuments?.missingKeywords)
+      ? this.generatedDocuments.missingKeywords : [])
+      .map((k) => String(k == null ? '' : k).trim().toLowerCase()));
+    const outside = (Array.isArray(this._unevidencedKeywords) ? this._unevidencedKeywords : [])
+      .map((k) => String(k == null ? '' : k).trim())
+      // Intersected with what is STILL missing, never trusted on its own.
+      // The list is written by the injection pass and survives until the
+      // next one, so without a current missing list to check it against
+      // it may describe a previous job -- and a stale name here shrinks
+      // the denominator for a requirement that was actually satisfied.
+      .filter((k) => k && stillMissing.has(k.toLowerCase()));
+    const supportable = Math.max(hits, count - outside.length);
+    const coverage = supportable ? Math.round(hits / supportable * 100) : (count ? 0 : 0);
     const circle = document.getElementById('matchGaugeCircle');
     if (circle) {
       circle.setAttribute('stroke-dashoffset', String(2 * Math.PI * 45 * (1 - coverage / 100)));
@@ -4624,16 +4656,27 @@ class ATSTailor {
     // reason: the profile does not record it. Saying so turns the gauge
     // into an instruction -- add it to the profile and re-run -- rather
     // than a score to stare at.
-    const blocked = Array.isArray(this._unevidencedKeywords) ? this._unevidencedKeywords.length : 0;
-    const shortfall = Math.max(0, Math.ceil(count * 0.9) - hits);
+    const blocked = outside.length;
+    const shortfall = Math.max(0, supportable - hits);
     set('matchSubtitle', count
-      ? (coverage >= 90
-        ? '90-100% coverage target reached. Review the tailored CV.'
-        : (blocked
-          ? `Below 90% target: ${shortfall} more needed. ${blocked} posting term(s) are not in your saved profile -- add any you genuinely have, then tailor again.`
-          : `Below 90% target: ${shortfall} more supported keywords needed.`))
+      // Nothing the posting asked for is in this background at all.
+      // "Fully tailored" is vacuously true there and reads as a boast
+      // beside a zero, so it says the real thing instead.
+      ? (supportable === 0
+        ? `None of the ${count} requirements in this posting are in your profile. `
+          + 'This may not be the right role, or your profile may be missing what you have.'
+        : shortfall === 0
+        ? (blocked
+          ? `Fully tailored: every requirement your profile supports is on the CV. `
+            + `${blocked} more (${outside.slice(0, 3).join(', ')}${blocked > 3 ? ', ...' : ''}) `
+            + `are not in your background - add any you genuinely have below.`
+          : 'Fully tailored: every requirement the posting listed is on the CV.')
+        : `${shortfall} supported requirement(s) not yet on the CV.`
+          + (blocked ? ` A further ${blocked} are not in your background.` : ''))
       : 'No keywords available to measure.');
-    set('keywordCountBadge', `${hits} of ${count} keywords matched`);
+    set('keywordCountBadge', blocked
+      ? `${hits} of ${supportable} you can evidence  ·  ${blocked} outside your background`
+      : `${hits} of ${count} keywords matched`);
     set('matchPanelProvider', this.aiProvider === 'kimi' ? 'Kimi K2' : 'OpenAI');
     // The gap section is the newest thing on this panel and the panel
     // is on the tailoring flow's own stack. Nothing drawn here is worth
@@ -4666,7 +4709,8 @@ class ATSTailor {
     // Only what is STILL absent. A term the generator managed to place
     // after the injection pass is on the CV, and asking for it back
     // would be asking twice for something already done.
-    const stillMissing = new Set((this.generatedDocuments?.missingKeywords || [])
+    const stillMissing = new Set((Array.isArray(this.generatedDocuments?.missingKeywords)
+      ? this.generatedDocuments.missingKeywords : [])
       .map((k) => String(k == null ? '' : k).trim().toLowerCase()));
     const gap = (Array.isArray(this._unevidencedKeywords) ? this._unevidencedKeywords : [])
       .map((k) => String(k == null ? '' : k).trim())
@@ -6242,6 +6286,10 @@ class ATSTailor {
   }
 
   fastKeywordInjection(cvText, keywords, missingKeywords) {
+    // Every path through here replaces the list, including the two early
+    // returns below. Leaving a previous job's names in place let them
+    // reach the next run's gauge and gap panel.
+    this._unevidencedKeywords = [];
     if (!missingKeywords || missingKeywords.length === 0) {
       return { tailoredCV: cvText, injectedKeywords: [], reviewKeywords: [] };
     }
