@@ -933,7 +933,25 @@
   // thing while the code does another -- which has already happened twice
   // in this extension.
   const DEFAULT_ENABLED = false;
-  const DEFAULT_PROVIDER = 'closely';
+  // THE DEFAULT HAS TO BE ABLE TO ANSWER THE QUESTION BEING ASKED.
+  //
+  // Closely was the default because it needs no dashboard key, not
+  // because it fits. Its declared capability is profile -> email, and
+  // searchByCompany is false: it cannot perform the FIRST step, finding
+  // who to look up. This lookup only ever runs when the posting, its
+  // structured data and the employer's careers page have all published
+  // nothing -- which is precisely the case where no named poster is
+  // available either, so Closely arrives with nothing to work from.
+  //
+  // Hunter searches by DOMAIN and filters to the HR department, and the
+  // domain is the one thing that is reliably known by then. It is the
+  // only provider here whose first step matches the situation the
+  // lookup exists for.
+  //
+  // This changes nothing until a credential is saved: enrichment stays
+  // off by default, and a user who already chose a provider keeps it,
+  // because a stored config is never overwritten by these constants.
+  const DEFAULT_PROVIDER = 'hunter';
 
   function _withDefaults(c) {
     const out = c || {};

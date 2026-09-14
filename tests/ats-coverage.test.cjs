@@ -111,11 +111,23 @@ t('a skipped provider is recorded rather than omitted',
 t('the on-demand run bypasses the cache',
   /findContacts\(ctx,\s*\{\s*noCache:\s*true\s*\}\)/.test(popupJs), 'would report a stale answer');
 
-// Closely is the selected provider by default, and provider lookup requires explicit opt-in.
-// Asserted against the exported constants rather than a literal, so the
-// default cannot be changed in one place and left stale in another.
-t('Closely is the default provider', /DEFAULT_PROVIDER = 'closely'/.test(enrich),
-  'default is something else');
+// THE DEFAULT PROVIDER HAS TO BE ABLE TO ANSWER THE QUESTION ASKED.
+//
+// Closely held this slot because it needs no dashboard key, not because
+// it fits. Its searchByCompany is false: it cannot perform the FIRST
+// step, finding who to look up. The lookup only ever runs when the
+// posting, its structured data and the employer's careers page have all
+// published nothing, which is exactly when there is no named poster
+// either -- so Closely arrived with nothing to work from.
+//
+// Hunter searches by domain and filters to the HR department, and the
+// domain is the one thing reliably known by then. Provider lookup still
+// requires explicit opt-in either way.
+t('the default provider is one that can search by company',
+  /DEFAULT_PROVIDER = 'hunter'/.test(enrich), 'default is something else');
+t('...and it is not declared search-incapable',
+  !/hunter:\s*\{[\s\S]{0,2000}?searchByCompany:\s*false/.test(enrich),
+  'the default cannot perform the first step');
 t('provider lookup ships disabled until explicitly enabled', /DEFAULT_ENABLED = false/.test(enrich));
 t('no stale contactout fallback overrides it', !/\|\| 'contactout'/.test(enrich),
   "a leftover || 'contactout' would win over the declared default");
