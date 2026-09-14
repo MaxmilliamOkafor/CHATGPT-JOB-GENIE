@@ -233,6 +233,8 @@
     ['Customer Success', 'Client Success'],
     ['Internal Tools', 'Internal Users', 'Internal Platform', 'Internal Tooling',
       'Building for Internal Users', 'Internal Products'],
+    ['Vendor Integration', 'Third-party Integration', 'Partner Integration',
+      'Third Party Integration', 'External Integrations'],
     ['Team Restructuring', 'Reorganisation', 'Reorganization', 'Team Reorg'],
     ['Bias for Action', 'Sense of Urgency'],
     ['Escalation Management', 'Issue Resolution', 'Operational Resolution',
@@ -631,6 +633,11 @@
     // Tools whose users sit inside the company. "Rewrote the internal
     // campaign diagnostics tool used by sales engineers" is building for
     // internal users, whatever words the posting chose for it.
+    // Wiring somebody else's service into yours. The tools differ every
+    // time; the work is the same.
+    'Vendor Integration': ['integrated', 'integration with', 'third-party API',
+      'third party api', 'API integration', 'connected the', 'Kafka', 'webhook',
+      'AWS Transcribe', 'FLUX Kontext'],
     'Internal Tools': ['internal tool', 'internal campaign', 'internal platform',
       'internal dashboard', 'internal users', 'internal-facing', 'developer platform',
       'used by sales engineers', 'used by the team', 'deployment tooling'],

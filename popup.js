@@ -5758,6 +5758,25 @@ class ATSTailor {
         'apply now', 'submit resume', 'cover letter', 'interview',
         'can-do attitude', 'people person', 'go above and beyond',
         'think outside the box', 'hit the ground running', 'wear many hats',
+        // A PERSONALITY ADJECTIVE IS NOT A REQUIREMENT.
+        //
+        // "tenacious", "scrappy" and "self-organised" arrived as chips
+        // and sat red forever. Nothing can satisfy them: an applicant
+        // tracking system does not screen on them, no CV line evidences
+        // them, and putting them in a skills section is how "Proactive"
+        // and "Accuracy" ended up listed beside Kubernetes. They
+        // describe the person a posting hopes to meet, not work anyone
+        // has done.
+        //
+        // The line drawn: an adjective about the candidate goes; a
+        // PRACTICE stays. Collaboration, communication, mentorship,
+        // ownership and decision making are things you do and can point
+        // at. Tenacity is not.
+        'tenacious', 'tenacity', 'scrappy', 'scrappiness', 'gritty', 'grit',
+        'self-organised', 'self-organized', 'self-starter', 'self starter',
+        'humble', 'curious', 'curiosity', 'resilient', 'resilience',
+        'adaptable', 'adaptability', 'personable', 'hard-working', 'hardworking',
+        'ambitious', 'entrepreneurial', 'pragmatic', 'hungry', 'bias for action',
       ]);
       // "Reliability" used to sit in this list, read as the soft sense a
       // posting means when it calls a person reliable. On a platform or
