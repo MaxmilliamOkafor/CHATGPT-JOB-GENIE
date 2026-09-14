@@ -221,6 +221,17 @@
     ['KPI', 'KPIs', 'Key Performance Indicators', 'Metrics', 'Performance Metrics'],
     ['Continuous Improvement', 'Process Improvement', 'Process Optimisation', 'Process Optimization'],
     ['Operational Excellence'], ['Lean'], ['Six Sigma'],
+    // Postings ask for these constantly and none had a group, so each
+    // sat in the denominator with nothing in the world able to satisfy
+    // it. The adjective and the abstract noun resolve to one entry
+    // through the rules above, so "scrappy" and "scrappiness" are one
+    // requirement rather than two.
+    ['Operational Efficiency', 'Efficiency'],
+    ['Ownership', 'Accountability', 'End-to-end Ownership', 'Take Ownership'],
+    ['Scrappy', 'Resourceful', 'Resourcefulness', 'Scrappiness'],
+    ['Decision Making', 'Decision-Making', 'Judgement', 'Judgment'],
+    ['Customer Success', 'Client Success'],
+    ['Bias for Action', 'Sense of Urgency'],
     ['Escalation Management', 'Issue Resolution', 'Operational Resolution',
       'Query Resolution', 'Case Management'],
     // "feedback" and "team performance" arrived as separate chips on one
@@ -317,11 +328,53 @@
    * different requirement, and the only words allowed to fall away are
    * the closed, dull list above.
    */
+  // A COMPOUND MODIFIER IS THE SAME REQUIREMENT AS ITS HEAD NOUN.
+  //
+  // One posting produced "AI" and "AI-driven" as two chips and the
+  // denominator counted both, so a CV that plainly said AI could reach
+  // at most half of that pair. "AI-driven" is not a second thing to
+  // know; it is the same thing written as an adjective.
+  //
+  // Applied ONLY after the exact and qualifier-stripped lookups have
+  // failed, so a compound that genuinely names its own requirement --
+  // "Remote-first" is a way of working, not a kind of remote -- keeps
+  // the group it is listed under.
+  // "native" is deliberately absent: cloud-native names an architecture
+  // rather than a degree of cloud, and folding it would claim a CV that
+  // merely mentions AWS had built for it.
+  const COMPOUND_TAIL = /[-\s](driven|led|focused|focussed|centric|centred|centered|based|enabled|powered|oriented|minded|savvy|heavy)$/i;
+
+  // And an abstract noun is the same requirement as its adjective.
+  // "Scrappy" and "scrappiness" arrived as two chips on one posting.
+  const ABSTRACT_TAIL = /(?:iness|ness)$/i;
+
+  function _deCompound(term) {
+    const t = norm(term);
+    const m = COMPOUND_TAIL.exec(t);
+    return m ? t.slice(0, m.index).trim() : '';
+  }
+
+  function _deAbstract(term) {
+    const t = norm(term);
+    if (!ABSTRACT_TAIL.test(t) || t.length < 6) return '';
+    // scrappiness -> scrappy, resourcefulness -> resourceful
+    return /iness$/i.test(t) ? t.replace(/iness$/i, 'y') : t.replace(/ness$/i, '');
+  }
+
   function groupIndexOf(term) {
     const exact = BY_FORM.get(tight(term));
     if (exact !== undefined) return exact;
     const stripped = BY_FORM.get(tight(stripQualifiers(term)));
-    return stripped === undefined ? null : stripped;
+    if (stripped !== undefined) return stripped;
+    for (const reduce of [_deCompound, _deAbstract]) {
+      const head = reduce(term);
+      if (!head) continue;
+      const hit = BY_FORM.get(tight(head));
+      if (hit !== undefined) return hit;
+      const q = BY_FORM.get(tight(stripQualifiers(head)));
+      if (q !== undefined) return q;
+    }
+    return null;
   }
 
   function groupOf(term) {
@@ -572,6 +625,13 @@
       'error budget', 'month-end reporting'],
     'Escalation Management': ['incident response', 'triage', 'escalated', 'root cause',
       'recurring failure', 'backlog'],
+    // Owning a thing end to end is what a posting means by ownership.
+    'Ownership': ['owned the', 'owned and', 'built and owned', 'end-to-end responsibility',
+      'primary on-call responsibility', 'sole owner', 'accountable for', 'took the'],
+    'Decision Making': ['recommendation', 'adopted into policy', 'trade-off', 'tradeoff',
+      'prioritis', 'prioritiz', 'chose', 'selected the', 'decided'],
+    'Operational Efficiency': ['automated the', 'cut the', 'reduced the cycle', 'streamlined',
+      'removed the manual', 'shortened the', 'right-sizing', 'cutting annual'],
     'Reliability': ['on-call', 'oncall', 'error budget', 'reliability target', 'SLO',
       'uptime', 'incident response', 'failover', 'redundancy', 'disaster recovery'],
     'Automation': ['automated the', 'automating the', 'CI/CD', 'GitHub Actions', 'Jenkins',

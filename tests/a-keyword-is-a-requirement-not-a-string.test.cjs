@@ -177,6 +177,54 @@ console.log('\nAND THE CHIPS SAY WHICH IS WHICH IN COLOUR, NOT ONLY IN A GLYPH')
     /isMatched \? '✓' : '✗'/.test(js), 'colour became the only signal');
 }
 
+console.log('\nAN ADJECTIVE IS NOT A SECOND REQUIREMENT');
+{
+  // One posting produced "AI" and "AI-driven" as separate chips, and
+  // "scrappy" and "scrappiness" as two more. The denominator counted all
+  // four, so a CV that plainly said AI could reach at most half of that
+  // pair however well it was written.
+  for (const [compound, head] of [
+    ['AI-driven', 'AI'], ['AI driven', 'AI'], ['Kubernetes-based', 'Kubernetes'],
+    ['Python-focused', 'Python'], ['SQL-heavy', 'SQL'], ['Terraform-based', 'Terraform'],
+  ]) {
+    const a = TX.canonical(compound), b = TX.canonical(head);
+    t('  "' + compound + '" is ' + head, a === b, a + ' / ' + b);
+  }
+  t('  "scrappiness" is "scrappy"',
+    TX.canonical('scrappiness') === TX.canonical('scrappy'),
+    TX.canonical('scrappiness') + ' / ' + TX.canonical('scrappy'));
+  t('  "resourcefulness" is "resourceful"',
+    TX.canonical('resourcefulness') === TX.canonical('resourceful'),
+    TX.canonical('resourcefulness') + ' / ' + TX.canonical('resourceful'));
+
+  // ...but a compound that names its OWN requirement keeps it. Remote-first
+  // is a way of working, not a kind of remote.
+  t('  "Remote-first" is still its own requirement',
+    TX.canonical('Remote-first') === 'Remote-first', TX.canonical('Remote-first'));
+  t('  ...and a compound with no known head is left alone',
+    TX.canonical('widget-driven') === 'widget-driven', TX.canonical('widget-driven'));
+  // Cloud-native names an architecture, not a degree of cloud. Folding
+  // it would let a CV that merely mentions AWS claim it.
+  t('  ...and "cloud-native" is not folded into cloud',
+    TX.canonical('cloud-native') !== TX.canonical('Cloud Infrastructure'),
+    TX.canonical('cloud-native'));
+
+  const asked = ['AI', 'AI-driven', 'scrappy', 'scrappiness', 'ownership',
+    'operational efficiency', 'decision-making', 'customer success'];
+  t('  eight strings are six requirements', TX.dedupe(asked).length === 6,
+    TX.dedupe(asked).length + ': ' + TX.dedupe(asked).map((e) => e.label).join(', '));
+}
+
+console.log('\nAND A REQUIREMENT WITH NO GROUP CAN NEVER BE SATISFIED');
+{
+  // Each of these sat in the denominator with nothing in the world able
+  // to match it, because no group listed any form of it.
+  for (const term of ['ownership', 'operational efficiency', 'decision making',
+    'customer success', 'scrappy']) {
+    t('  "' + term + '" has a group', !!TX.groupOf(term), 'still ungrouped');
+  }
+}
+
 console.log('\nAND NO SURFACE FORM BELONGS TO TWO REQUIREMENTS');
 {
   // The index is first-wins and silent, so a form written into two
