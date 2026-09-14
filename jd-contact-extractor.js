@@ -68,33 +68,87 @@
   // panel then said "No recipient. Add an address the employer
   // published", which is false, and sent the reader back to the posting
   // to look for an address they were already looking at.
+  // AND A WRONG INBOX BEATS NO INBOX.
+  //
+  // Not preferred, and never over a real recruiting address -- but when
+  // the employer published nothing else, a human who can forward the mail
+  // is worth more than a skipped application, which is a guaranteed zero.
+  // So each of these carries a rank, best fallback first, and the panel
+  // offers the best one with its name on it.
+  //
+  // UNATTENDED IS THE EXCEPTION, and not on judgement. noreply@,
+  // postmaster@ and mailer-daemon@ are configured not to deliver to a
+  // person at all, so mail to them is not a worse choice, it is no
+  // choice: it bounces or is discarded, and the application is skipped
+  // anyway with the sender believing it was sent.
+  const UNATTENDED = /noreply|no-reply|donotreply|do-not-reply|unsubscribe|bounce|mailer-daemon|postmaster/i;
   const DECLINE_REASON = [
-    [/noreply|no-reply|donotreply|do-not-reply|unsubscribe|bounce|mailer-daemon|postmaster/i,
-      'an unattended mailbox'],
-    [/privacy|dpo|gdpr/i, 'the privacy and data-protection inbox'],
-    [/legal|compliance/i, 'the legal and compliance inbox'],
-    [/accommodat|accessib|disabilit/i, 'the adjustments and accessibility inbox'],
-    [/security|abuse/i, 'the security inbox'],
-    [/support|help/i, 'the customer support inbox'],
-    [/press|media/i, 'the press inbox'],
-    [/sales|marketing|billing/i, 'a sales or billing inbox'],
-    [/info|admin|webmaster|contact|enquir|inquir|general/i, 'a general enquiries inbox'],
+    [UNATTENDED, 'an unattended mailbox', 0],
+    [/info|admin|webmaster|contact|enquir|inquir|general/i, 'a general enquiries inbox', 6],
+    [/support|help/i, 'the customer support inbox', 5],
+    [/sales|marketing|billing/i, 'a sales or billing inbox', 4],
+    [/press|media/i, 'the press inbox', 3],
+    [/legal|compliance/i, 'the legal and compliance inbox', 2],
+    [/privacy|dpo|gdpr/i, 'the privacy and data-protection inbox', 2],
+    [/security|abuse/i, 'the security inbox', 1],
+    // Last, because this one is a channel disabled candidates rely on to
+    // request adjustments. Still offered, because it is a real person.
+    [/accommodat|accessib|disabilit/i, 'the adjustments and accessibility inbox', 1],
   ];
   function declineReason(email, evidence) {
     const local = String(email).split('@')[0];
-    for (const [re, why] of DECLINE_REASON) if (re.test(local)) return why;
-    if (/accommodat|accessibility|privacy|data protection/i.test(evidence || '')) {
-      return 'published for accessibility or privacy requests, not for applications';
+    for (const [re, why, rank] of DECLINE_REASON) {
+      if (re.test(local)) return { reason: why, rank, usable: rank > 0 };
     }
-    return 'not an address published for applications';
+    if (/accommodat|accessibility|privacy|data protection/i.test(evidence || '')) {
+      return { reason: 'published for accessibility or privacy requests, not for applications',
+        rank: 1, usable: true };
+    }
+    return { reason: 'not an address published for applications', rank: 3, usable: true };
+  }
+
+  /**
+   * The part of the surrounding text that belongs to THIS address.
+   *
+   * The context window is a whole line, and a line often carries two
+   * addresses: "Email careers@acme.com to apply. Also privacy@acme.com
+   * for data removal." The word "privacy" then vetoed careers@ -- a real
+   * recruiting inbox thrown away because of prose about a different
+   * mailbox on the same line, which is the shape of every page footer.
+   * Cutting at the nearest other address keeps each one's evidence to
+   * itself.
+   */
+  function ownClause(context, email) {
+    const text = String(context || '');
+    const at = text.toLowerCase().indexOf(String(email).toLowerCase());
+    if (at < 0) return text.trim();
+    const end = at + email.length;
+    let from = 0, to = text.length;
+    for (const m of text.matchAll(new RegExp(EMAIL_RE.source, 'gi'))) {
+      if (m.index + m[0].length <= at) from = Math.max(from, m.index + m[0].length);
+      else if (m.index >= end) { to = Math.min(to, m.index); }
+    }
+    // The next address usually carries a LABEL in front of it -- "Apply:
+    // careers@acme.com | Privacy: privacy@acme.com" -- and that label sits
+    // inside this address's slice, so cutting at the address alone still
+    // let "Privacy" veto careers@. Drop back to the separator.
+    const tail = text.slice(end, to);
+    const cut = Math.max(tail.lastIndexOf('|'), tail.lastIndexOf(';'),
+      tail.lastIndexOf('·'), tail.lastIndexOf('•'));
+    if (cut >= 0 && to < text.length) to = end + cut;
+    const head = text.slice(from, at);
+    const opens = Math.max(head.indexOf('|'), head.indexOf(';'),
+      head.indexOf('·'), head.indexOf('•'));
+    if (opens >= 0 && from > 0) from += opens + 1;
+    return text.slice(from, to).trim();
   }
 
   function contextualCandidate(email, context, source, declined) {
-    const evidence = String(context || '').trim();
+    const evidence = ownClause(context, email);
     const note = () => {
       const key = String(email).toLowerCase();
       if (declined && !declined.has(key)) {
-        declined.set(key, { email, reason: declineReason(email, evidence), source });
+        declined.set(key, Object.assign({ email, source }, declineReason(email, evidence)));
       }
       return null;
     };
@@ -327,7 +381,12 @@
       hasPublishedEmail: !!best,
       // Addresses the posting DID publish that are not for applications,
       // so the panel can say what it found instead of claiming nothing was.
-      declined: [...declined.values()],
+      declined: [...declined.values()].sort((a, b) => b.rank - a.rank),
+      // The best of them that a person actually reads, offered only when
+      // nothing better was published. Never overrides a real recruiting
+      // address: `best` is checked first everywhere this is used.
+      fallback: best ? null : ([...declined.values()]
+        .filter((d) => d.usable).sort((a, b) => b.rank - a.rank)[0] || null),
     };
     // Whatever we found that helps them locate the application.
     result.referenceLines = buildReferenceLines(result);

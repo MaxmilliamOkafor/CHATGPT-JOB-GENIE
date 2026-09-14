@@ -154,35 +154,78 @@ console.log('\nAND A POSTING IT CANNOT PARSE IS READ WHOLE');
     'scoping left nothing');
 }
 
-console.log('\nAND A PUBLISHED ADDRESS THAT IS DECLINED IS NOT "NONE FOUND"');
+console.log('\nAND A WRONG INBOX BEATS NO INBOX');
 {
   // "please email us directly at Privacy@Redwood.com" IS a published
-  // address. Declining it is right: it is the GDPR data-removal inbox,
-  // and an application sent there is remembered by the one team certain
-  // to remember it. But reporting "No recipient. Add an address the
-  // employer published" is false, and sends the reader back to the
-  // posting to look for an address already on their screen.
+  // address, and reporting "No recipient. Add an address the employer
+  // published" was false: it sent the reader back to the posting to look
+  // for an address already on their screen.
+  //
+  // It is not the recipient anyone would choose. It is also not nothing,
+  // and an application nobody sends is a guaranteed zero, so when the
+  // employer published no recruiting address it is offered rather than
+  // the run being skipped. Never preferred: a real recruiting address
+  // wins wherever one exists.
   const r = JD.extract({ jdText: POSTING, url: 'https://job-boards.greenhouse.io/x/jobs/1',
     title: 'Revenue Operations Data Analyst', company: 'Redwood' });
-  t('  it is still not used as the recipient', !r.email, r.email);
-  t('  ...but it IS reported', r.declined.length === 1
+  t('  it is reported, not silently dropped', r.declined.length === 1
     && /privacy@redwood\.com/i.test(r.declined[0].email), JSON.stringify(r.declined));
-  t('  ...and the reason names the inbox, not a generic refusal',
+  t('  ...the reason names the inbox, not a generic refusal',
     /privacy and data-protection/i.test(r.declined[0].reason || ''),
     JSON.stringify(r.declined));
+  t('  ...and it IS offered, because nothing better was published',
+    r.fallback && /privacy@redwood\.com/i.test(r.fallback.email), JSON.stringify(r.fallback));
+
+  const only = (text) => {
+    const o = JD.extract({ jdText: text, url: 'https://x.invalid/j/1', title: 'T', company: 'Acme' });
+    return { email: o.email, fallback: o.fallback && o.fallback.email };
+  };
+
+  // A real recruiting address always wins, however it is laid out. The
+  // context window is a whole line, and a footer carries two addresses on
+  // one, so "privacy" beside careers@ used to throw careers@ away.
+  for (const [shape, text] of [
+    ['prose', 'Email careers@acme.com to apply. Also privacy@acme.com for data removal.'],
+    ['pipes', 'Apply: careers@acme.com | Privacy: privacy@acme.com'],
+    ['reversed', 'Privacy: privacy@acme.com | Apply: careers@acme.com'],
+    ['separate lines', 'Email careers@acme.com to apply.\nSeparately, privacy@acme.com is for data removal.'],
+  ]) {
+    const o = only(text);
+    t('  a recruiting address on the same line still wins (' + shape + ')',
+      o.email === 'careers@acme.com' && !o.fallback, JSON.stringify(o));
+  }
+
+  // Ranked: an inbox that reads general post beats one that does not.
+  t('  a general enquiries inbox outranks the privacy inbox',
+    only('Recruitment: privacy@acme.com and info@acme.com for questions.').fallback
+      === 'info@acme.com',
+    JSON.stringify(only('Recruitment: privacy@acme.com and info@acme.com for questions.')));
+
+  // And the one thing never offered, which is not a judgement about which
+  // inbox is appropriate: noreply@ is configured not to deliver to a
+  // person, so sending there skips the application while reporting
+  // success, which is the worst of both.
+  t('  an unattended mailbox is never offered',
+    only('Recruitment questions: noreply@acme.com').fallback === undefined
+      || only('Recruitment questions: noreply@acme.com').fallback === null,
+    JSON.stringify(only('Recruitment questions: noreply@acme.com')));
 
   // A posting that really published nothing must not claim otherwise.
   const bare = JD.extract({ jdText: 'We are hiring a data engineer. Apply on this page.',
     url: 'https://example.invalid/j/1', title: 'Data Engineer', company: 'X' });
   t('  a posting with no address reports none declined',
     Array.isArray(bare.declined) && bare.declined.length === 0, JSON.stringify(bare.declined));
+  t('  ...and offers no fallback', !bare.fallback, JSON.stringify(bare.fallback));
 
-  // And the panel has to actually say it.
+  // And the panel has to actually use it.
   const src = fs.readFileSync(path.join(DIR, 'popup.js'), 'utf8');
   t('  the panel asks for the reason instead of hard-coding "no recipient"',
-    (src.match(/this\.followupNoRecipientMessage\(\)/g) || []).length >= 2
-      && /Found ' \+ d\.email \+ ' on this posting/.test(src),
+    (src.match(/this\.followupNoRecipientMessage\(\)/g) || []).length >= 2,
     'the message is still unconditional');
+  t('  ...and fills the To field from the fallback rather than skipping',
+    /toEl\.dataset\.fallback = '1'/.test(src)
+      && /followupFallbackRecipient\(\)/.test(src),
+    'the fallback is computed but never used');
 }
 
 console.log('\n' + PASS + ' passed, ' + FAIL + ' failed');

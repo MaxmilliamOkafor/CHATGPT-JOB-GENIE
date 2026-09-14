@@ -3131,6 +3131,12 @@ class ATSTailor {
       const toEl = document.getElementById('followupTo');
       const info = document.getElementById('followupDetected');
       if (toEl && detected.email && !toEl.value) { toEl.value = detected.email; toEl.dataset.autofilled = '1'; }
+      // Nothing better was published, so rather than skip the application
+      // entirely, offer the best inbox a person actually reads.
+      if (toEl && !detected.email && !toEl.value) {
+        const fb = this.followupFallbackRecipient();
+        if (fb) { toEl.value = fb.email; toEl.dataset.autofilled = '1'; toEl.dataset.fallback = '1'; }
+      }
       if (info) {
         if (detected.hasPublishedEmail) {
           info.textContent = '✓ Published in the posting: ' + detected.email +
@@ -3614,9 +3620,13 @@ class ATSTailor {
       } else {
         {
           const turned = Array.isArray(detected.declined) ? detected.declined : [];
-          if (turned.length) {
+          const fb = this.followupFallbackRecipient();
+          if (fb) {
+            note('Fallback recipient', fb.email + ' (' + fb.reason
+              + '); no recruiting address was published, so this is used rather than skipped');
+          } else if (turned.length) {
             note('No recipient yet', turned[0].email + ' is published here but it is '
-              + turned[0].reason + ', so it is not used');
+              + turned[0].reason + ', which does not reach a person');
           } else {
             note('No recipient yet', 'nothing published on this posting; the lookup below decides');
           }
@@ -4031,10 +4041,42 @@ class ATSTailor {
     if (!declined.length) {
       return 'No recipient. Add an address the employer published, or leave blank to skip.';
     }
-    const d = declined[0];
-    return 'Found ' + d.email + ' on this posting, but that is ' + d.reason
-      + ', so it is not used. Sending an application there is remembered by the '
-      + 'wrong team. Paste a recruiting address above, or leave blank to skip.';
+    const usable = declined.filter((d) => d.usable);
+    if (!usable.length) {
+      // Only unattended mailboxes were published. Offering one would be
+      // offering nothing: the mail is discarded and the application is
+      // skipped anyway, with the sender believing it was sent.
+      return 'The only address on this posting is ' + declined[0].email + ', '
+        + declined[0].reason + ' that does not reach a person. Paste an address '
+        + 'above, or leave blank to skip.';
+    }
+    return 'No recruiting address published. ' + usable[0].email + ' is '
+      + usable[0].reason + ', filled in above so this is not skipped. Clear it '
+      + 'or replace it before sending if you would rather not use it.';
+  }
+
+  /**
+   * The address to use when the employer published no recruiting one.
+   *
+   * A WRONG INBOX BEATS NO INBOX. An application nobody sends is a
+   * guaranteed zero, and a general enquiries or even a legal inbox is
+   * read by a person who can forward it. It is never preferred: every
+   * caller checks for a real recruiting address first, and this only
+   * fills the gap that was previously filled by giving up.
+   *
+   * The one thing it will not offer is an unattended mailbox. That is
+   * not a judgement about which inbox is appropriate -- noreply@ and
+   * mailer-daemon@ are configured not to deliver to anyone, so sending
+   * there skips the application exactly as before while reporting
+   * success, which is the worst of both.
+   */
+  followupFallbackRecipient() {
+    const detected = this.jdContact || this.generatedDocuments?.jdContact || {};
+    if (detected.email) return null;
+    if (detected.fallback && detected.fallback.usable) return detected.fallback;
+    const declined = Array.isArray(detected.declined) ? detected.declined : [];
+    return declined.filter((d) => d.usable)
+      .sort((a, b) => (b.rank || 0) - (a.rank || 0))[0] || null;
   }
 
   async followupFindCareersAddress() {

@@ -98,20 +98,31 @@
   // false, and sent the reader back to the page to look for an address
   // they were already looking at. It has to say what it found and why it
   // will not use it.
+  // AND A WRONG INBOX BEATS NO INBOX. Ranked best-fallback-first, because
+  // when the employer published nothing else a human who can forward the
+  // mail is worth more than a skipped application. Unattended mailboxes
+  // rank zero and are never offered: that is not judgement, they are
+  // configured not to reach a person, so mail there is discarded and the
+  // application is skipped anyway with the sender believing it was sent.
   const REJECTION = [
-    [/noreply|no-reply|unsubscribe/i, 'an unattended mailbox'],
-    [/privacy|dpo|gdpr/i, 'the privacy and data-protection inbox'],
-    [/legal/i, 'the legal inbox'],
-    [/accommodat|disabilit|accessib/i, 'the adjustments and accessibility inbox'],
-    [/support/i, 'the customer support inbox'],
-    [/security/i, 'the security inbox'],
-    [/press|media/i, 'the press inbox'],
-    [/sales|billing/i, 'a sales or billing inbox'],
+    [/noreply|no-reply|unsubscribe/i, 'an unattended mailbox', 0],
+    [/info|contact|enquir|inquir|general/i, 'a general enquiries inbox', 6],
+    [/support/i, 'the customer support inbox', 5],
+    [/sales|billing/i, 'a sales or billing inbox', 4],
+    [/press|media/i, 'the press inbox', 3],
+    [/legal/i, 'the legal inbox', 2],
+    [/privacy|dpo|gdpr/i, 'the privacy and data-protection inbox', 2],
+    [/security/i, 'the security inbox', 1],
+    [/accommodat|disabilit|accessib/i, 'the adjustments and accessibility inbox', 1],
   ];
   function rejectionReason(local, context) {
-    for (const [re, why] of REJECTION) if (re.test(local)) return why;
-    if (BLOCKED_CONTEXT.test(context)) return 'published for accessibility adjustments, not for applications';
-    return 'not a recruiting address';
+    for (const [re, why, rank] of REJECTION) {
+      if (re.test(local)) return { reason: why, rank, usable: rank > 0 };
+    }
+    if (BLOCKED_CONTEXT.test(context)) {
+      return { reason: 'published for accessibility adjustments, not for applications', rank: 1, usable: true };
+    }
+    return { reason: 'not a recruiting address', rank: 3, usable: true };
   }
 
   function harvest(html, domain, source) {
@@ -123,8 +134,8 @@
       if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,24}$/i.test(email)) return;
       if (!sameDomain(email.split('@')[1], domain)) return;
       if (BLOCKED.test(email.split('@')[0]) || BLOCKED_CONTEXT.test(context)) {
-        if (!declined.has(email)) declined.set(email, { email, source,
-          reason: rejectionReason(email.split('@')[0], context) });
+        if (!declined.has(email)) declined.set(email, Object.assign({ email, source },
+          rejectionReason(email.split('@')[0], context)));
         return;
       }
       const generic = _score(email) > 0;
@@ -176,8 +187,9 @@
       if (found.size) break;
     }
     const contacts=[...found.values()].sort((a,b)=>b.score-a.score).slice(0,5);
-    const turnedDown=[...declined.values()];
-    return {email:contacts[0]?.email || '', source:contacts[0]?.source || '', candidates:contacts.map(c=>c.email), contacts, declined:turnedDown, domainsTried:tried, status:contacts.length?'published-contact-found':turnedDown.length?'published-contact-declined':seeds.length?'no-published-contact':'employer-domain-unconfirmed'};
+    const turnedDown=[...declined.values()].sort((x,y)=>y.rank-x.rank);
+    const fallback=contacts.length?null:(turnedDown.filter(d=>d.usable)[0]||null);
+    return {email:contacts[0]?.email || '', source:contacts[0]?.source || '', candidates:contacts.map(c=>c.email), contacts, declined:turnedDown, fallback, domainsTried:tried, status:contacts.length?'published-contact-found':turnedDown.length?'published-contact-declined':seeds.length?'no-published-contact':'employer-domain-unconfirmed'};
   }
   const api={find,employerDomains,guessDomains,_score,employerUrls,harvest,publicUrl};
   global.CareersAddressFinder=api;
