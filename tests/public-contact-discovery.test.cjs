@@ -7,8 +7,16 @@ mod._compile(fs.readFileSync(file,'utf8'),file);
 const F=mod.exports;
 const response=html=>({ok:true,headers:{get:()=> 'text/html'},text:async()=>html});
 test('ATS slugs and company names never become guessed domains',()=>{
- assert.deepEqual(F.guessDomains('Acme','https://job-boards.greenhouse.io/acme/jobs/1'),[]);
- assert.deepEqual(F.guessDomains('Acme',''),[]);
+ assert.deepEqual(F.employerDomains('Acme','https://job-boards.greenhouse.io/acme/jobs/1'),[]);
+ assert.deepEqual(F.employerDomains('Acme',''),[]);
+ // The old name stays exported and is the same function.
+ assert.equal(F.guessDomains,F.employerDomains);
+});
+// "Our office is accessible" describes a building, not an adjustments
+// inbox, and it was costing the address printed beside it.
+test('a building being accessible is not an adjustments inbox',()=>{
+ assert.equal(F.harvest('<p>Our office is accessible. Apply via <a href="mailto:talent@acme.com">talent@acme.com</a>.</p>','acme.com','https://acme.com').length,1);
+ assert.equal(F.harvest('<p>For accessibility requests email <a href="mailto:talent@acme.com">talent@acme.com</a>.</p>','acme.com','https://acme.com').length,0);
 });
 test('host boundaries and co.uk remain exact',()=>{
  const html='careers@other.co.uk careers@evilacme.co.uk careers@acme.co.uk';

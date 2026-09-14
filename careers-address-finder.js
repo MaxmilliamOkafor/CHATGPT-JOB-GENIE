@@ -22,7 +22,12 @@
   // and a job follow-up sent there misuses it however the mailbox is
   // spelled. Only those words veto. The full list still applies to the
   // mailbox name itself, where "accommodations@" is caught outright.
-  const BLOCKED_CONTEXT = /(?:accommodat|disabilit|accessib|\beeo\b|affirmative action|reasonable[-\s]?adjust)/i;
+  //
+  // "accessibilit", not "accessib": an adjustments inbox is introduced
+  // as an ACCESSIBILITY request, while "our office is accessible"
+  // describes a building and was costing the address on the page beside
+  // it. The other three terms still cover the wording that matters.
+  const BLOCKED_CONTEXT = /(?:accommodat|disabilit|accessibilit|\beeo\b|affirmative action|reasonable[-\s]?adjust)/i;
   const PATHS =['/careers', '/jobs', '/careers/contact', '/contact', '/about/careers', '/company/careers'];
   const decode = s => String(s || '').replace(/&amp;/gi, '&').replace(/&#(x[0-9a-f]+|\d+);/gi, (_, n) => { const v = n[0].toLowerCase() === 'x' ? parseInt(n.slice(1),16) : Number(n); return v <= 0x10ffff ? String.fromCodePoint(v) : ''; });
   const plain = s => decode(s).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -40,11 +45,22 @@
     if (BLOCKED.test(local)) return -1;
     return /^(recruiting|recruitment|talent|talentacquisition|careers?|jobs?|hiring|apply|applications|hr|people|resumes?|cv)([._-][a-z]{1,20})?$/i.test(local) ? 100 : -1;
   }
-  // Retained for callers: only a supplied first-party URL is a domain source.
-  function guessDomains(companyName, jdUrl) {
+  // THE NAME IS THE POINT: NOTHING HERE GUESSES ANY MORE.
+  //
+  // This used to build domains out of the company's display name --
+  // push(name + '.com'); push(name + '.io') -- so "Acme Ltd" became
+  // acme.com, which may belong to somebody else entirely. The finder
+  // would then read that stranger's site and could hand back their
+  // careers@ to write to. A first-party URL is now the only source of a
+  // domain, and a name that cannot be confirmed yields nothing.
+  //
+  // Kept under the old name as an alias because the exported surface is
+  // public, but the honest name is what the code should be read by.
+  function employerDomains(companyName, jdUrl) {
     const u = publicUrl(jdUrl);
     return u && !ATS.test(u.hostname) ? [u.hostname.replace(/^(www|jobs|careers|apply)\./i, '')] : [];
   }
+  const guessDomains = employerDomains;
   async function fetchPage(url) {
     const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 5000);
     try {
@@ -125,7 +141,7 @@
     const contacts=[...found.values()].sort((a,b)=>b.score-a.score).slice(0,5);
     return {email:contacts[0]?.email || '', source:contacts[0]?.source || '', candidates:contacts.map(c=>c.email), contacts, domainsTried:tried, status:contacts.length?'published-contact-found':seeds.length?'no-published-contact':'employer-domain-unconfirmed'};
   }
-  const api={find,guessDomains,_score,employerUrls,harvest,publicUrl};
+  const api={find,employerDomains,guessDomains,_score,employerUrls,harvest,publicUrl};
   global.CareersAddressFinder=api;
   if(typeof module!=='undefined' && module.exports) module.exports=api;
 })(typeof window!=='undefined'?window:globalThis);
