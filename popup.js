@@ -3168,12 +3168,101 @@ class ATSTailor {
       if (!detected.hasPublishedEmail) {
         await this.followupFindCareersAddress();
       }
+      // Everything has now been tried. If it all came back empty, offer
+      // the routes that are left rather than going quiet.
+      await this.followupShowManualRoutes(detected);
       console.log('[ATS Tailor] JD contact:', detected.email || '(none)', '| jobId:', detected.jobId || '(none)');
       // Show prior contact with this employer up front, so the decision is
       // informed before the Send button is even considered.
       this.followupShowHistory();
     } catch (e) {
       console.warn('[ATS Tailor] followupDetectContact failed:', e && e.message);
+    }
+  }
+
+  // ██ WHEN NOBODY PUBLISHED AN ADDRESS ██
+  //
+  // The posting, its mailto links, its JSON-LD and the employer's careers
+  // page can all come back empty. That is a correct outcome and the
+  // follow-up is right to skip -- but the run then went silent, and the
+  // panel offered nothing to do next.
+  //
+  // Two things had already been harvested on the way through and were
+  // being thrown away: the name of whoever posted the role, often with
+  // their public LinkedIn handle, and the employer's own domain. Both
+  // are routes to a human. They are shown here as LINKS, nothing more:
+  // no message is composed, nothing is sent, and no address is invented
+  // to fill the To field.
+  async followupShowManualRoutes(detected) {
+    const box = document.getElementById('followupManualRoutes');
+    const list = document.getElementById('followupManualList');
+    if (!box || !list) return;
+    const hide = () => box.classList.add('hidden');
+
+    try {
+      const to = document.getElementById('followupTo');
+      // An address was found by some route, so there is nothing to offer.
+      if ((to && to.value.trim()) || (detected && detected.email)) return hide();
+
+      const routes = [];
+      const seen = new Set();
+      const add = (label, href, why) => {
+        const key = String(href || '').toLowerCase();
+        if (!href || seen.has(key)) return;
+        seen.add(key);
+        routes.push({ label, href, why });
+      };
+
+      // 1. Whoever posted the role. A public handle is a direct route; a
+      //    bare name still tells you who to search for.
+      const sources = await this.followupHarvestPageSources();
+      for (const n of ((sources && sources.names) || []).slice(0, 3)) {
+        const name = String(n && n.name || '').trim();
+        if (!name) continue;
+        if (n.profile) {
+          add(name, 'https://www.linkedin.com/in/' + String(n.profile).replace(/^\/+|\/+$/g, ''),
+            'posted this role');
+        } else {
+          add(name, 'https://www.linkedin.com/search/results/people/?keywords='
+            + encodeURIComponent(name + ' ' + (this.currentJob?.company || '')),
+            'named on the posting');
+        }
+      }
+
+      // 2. The employer's own site. The careers finder already worked out
+      //    the real domain from the posting rather than guessing it, so
+      //    reuse that answer instead of inventing a second one.
+      let domain = '';
+      try {
+        if (typeof CareersAddressFinder !== 'undefined') {
+          const fn = CareersAddressFinder.employerDomains || CareersAddressFinder.guessDomains;
+          domain = (fn && fn(this.currentJob?.company || '', this.currentJob?.url || '')[0]) || '';
+        }
+      } catch (e) { /* the finder is a background module on some builds */ }
+      if (!domain) domain = String(this._careersDomainTried || '').trim();
+      if (domain) {
+        add(domain + '/careers', 'https://' + domain + '/careers', 'employer careers page');
+        add(domain + '/contact', 'https://' + domain + '/contact', 'employer contact form');
+      }
+
+      // 3. The posting itself, so the application route is one click away
+      //    even when no human can be reached.
+      if (this.currentJob?.url) add('The posting', this.currentJob.url, 'apply through the ATS');
+
+      if (!routes.length) return hide();
+
+      list.innerHTML = routes.map((r) => '<li><a href="' + this.escapeHtml(r.href)
+        + '" target="_blank" rel="noopener noreferrer">' + this.escapeHtml(r.label)
+        + '</a> <span class="fu-manual-why">' + this.escapeHtml(r.why) + '</span></li>').join('');
+      const note = document.getElementById('followupManualNote');
+      if (note) {
+        note.textContent = 'Nothing is sent from here. No address was published for this role, '
+          + 'so the follow-up is skipped rather than guessed at.';
+      }
+      box.classList.remove('hidden');
+    } catch (e) {
+      console.warn('[ATS Tailor] manual routes failed:', e && e.message);
+      hide();
     }
   }
 

@@ -306,6 +306,20 @@
                 <input type="email" id="followupTo" class="fu-input" placeholder="recruiter@company.com" />
               </div>
               <div id="followupDetected" class="fu-note"></div>
+
+              <!-- WHEN NOBODY PUBLISHED AN ADDRESS.
+                   Every source can come back empty and the run goes
+                   quiet: the follow-up is skipped, correctly, and the
+                   panel says nothing you can act on. The poster's name
+                   and the employer's own careers page were harvested on
+                   the way through and were simply thrown away. They are
+                   a route to a human, so they are shown here. Nothing
+                   is sent from this block; each row is a link. -->
+              <div id="followupManualRoutes" class="fu-manual hidden">
+                <div class="fu-manual-title">No address published. Routes to a human:</div>
+                <ul id="followupManualList" class="fu-manual-list"></ul>
+                <p class="fu-note" id="followupManualNote"></p>
+              </div>
             </div>
 
             <!-- 2b. Contact lookup (opt-in) -->
