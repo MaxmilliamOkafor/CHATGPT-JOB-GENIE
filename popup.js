@@ -6229,6 +6229,96 @@ class ATSTailor {
     return leftover;
   }
 
+  // ██ THE METER USES SYNONYMS. AN ATS SEARCHES LITERALLY. ██
+  //
+  // The taxonomy exists so a CV saying "PostgreSQL" is credited for a
+  // posting asking for "Postgres" -- they are one requirement and the
+  // candidate plainly has it. But a Workday or Taleo keyword screen
+  // runs the requisition's OWN string against the document. It searches
+  // for "Postgres", finds nothing, and the application is filtered out
+  // while the panel shows a green chip.
+  //
+  //   posting says   CV says                        literal search
+  //   Postgres       PostgreSQL                     no match
+  //   K8s            Kubernetes                     no match
+  //   GCP            Google Cloud Platform          no match
+  //   SRE            Site Reliability Engineering   no match
+  //
+  // So where the CV satisfies a requirement through a DIFFERENT surface
+  // form than the posting used, the posting's form is added beside the
+  // one already there: "PostgreSQL (Postgres)". Both strings are then in
+  // the document and either search finds it.
+  //
+  // Nothing is claimed that was not already true. The requirement was
+  // already satisfied and already counted; this only writes the second
+  // name for the same thing, which is why it is safe to do without the
+  // evidence gate. It is also why it only ever PAIRS -- it never adds a
+  // requirement the CV did not already carry.
+  alignToPostingWording(cvText, keywords) {
+    const text = String(cvText == null ? '' : cvText);
+    const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
+    const asked = ATSTailor.requirementsOnly(keywords?.all || []);
+    if (!text.trim() || !TX || !asked.length || typeof TX.variantsOf !== 'function') {
+      return { text, paired: [] };
+    }
+
+    const lines = text.split('\n');
+    // Only inside the skills block. Appending "(Postgres)" to a sentence
+    // about a piece of work rewrites a claim; appending it to a skills
+    // entry states the same skill twice, which is what a CV does anyway.
+    const head = lines.findIndex((l) => /^(TECHNICAL\s+)?(SKILLS|TECHNICAL PROFICIENCIES|CORE (SKILLS|COMPETENCIES))\s*:?\s*$/i.test(l.trim()));
+    if (head === -1) return { text, paired: [] };
+    let end = lines.length;
+    for (let i = head + 1; i < lines.length; i++) {
+      if (/^[A-Z][A-Z\s&/'-]{2,40}$/.test(lines[i].trim())) { end = i; break; }
+    }
+
+    const esc = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const literal = (hay, term) => {
+      try {
+        return new RegExp('(?<![\\p{L}\\p{N}_+#])' + esc(term).replace(/\s+/g, '\\s+')
+          + '(?![\\p{L}\\p{N}_+#])', 'iu').test(hay);
+      } catch (e) { return hay.toLowerCase().indexOf(String(term).toLowerCase()) !== -1; }
+    };
+
+    const paired = [];
+    const PER_RUN = 8;            // a line of brackets stops reading as a CV
+    for (const kw of asked) {
+      if (paired.length >= PER_RUN) break;
+      const want = String(kw || '').trim();
+      if (!want || want.length < 2) continue;
+      if (literal(text, want)) continue;          // already there, nothing to do
+      if (!TX.appearsIn(text, want)) continue;    // not satisfied at all: not this pass's job
+
+      // Which of the requirement's other names does the CV actually use?
+      // Longest form first. "Google Cloud" is a variant of the same
+      // requirement as "Google Cloud Platform", and matching the short
+      // one inside the long one inserted the bracket mid-phrase:
+      // "Google Cloud (GCP) Platform".
+      const forms = TX.variantsOf(want)
+        .filter((f) => String(f).toLowerCase() !== want.toLowerCase())
+        .sort((a, b) => String(b).length - String(a).length);
+      let carriedBy = '', at = -1;
+      for (let i = head + 1; i < end && at === -1; i++) {
+        for (const form of forms) {
+          if (literal(lines[i], form)) { carriedBy = form; at = i; break; }
+        }
+      }
+      if (at === -1) continue;                    // satisfied somewhere else on the page
+
+      // Pair it in place, once.
+      const re = new RegExp('(' + esc(carriedBy).replace(/\s+/g, '\\s+') + ')', 'i');
+      const before = lines[at];
+      lines[at] = before.replace(re, (hit) => hit + ' (' + want + ')');
+      if (lines[at] !== before) paired.push(carriedBy + ' (' + want + ')');
+    }
+
+    if (!paired.length) return { text, paired: [] };
+    console.log('[ATS Tailor] Paired the posting\'s own wording onto '
+      + paired.length + ' requirement(s) the CV already had: ' + paired.join(', '));
+    return { text: lines.join('\n'), paired };
+  }
+
   recoverOmittedProfileSkills(cvText, keywords, profile) {
     const before = this.calculateMatchScore(cvText, keywords);
     if (before.matchScore >= 90) return cvText;
@@ -7305,6 +7395,16 @@ class ATSTailor {
       // a document with no education in it at all. Restored from the
       // profile, which is where the degrees actually live.
       this.generatedDocuments.cv = this.ensureEducationSection(this.generatedDocuments.cv, p);
+
+      // THE POSTING'S OWN WORDING, ON WHAT THE CV ALREADY HAS.
+      //
+      // Last, so it sees the finished skills block: everything the
+      // coverage pass was going to add is already in place, and the
+      // pairing runs over the whole of it.
+      if (keywords.all?.length && this.generatedDocuments.cv) {
+        const aligned = this.alignToPostingWording(this.generatedDocuments.cv, keywords);
+        if (aligned.paired.length) this.generatedDocuments.cv = aligned.text;
+      }
 
       // And whichever door the section came in through, it leaves
       // without graduation years. They stay in the profile, where
