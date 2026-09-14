@@ -1428,7 +1428,7 @@
   // back this does nothing at all, because guessing is what produced
   // the problem.
   const _CONTACT_LINE = /[|·•]/;
-  function ensureTruthfulLocation(cvText, profileLocation, jobLocation) {
+  function ensureTruthfulLocation(cvText, profileLocation, jobLocation, citizenship) {
     const text = String(cvText || '');
     const real = String(profileLocation || '').replace(/\s+/g, ' ').trim();
     if (!text || !real) return { text, changed: false };
@@ -1460,10 +1460,16 @@
     if (seg === -1) return { text, changed: false };
 
     const shown = parts[seg];
-    // Already the truth? A city match is enough: "Dublin, IE" and
-    // "Dublin, Ireland" are the same claim.
+    // A CORRECT CITY IS NOT THE END OF THE JOB.
+    //
+    // This returned here whenever the header already named the right
+    // city, which meant the relocation note could only ever appear on a
+    // run that was fixing a WRONG header. On a CV that already said
+    // "Dublin, Ireland" -- every run after the first -- a posting in
+    // Berlin got no note at all. The whole line is composed below and
+    // compared against what is there, so the only early exit is "what
+    // is there is already exactly right".
     const city = (s) => String(s).split(',')[0].trim().toLowerCase();
-    if (city(shown) === city(real)) return { text, changed: false };
 
     // ── WHEN "(open to relocation)" IS WORTH SAYING ──────────────────
     //
@@ -1495,15 +1501,58 @@
       nl: 'netherlands', es: 'spain', it: 'italy', pt: 'portugal', br: 'brazil',
       ca: 'canada', au: 'australia', in: 'india', sg: 'singapore', ch: 'switzerland' };
     const norm = (c) => ISO[c] || c;
+    // Where an EU citizenship is an actual right to work. The UK is
+    // deliberately absent.
+    const _IN_EU = new Set(['ireland', 'germany', 'france', 'netherlands', 'spain',
+      'italy', 'portugal', 'belgium', 'austria', 'sweden', 'denmark', 'finland',
+      'poland', 'czechia', 'czech republic', 'greece', 'hungary', 'romania',
+      'bulgaria', 'croatia', 'slovakia', 'slovenia', 'estonia', 'latvia',
+      'lithuania', 'luxembourg', 'malta', 'cyprus']);
     const jobCountry = norm(countryOf(job));
     const realCountry = norm(countryOf(real));
     // Abroad only when BOTH countries are known and they differ. An
     // unknown country is not evidence of anything, so it says nothing.
     const abroad = !!job && !REMOTE.test(job)
       && !!jobCountry && !!realCountry && jobCountry !== realCountry;
-    parts[seg] = abroad ? real + ' (open to relocation)' : real;
+
+    // A REGION IS A PLACE TOO.
+    //
+    // "Europe", "EMEA" and "EU" name no country, so the test above said
+    // nothing and the header stayed silent -- on exactly the postings
+    // where a recruiter is choosing between candidates in several
+    // countries and wants to know who can start without a visa.
+    const REGION = /\b(europe|european|emea|eu[- ]wide|benelux|nordics|dach)\b/i;
+    const regional = !!job && !REMOTE.test(job) && !jobCountry && REGION.test(job);
+
+    // THE ADVANTAGE IS ONLY CLAIMED WHEN THE PROFILE STATES IT.
+    //
+    // "EU citizen" answers the question a European posting actually has
+    // -- can this person work here, and what does it cost us -- and it
+    // is worth more than a willingness to move. It is also a legal
+    // status, so it is never inferred from living in an EU country:
+    // residence is not citizenship, and a wrong claim here is a false
+    // statement on an application rather than an overreach.
+    const EU_CITIZEN = /\b(eu|european union)\s+citizen(ship)?\b/i;
+    const euCitizen = EU_CITIZEN.test(String(citizenship || ''));
+
+    let suffix = '';
+    if (abroad || regional) {
+      suffix = euCitizen && (regional || _IN_EU.has(jobCountry))
+        ? ' (EU citizen, open to relocation)'
+        : ' (open to relocation)';
+    }
+    const want = real + suffix;
+    if (shown === want) return { text, changed: false };
+    parts[seg] = want;
     lines[at] = parts.join('  |  ');
-    return { text: lines.join('\n'), changed: true, was: shown, now: parts[seg] };
+    return {
+      text: lines.join('\n'), changed: true, was: shown, now: want,
+      // A header that named the wrong city is a correction; one that
+      // named the right city and gained a relocation note is not, and
+      // the report should not accuse the document of the first when it
+      // did the second.
+      corrected: city(shown) !== city(real),
+    };
   }
 
   // ===================================================================
@@ -6628,14 +6677,23 @@
     // and it is one flag to disable rather than a code change.
     if (outCV && profileLocation && f.truthfulLocation) {
       try {
-        const loc = ensureTruthfulLocation(outCV, profileLocation, jdLocation);
+        const loc = ensureTruthfulLocation(outCV, profileLocation, jdLocation, citizenship);
         if (loc.changed) {
           outCV = loc.text;
-          report.fixes.push('Header location corrected from "' + loc.was + '" to "'
-            + loc.now + '" -- it is read as where you live, and it sat beside '
-            + 'your own phone number saying otherwise.');
+          // A wrong city corrected and a relocation note added are two
+          // different events. Reporting the second as the first accuses
+          // the document of a fault it did not have.
+          report.fixes.push(loc.corrected
+            ? 'Header location corrected from "' + loc.was + '" to "' + loc.now
+              + '" -- it is read as where you live, and it sat beside your own '
+              + 'phone number saying otherwise.'
+            : 'Header now reads "' + loc.now + '". The posting is in another '
+              + 'country, where a recruiter\'s first question about a foreign '
+              + 'address is whether you would actually move, and saying nothing '
+              + 'invites the assumption that you would not.');
           report.warnings.push({
-            kind: 'header-claimed-the-jobs-location',
+            kind: loc.corrected ? 'header-claimed-the-jobs-location'
+              : 'header-states-relocation',
             was: loc.was,
             now: loc.now,
             note: 'The CV header said "' + loc.was + '", which is the posting\'s '
@@ -7507,7 +7565,7 @@
     ensureExperienceHeading,
     repairRoleHeaders,
     stripCertificationsSection,
-    ensureCitizenshipLine,
+    ensureCitizenshipLine, ensureTruthfulLocation,
     normaliseSkillLabels,
     sanitiseSkillsSection,
     echoJobTitle, normaliseJobTitle, scrubRawTitle, repairSummary, _historyFacts, scoreSevenFilters, summaryNamesAnotherProfession, summaryReadsBroken, sortExperienceByStartDate,
