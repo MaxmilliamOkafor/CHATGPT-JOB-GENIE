@@ -933,25 +933,25 @@
   // thing while the code does another -- which has already happened twice
   // in this extension.
   const DEFAULT_ENABLED = false;
-  // THE DEFAULT HAS TO BE ABLE TO ANSWER THE QUESTION BEING ASKED.
+  // THE DEFAULT IS THE ONE THAT ASKS FOR THE LEAST.
   //
-  // Closely was the default because it needs no dashboard key, not
-  // because it fits. Its declared capability is profile -> email, and
-  // searchByCompany is false: it cannot perform the FIRST step, finding
-  // who to look up. This lookup only ever runs when the posting, its
-  // structured data and the employer's careers page have all published
-  // nothing -- which is precisely the case where no named poster is
-  // available either, so Closely arrives with nothing to work from.
+  // Hunter is the better FIT -- it searches by domain and filters to the
+  // HR department, which is the first step this lookup actually needs,
+  // and Closely declares searchByCompany: false and can only resolve a
+  // profile it is handed. But Hunter is keyKind 'api-key': a dashboard
+  // signup and a pasted key. Closely is keyKind 'account', which mints
+  // its own token from a login, so it is the only one here that does not
+  // send the user to fetch a key.
   //
-  // Hunter searches by DOMAIN and filters to the HR department, and the
-  // domain is the one thing that is reliably known by then. It is the
-  // only provider here whose first step matches the situation the
-  // lookup exists for.
+  // That is the criterion this default is chosen on. It matters less
+  // than it looks, because enrichment ships OFF and the path that runs
+  // for everyone -- the posting's own text, its mailto: links, its
+  // JSON-LD, and the employer's careers page -- needs no credential of
+  // any kind and is where nearly every address actually comes from.
   //
-  // This changes nothing until a credential is saved: enrichment stays
-  // off by default, and a user who already chose a provider keeps it,
-  // because a stored config is never overwritten by these constants.
-  const DEFAULT_PROVIDER = 'hunter';
+  // If a provider ever appears that needs no account at all, it belongs
+  // here instead.
+  const DEFAULT_PROVIDER = 'closely';
 
   function _withDefaults(c) {
     const out = c || {};

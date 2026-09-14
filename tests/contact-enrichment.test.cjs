@@ -69,23 +69,22 @@ t('an intern title is penalised',
   E.scoreCandidate({title:'Recruiting Intern'},q,ctx) < E.scoreCandidate({title:'Recruiter'},q,ctx));
 
 // ---- 4. the shipped defaults -------------------------------------------
-// The lookup ships OFF, with Hunter selected for when it is enabled.
-// Hunter is the default because it can search by DOMAIN, which is the
-// one thing known by the time this runs; Closely declares
-// searchByCompany false and cannot perform that first step at all.
-// A toggle that ships on has no
+// The lookup ships OFF, with Closely selected for when it is enabled.
+// Closely is the default because it is the only provider here that does
+// not send the user to a dashboard for an API key: it mints its own
+// token from a login. A toggle that ships on has no
 // stored value until it is touched, so the defaults live in loadConfig and
 // nowhere else -- every reader deciding for itself what "unset" means is
 // how a switch ends up drawn ON while the code treats it as OFF.
 await reset({});
 const fresh = await E.loadConfig();
 t('a fresh install has the lookup disabled', fresh.enabled === false, JSON.stringify(fresh));
-t('...with Hunter selected', fresh.provider === 'hunter', JSON.stringify(fresh));
-t('...and the selected default can search by company',
-  (E.listProviders().find((p) => p.id === fresh.provider) || {}).searchByCompany === true,
+t('...with Closely selected', fresh.provider === 'closely', JSON.stringify(fresh));
+t('...and it is the one that needs no API key',
+  (E.listProviders().find((p) => p.id === fresh.provider) || {}).keyKind !== 'api-key',
   JSON.stringify(E.listProviders().find((p) => p.id === fresh.provider)));
 t('...matching the exported defaults',
-  E.DEFAULT_ENABLED === false && E.DEFAULT_PROVIDER === 'hunter',
+  E.DEFAULT_ENABLED === false && E.DEFAULT_PROVIDER === 'closely',
   JSON.stringify({ e: E.DEFAULT_ENABLED, p: E.DEFAULT_PROVIDER }));
 
 // On by default still must not mean "contacts people by default": with no

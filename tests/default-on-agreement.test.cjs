@@ -105,7 +105,7 @@ const enrich = (() => {
 })();
 
 t('the defaults are exported, not scattered',
-  enrich.DEFAULT_ENABLED === false && enrich.DEFAULT_PROVIDER === 'hunter',
+  enrich.DEFAULT_ENABLED === false && enrich.DEFAULT_PROVIDER === 'closely',
   JSON.stringify({ enabled: enrich.DEFAULT_ENABLED, provider: enrich.DEFAULT_PROVIDER }));
 
 const ceSrc = read('contact-enrichment.js');

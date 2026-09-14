@@ -188,7 +188,7 @@
    */
   function getScoreColor(score) {
     if (score >= 90) return '#2ed573'; // Green
-    if (score >= 70) return '#00d4ff'; // Blue
+    if (score >= 70) return '#6366f1'; // Indigo
     if (score >= 50) return '#ffa502'; // Orange
     return '#ff4757'; // Red
   }
