@@ -5910,9 +5910,14 @@ class ATSTailor {
         // Data Pipelines.
         'manage', 'managing', 'support', 'supporting', 'maintain', 'maintaining',
         'develop', 'developing', 'create', 'creating', 'own', 'owning', 'define',
-        'defining', 'drive', 'driving', 'deliver', 'delivering', 'lead', 'leading',
+        'defining', 'drive', 'driving', 'deliver', 'lead', 'leading',
         'collaborate', 'communicate', 'contribute', 'partner', 'operate', 'monitor',
-        'optimise', 'optimize', 'scale', 'ship', 'shipping', 'execute', 'enable',
+        'optimise', 'optimize', 'scale', 'execute', 'enable',
+        // "shipping" and "delivering" are NOT here. Jobscan counts
+        // "shipping" as a hard skill and scores a posting's "shipping AI
+        // products" against the CV, and in this industry shipping means
+        // getting software in front of users rather than moving boxes.
+        // The table maps both onto Delivery.
       ]);
     }
     return this.__ordinaryWords;

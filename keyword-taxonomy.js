@@ -243,7 +243,17 @@
       'Building for Internal Users', 'Internal Products'],
     ['Vendor Integration', 'Third-party Integration', 'Partner Integration',
       'Third Party Integration', 'External Integrations'],
-    ['Team Restructuring', 'Reorganisation', 'Reorganization', 'Team Reorg'],
+    // Jobscan counted "Restructuring" twice in a posting and found none
+    // on the CV: the bare noun had no group, so only the two-word form
+    // could ever match.
+    ['Team Restructuring', 'Restructuring', 'Reorganisation', 'Reorganization',
+      'Team Reorg', 'Reorg'],
+    ['Prioritisation', 'Prioritization', 'Prioritising', 'Prioritizing',
+      'Prioritise', 'Prioritize', 'Backlog Prioritisation', 'Roadmap Prioritisation'],
+    // Getting software in front of users. Jobscan scores a posting's
+    // "shipping AI products" as a hard skill, so the bare gerund needs a
+    // home rather than being dropped as a verb.
+    ['Delivery', 'Shipping', 'Ship', 'Shipped', 'Delivering', 'Execution'],
     ['Bias for Action', 'Sense of Urgency'],
     ['Escalation Management', 'Issue Resolution', 'Operational Resolution',
       'Query Resolution', 'Case Management'],
@@ -649,6 +659,10 @@
     'Vendor Integration': ['integrated', 'integration with', 'third-party API',
       'third party api', 'API integration', 'connected the', 'Kafka', 'webhook',
       'AWS Transcribe', 'FLUX Kontext'],
+    // Deciding what gets built next, and what does not. A roadmap owner
+    // does this by definition.
+    'Prioritisation': ['roadmap', 'backlog', 'prioritis', 'prioritiz', 'trade-off',
+      'tradeoff', 'what to build', 'sequenced', 'triage'],
     'Internal Tools': ['internal tool', 'internal campaign', 'internal platform',
       'internal dashboard', 'internal users', 'internal-facing', 'developer platform',
       'used by sales engineers', 'used by the team', 'deployment tooling'],
