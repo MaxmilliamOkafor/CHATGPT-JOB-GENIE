@@ -5320,6 +5320,54 @@ class ATSTailor {
    * 2. TF-IDF extraction: Get JD-specific keywords
    * 3. Merge: Mandatory keywords get HIGH priority
    */
+  /**
+   * Add every requirement the taxonomy knows and the posting names, to
+   * whatever the frequency-based extractors returned.
+   *
+   * It only ever ADDS, and only requirements already in the table, so it
+   * cannot invent a keyword out of the posting's prose. A requirement
+   * already extracted under any surface form is left exactly as it was:
+   * "Postgres" stays "Postgres" rather than being restated as
+   * "PostgreSQL", because the posting's own wording is what an applicant
+   * tracking system searches for.
+   */
+  sweepKnownRequirements(jobDescription, keywords) {
+    const TX = window.KeywordTaxonomy;
+    const base = keywords && Array.isArray(keywords.all) ? keywords : {
+      all: [], highPriority: [], mediumPriority: [], lowPriority: [],
+    };
+    if (!TX || typeof TX.sweep !== 'function') return base;
+
+    // The taxonomy's own identity for a requirement, so a group already
+    // represented is not added a second time under its canonical name,
+    // and "AI-driven" counts as the AI the extractor already returned.
+    const held = new Set(base.all.map((t) => TX.keyOf(t)).filter(Boolean));
+
+    const added = [];
+    for (const { label, hits } of TX.sweep(jobDescription, 60)) {
+      const key = TX.keyOf(label);
+      if (!key || held.has(key)) continue;
+      held.add(key);
+      added.push({ label, hits });
+    }
+    if (!added.length) return base;
+
+    const out = {
+      all: base.all.concat(added.map((a) => a.label)),
+      highPriority: (base.highPriority || []).slice(),
+      mediumPriority: (base.mediumPriority || []).slice(),
+      lowPriority: (base.lowPriority || []).slice(),
+    };
+    for (const { label, hits } of added) {
+      // Named more than once is the posting emphasising it; named once is
+      // still a requirement, just not the loudest one.
+      (hits >= 2 ? out.highPriority : out.mediumPriority).push(label);
+    }
+    console.log('[ATS Tailor] Taxonomy sweep added:', added.length,
+      'requirement(s) the frequency pass missed:', added.map((a) => a.label).join(', '));
+    return out;
+  }
+
   extractKeywordsOptimized(jobDescription) {
     if (!jobDescription || jobDescription.length < 50) {
       return { all: [], highPriority: [], mediumPriority: [], lowPriority: [] };
@@ -5358,7 +5406,21 @@ class ATSTailor {
     if (window.MandatoryKeywords && mandatoryFromJD.length > 0) {
       keywords = window.MandatoryKeywords.mergeWithMandatory(keywords, mandatoryFromJD);
     }
-    
+
+    // STEP 4: THE REQUIREMENT THE POSTING NAMES ONCE.
+    //
+    // Everything above scores by frequency, so a requirement stated a
+    // single time -- "a team that ships well", "two roadmaps with one
+    // team" -- never rises far enough to be returned. An external scan of
+    // one posting found three such skills this extension had not
+    // extracted at all, and a requirement that is never extracted can
+    // never be matched, written into the CV, or counted on the gauge.
+    //
+    // So the taxonomy is asked the other question: of the requirements it
+    // knows, which does this posting name? Frequency still decides the
+    // order; it no longer decides membership.
+    keywords = this.sweepKnownRequirements(jobDescription, keywords);
+
     const elapsed = performance.now() - startTime;
     console.log(`[ATS Tailor] Keyword extraction completed in ${elapsed.toFixed(1)}ms, total: ${keywords.all?.length || 0}`);
     

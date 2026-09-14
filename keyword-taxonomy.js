@@ -254,7 +254,41 @@
     // "shipping AI products" as a hard skill, so the bare gerund needs a
     // home rather than being dropped as a verb.
     ['Delivery', 'Shipping', 'Ship', 'Shipped', 'Delivering', 'Execution'],
+    ['Roadmap', 'Product Roadmap', 'Roadmapping', 'Technology Roadmap'],
+    ['Discovery', 'Product Discovery', 'User Research'],
+    ['Pod Structure', 'Squad Model', 'Team Topology'],
+    ['Tradeoffs', 'Trade-offs', 'Technical Tradeoffs'],
     ['Bias for Action', 'Sense of Urgency'],
+    // WHAT AN EXTERNAL ATS SCAN LOOKED FOR AND THIS TABLE COULD NOT NAME.
+    // The sweep below can only find a requirement the table already
+    // knows, so anything missing here is invisible to it no matter how
+    // plainly the posting asks. These are the ordinary hard and soft
+    // skills a screen expects across postings, not one employer's words.
+    ['SaaS', 'Software as a Service', 'B2B SaaS'],
+    ['Product Strategy', 'Technology Strategy'],
+    ['Strategic Planning', 'Strategy', 'Strategic Thinking'],
+    ['Customer Support', 'Customer Service', 'Guest Communication'],
+    ['Account Management', 'Client Management', 'Relationship Management'],
+    ['Retention', 'Customer Retention', 'Churn', 'Churn Reduction'],
+    ['Upselling', 'Upsell', 'Cross-selling'],
+    ['Revenue Management', 'Revenue Growth'],
+    ['P&L', 'Profit and Loss', 'P&L Ownership'],
+    ['Unit Economics', 'Margin Analysis'],
+    ['Change Management', 'Organisational Change', 'Organizational Change'],
+    ['Hiring', 'Recruiting', 'Recruitment', 'Talent Acquisition'],
+    ['OKRs', 'OKR', 'Objectives and Key Results'],
+    ['A/B Testing', 'Split Testing', 'Experimentation'],
+    ['User Experience', 'UX'],
+    ['Code Review', 'Peer Review', 'Pull Request Review'],
+    ['Technical Debt', 'Tech Debt'],
+    ['Postmortem', 'Incident Review', 'Root Cause Analysis'],
+    ['Production Code', 'Hands-on Coding'],
+    ['Critical Thinking'],
+    ['Storytelling', 'Narrative'],
+    ['Delegation', 'Delegating'],
+    ['Empathy', 'Empathetic'],
+    ['Property Management', 'Property Managers'],
+    ['Short-Term Rental', 'STR', 'Vacation Rental', 'Holiday Rental'],
     ['Escalation Management', 'Issue Resolution', 'Operational Resolution',
       'Query Resolution', 'Case Management'],
     // "feedback" and "team performance" arrived as separate chips on one
@@ -263,7 +297,8 @@
     // already listed. A posting's phrasing is not a new requirement.
     ['Performance Management', 'Performance Reviews', 'Performance Feedback',
       'Performance Actions', 'Appraisals', 'Feedback', 'Team Performance',
-      'Performance Improvement', 'Performance Conversations'],
+      'Performance Improvement', 'Performance Conversations',
+      'Performance Framework'],
     ['Policy', 'Policy Application', 'Policy Compliance', 'Policy Development',
       'Policy Implementation', 'Policies and Procedures'],
     ['Remote-first', 'Remote First', 'Remote-first Teams', 'Distributed Teams',
@@ -662,7 +697,8 @@
     // Deciding what gets built next, and what does not. A roadmap owner
     // does this by definition.
     'Prioritisation': ['roadmap', 'backlog', 'prioritis', 'prioritiz', 'trade-off',
-      'tradeoff', 'what to build', 'sequenced', 'triage'],
+      'tradeoff', 'what to build', 'sequenced', 'triage', 'deciding what'],
+    'Roadmap': ['roadmap', 'quarterly plan', 'product plan', 'what we build next'],
     'Internal Tools': ['internal tool', 'internal campaign', 'internal platform',
       'internal dashboard', 'internal users', 'internal-facing', 'developer platform',
       'used by sales engineers', 'used by the team', 'deployment tooling'],
@@ -685,13 +721,39 @@
       'streamlined', 'removed the manual', 'replaced the manual', 'eliminated the manual',
       'automated the', 'automating the', 'shortened the'],
   };
+  // KEYED BY THE GROUP, NOT BY THE SPELLING THE TABLE HAPPENED TO USE.
+  //
+  // impliedIn resolves its term through the group before looking the cues
+  // up, so a cue list written under "System Design" -- a member of the
+  // group whose canonical name is "Architecture" -- was never reachable.
+  // All six of its cues were dead, silently, and nothing said so. Two
+  // keys that land on the same group have their cues merged rather than
+  // one quietly replacing the other.
   const _IMPLIED_LOOKUP = new Map();
-  for (const label of Object.keys(IMPLIED_BY)) _IMPLIED_LOOKUP.set(tight(label), IMPLIED_BY[label]);
+  for (const label of Object.keys(IMPLIED_BY)) {
+    const group = groupOf(label);
+    for (const key of new Set([tight(label), tight(group ? group[0] : label)])) {
+      _IMPLIED_LOOKUP.set(key, (_IMPLIED_LOOKUP.get(key) || []).concat(IMPLIED_BY[label]));
+    }
+  }
 
   /**
    * Does this body of text DEMONSTRATE the requirement, as opposed to
    * naming it? Used by the evidence gate only.
    */
+  const _proofCache = new Map();
+  function _proofPattern(proof) {
+    if (_proofCache.has(proof)) return _proofCache.get(proof);
+    const n = norm(proof);
+    const body = n.split(/[ ./-]+/).filter(Boolean)
+      // ':' is a separator the haystack keeps but norm() does not, which
+      // is why the cue "1:1" could never match the text "1:1".
+      .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\s.:/-]{0,2}');
+    const re = new RegExp('(?<![\\p{L}\\p{N}_+#])' + body, 'iu');
+    _proofCache.set(proof, re);
+    return re;
+  }
+
   function impliedIn(text, term) {
     const group = groupOf(term);
     const label = group ? group[0] : String(term || '');
@@ -700,10 +762,15 @@
     const haystack = String(text == null ? '' : text).normalize('NFKC').toLowerCase();
     if (!haystack) return false;
     for (const proof of proofs) {
-      // A plain lower-cased contains: these are phrases, not keywords,
-      // and a boundary test would reject "load balanc" matching
-      // "load balancing", which is the point of writing it that way.
-      if (haystack.indexOf(norm(proof)) !== -1) return true;
+      // THE CUE MUST START A WORD, BUT NEED NOT FINISH ONE.
+      //
+      // The open end is deliberate: "load balanc" is written that way so
+      // it also matches "load balancing", which is the point. The open
+      // FRONT was not deliberate. It made "IAM" fire inside "Miami" and
+      // "SLA" inside "translator", so a CV naming the city it was written
+      // in was credited with evidence of security work. A leading
+      // boundary rejects both and costs the trailing match nothing.
+      if (_proofPattern(proof).test(haystack)) return true;
     }
     return false;
   }
@@ -739,21 +806,61 @@
       'Statistics', 'LLM', 'RAG', 'Model Deployment'],
     'Analytics & Reporting': ['Power BI', 'Tableau', 'Looker', 'Excel', 'Data Analysis',
       'Data Visualisation', 'Business Analysis', 'Financial Reporting', 'Forecasting',
-      'KPI', 'Regulatory Reporting', 'Dashboards'],
+      'KPI', 'Regulatory Reporting', 'Dashboards', 'OKRs', 'A/B Testing',
+      'Unit Economics'],
     'Tools & Platforms': ['Jira', 'Confluence', 'Salesforce', 'Workday', 'SAP', 'NetSuite',
       'Zendesk', 'ServiceNow', 'ADP', 'Ceridian', 'Deel', 'HRIS', 'Payroll Software',
       'Oracle EBS', 'Asana', 'Notion'],
     'Soft Skills': ['Communication', 'Collaboration', 'Problem Solving', 'Adaptability',
       'Time Management', 'Attention to Detail', 'Critical Thinking', 'Negotiation',
-      'Presentation', 'Written Communication', 'Self-organised'],
+      'Presentation', 'Written Communication', 'Self-organised', 'Storytelling',
+      'Delegation', 'Empathy', 'Ownership', 'Prioritisation', 'Decision Making'],
     'Domain Expertise': ['Leadership', 'People Leadership', 'Mentorship', 'Coaching',
       'Stakeholder Management', 'Project Management', 'Programme Management',
       'Product Management', 'Agile', 'Performance Management', 'Escalation Management',
       'Continuous Improvement', 'Operational Excellence', 'Compliance', 'Payroll',
       'Vendor Management', 'SLA Management', 'Multi-country', 'Risk Management',
       'Change Management', 'Hiring', 'Policy', 'Remote-first', 'System Design',
-      'Code Review', 'Testing', 'Security', 'Documentation', 'Training'],
+      'Code Review', 'Testing', 'Security', 'Documentation', 'Training',
+      'SaaS', 'Product Strategy', 'Strategic Planning', 'Roadmap', 'Discovery',
+      'Delivery', 'Customer Support', 'Customer Success', 'Account Management',
+      'Retention', 'Upselling', 'Revenue Management', 'P&L', 'Technical Debt',
+      'Postmortem', 'Production Code', 'User Experience', 'Pod Structure',
+      'Property Management', 'Short-Term Rental', 'Data Quality',
+      'Operational Efficiency', 'Internal Tools', 'Vendor Integration'],
   };
+  // A REQUIREMENT WITH NO CATEGORY HAS NO SKILLS LINE TO LAND ON, so it
+  // goes wherever there is room rather than beside its peers. Ninety-six
+  // of the table's groups were in that position, which is why a tool
+  // could turn up under the wrong heading. Listed here rather than above
+  // only to keep each category readable at the point it is defined.
+  Object.assign(CATEGORIES, {
+    'Programming': CATEGORIES['Programming'].concat(['C', 'Elixir', 'Clojure',
+      'Objective-C', 'Dart', 'Haskell', 'PL/SQL', 'T-SQL', 'SASS', 'YAML', 'JSON',
+      'XML', 'Svelte', 'Rails', 'REST', 'API Design', 'Software Engineering']),
+    'Cloud & DevOps': CATEGORIES['Cloud & DevOps'].concat(['S3', 'EC2', 'EKS', 'ECS',
+      'RDS', 'Containerisation', 'Pulumi', 'Chef', 'Puppet', 'Bitbucket',
+      'Version Control', 'CircleCI', 'Spinnaker', 'Nginx', 'Apache', 'RabbitMQ',
+      'OpenTelemetry', 'Honeycomb', 'New Relic', 'Splunk', 'PagerDuty', 'Sentry',
+      'Incident Response', 'SLO', 'DevOps', 'Performance Optimisation']),
+    'Data Engineering': CATEGORIES['Data Engineering'].concat(['MariaDB', 'SQL Server',
+      'Oracle Database', 'DynamoDB', 'ClickHouse', 'Neo4j', 'SQLite', 'Dagster',
+      'Prefect', 'Luigi', 'Mage', 'Flyte', 'Temporal']),
+    'Machine Learning': CATEGORIES['Machine Learning'].concat(['Data Science',
+      'pandas', 'NumPy']),
+    'Analytics & Reporting': CATEGORIES['Analytics & Reporting'].concat(['Qlik',
+      'Audit', 'Reconciliation', 'Budgeting']),
+    'Tools & Platforms': CATEGORIES['Tools & Platforms'].concat(['HubSpot', 'Remote.com']),
+    'Soft Skills': CATEGORIES['Soft Skills'].concat(['Scrappy', 'Bias for Action',
+      'Stakeholder Communication', 'Accuracy', 'Conflict Resolution', 'Languages',
+      'Tradeoffs']),
+    'Domain Expertise': CATEGORIES['Domain Expertise'].concat(['Invoicing', 'Payouts',
+      'Payments', 'Tax Calculation', 'Financial Technology', 'AML', 'KYC', 'GTM',
+      'Revenue Operations', 'Sales Operations', 'Technical Evaluation', 'Innovation',
+      'Benefits Administration', 'Compensation', 'Time and Attendance', 'Lean',
+      'Six Sigma', 'Team Restructuring', 'Onboarding', 'Offboarding',
+      'Employee Relations', 'SOP', 'Requirements Gathering', 'QA']),
+  });
   const _CATEGORY_OF = new Map();
   for (const category of Object.keys(CATEGORIES)) {
     for (const label of CATEGORIES[category]) {
@@ -772,10 +879,61 @@
     return _CATEGORY_OF.get(tight(label)) || null;
   }
 
+  /**
+   * Every requirement in the table that the text actually mentions,
+   * ranked by how often the text mentions it.
+   *
+   * THE EXTRACTOR MISSES WHAT THE POSTING SAYS ONCE. It scores terms by
+   * frequency, so a requirement named a single time -- "a team that
+   * ships well", "two roadmaps with one team", "OTA compliance" -- never
+   * rises far enough to be returned. An external ATS scan found three
+   * such skills on one posting that this extension had not extracted at
+   * all, and a requirement never extracted can never be matched, written
+   * or counted.
+   *
+   * Frequency is the wrong question. The table already knows what a
+   * requirement IS, so the right question is simply whether the posting
+   * names one. This sweep is deterministic, has no threshold to tune,
+   * and cannot miss a requirement the table knows.
+   */
+  function sweep(text, limit) {
+    const body = String(text == null ? '' : text).normalize('NFKC');
+    if (!body.trim()) return [];
+    const found = [];
+    for (const group of GROUPS) {
+      // MEMBERSHIP IS DECIDED BY THE SAME TEST EVERYTHING ELSE USES, so a
+      // posting that says "roadmaps" or "ships" names Roadmap and
+      // Delivery, and one that says "no experience with Kafka" names
+      // neither. Counting the table's own spelling instead scored those
+      // first two zero and dropped them.
+      if (!group.some((member) => appearsIn(body, member))) continue;
+      // Distinct STRETCHES of text, not distinct match positions. "product
+      // roadmap" and "roadmap" start eight characters apart but are the
+      // same two words being read twice, and counting both made one
+      // mention look like emphasis.
+      const spans = [];
+      for (const form of variantsOf(group[0])) {
+        for (const m of body.matchAll(new RegExp(formPattern(form).source, 'giu'))) {
+          spans.push([m.index, m.index + m[0].length]);
+        }
+      }
+      spans.sort((a, b) => a[0] - b[0] || b[1] - a[1]);
+      let hits = 0, reached = -1;
+      for (const [start, end] of spans) {
+        if (start >= reached) hits += 1;
+        if (end > reached) reached = end;
+      }
+      found.push({ label: group[0], hits: hits || 1 });
+    }
+    found.sort((a, b) => b.hits - a.hits || a.label.localeCompare(b.label));
+    const cap = Math.max(1, Number(limit) || 40);
+    return found.slice(0, cap);
+  }
+
   global.KeywordTaxonomy = {
     norm, tight, canonical, keyOf, groupOf, variantsOf, appearsIn, dedupe,
     measure, stripQualifiers, GROUPS, impliedIn, IMPLIED_BY,
-    categoryOf, CATEGORIES,
+    categoryOf, CATEGORIES, sweep,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.KeywordTaxonomy;
 })(typeof window !== 'undefined' ? window : globalThis);

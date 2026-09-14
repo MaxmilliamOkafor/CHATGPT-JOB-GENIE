@@ -121,9 +121,11 @@ console.log('\nAI IS NOT DROPPED FOR BEING TWO LETTERS');
   // used that helper, so the badge came up one short of the chips.
   const kept = popup.cleanKeywordList(['AI', 'ML', 'QA', 'UX', 'Go', 'Python', 'of', 'the']);
   // Survives as itself, or under the canonical name of its requirement:
-  // ML is a surface form of Machine Learning and prints as that.
+  // ML is a surface form of Machine Learning and prints as that, as UX
+  // is of User Experience. The posting's own short form is paired back on
+  // later by alignToPostingWording, so a literal screen still finds it.
   for (const [want, canonical] of [['AI', 'AI'], ['ML', 'Machine Learning'],
-    ['QA', 'QA'], ['UX', 'UX'], ['Go', 'Go']]) {
+    ['QA', 'QA'], ['UX', 'User Experience'], ['Go', 'Go']]) {
     t('  ' + want.padEnd(7) + ' survives', kept.some((k) =>
       String(k).toLowerCase() === want.toLowerCase()
       || String(k).toLowerCase() === canonical.toLowerCase()), JSON.stringify(kept));
