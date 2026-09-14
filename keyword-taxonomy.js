@@ -231,6 +231,9 @@
     ['Scrappy', 'Resourceful', 'Resourcefulness', 'Scrappiness'],
     ['Decision Making', 'Decision-Making', 'Judgement', 'Judgment'],
     ['Customer Success', 'Client Success'],
+    ['Internal Tools', 'Internal Users', 'Internal Platform', 'Internal Tooling',
+      'Building for Internal Users', 'Internal Products'],
+    ['Team Restructuring', 'Reorganisation', 'Reorganization', 'Team Reorg'],
     ['Bias for Action', 'Sense of Urgency'],
     ['Escalation Management', 'Issue Resolution', 'Operational Resolution',
       'Query Resolution', 'Case Management'],
@@ -625,6 +628,12 @@
       'error budget', 'month-end reporting'],
     'Escalation Management': ['incident response', 'triage', 'escalated', 'root cause',
       'recurring failure', 'backlog'],
+    // Tools whose users sit inside the company. "Rewrote the internal
+    // campaign diagnostics tool used by sales engineers" is building for
+    // internal users, whatever words the posting chose for it.
+    'Internal Tools': ['internal tool', 'internal campaign', 'internal platform',
+      'internal dashboard', 'internal users', 'internal-facing', 'developer platform',
+      'used by sales engineers', 'used by the team', 'deployment tooling'],
     // Owning a thing end to end is what a posting means by ownership.
     'Ownership': ['owned the', 'owned and', 'built and owned', 'end-to-end responsibility',
       'primary on-call responsibility', 'sole owner', 'accountable for', 'took the'],

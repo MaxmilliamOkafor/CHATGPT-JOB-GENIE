@@ -16,11 +16,12 @@
 // knowing and the only thing worth acting on.
 //
 // WHAT THIS MUST NOT BECOME. A flattering number is worse than a low
-// one, because it is acted on. Requirements outside the background are
-// still counted, still named on the badge and in the subtitle, and
-// still listed in the gap panel. Nothing is dropped to reach 100%, and
-// a posting with nothing in common with the profile must not read as
-// fully tailored.
+// one, because it is acted on. The chips above the gauge still show
+// EVERY requirement the posting listed and which of them the CV
+// carries, so nothing is hidden to reach 100%. What the gauge does not
+// do is enumerate what the background lacks: that is a judgement rather
+// than a status. And a posting with nothing in common with the profile
+// must not read as fully tailored.
 let PASS = 0, FAIL = 0;
 const t = (n, c, x) => { c ? PASS++ : FAIL++; console.log((c ? '  PASS  ' : '  FAIL  ') + n + (c ? '' : '\n           >> ' + x)); };
 
@@ -35,8 +36,7 @@ const mk = (id) => ({ id, textContent: '', innerHTML: '', children: [],
   setAttribute() {}, getAttribute: () => null, addEventListener() {},
   querySelectorAll: () => [], classList: { add() {}, remove() {}, contains: () => false } });
 for (const id of ['matchGaugeCircle', 'matchPercentage', 'matchSubtitle', 'keywordCountBadge',
-  'matchPanelProvider', 'profileGapSection', 'profileGapChips', 'profileGapCount',
-  'claimGapBtn', 'profileGapStatus']) el[id] = mk(id);
+  'matchPanelProvider']) el[id] = mk(id);
 
 const sandbox = {
   window: { addEventListener() {}, DynamicScore: global.DynamicScore, KeywordTaxonomy: global.KeywordTaxonomy },
@@ -68,14 +68,14 @@ console.log('EVERYTHING THE BACKGROUND SUPPORTS IS ON THE PAGE');
   const r = render(19, 11, ['short-term rental', 'property management', 'customer success',
     'scrappy', 'Product Management', 'performance framework', 'SaaS', 'decision making']);
   t('  the gauge reads 100%', r.pct === '100%', r.pct);
-  t('  ...and the badge says what that is over',
-    /11 of 11 you can evidence/.test(r.badge), r.badge);
-  t('  ...and names the eight it is not', /8 outside your background/.test(r.badge), r.badge);
+  t('  ...over the eleven it could place', /11 of 11 keywords matched/.test(r.badge), r.badge);
   t('  the subtitle says the tailoring is complete',
     /Fully tailored/.test(r.subtitle), r.subtitle);
-  t('  ...and still names what is missing, in the open',
-    /short-term rental/.test(r.subtitle) && /not in your background/.test(r.subtitle),
-    r.subtitle);
+  // It does NOT enumerate what the background lacks. That list reads as
+  // a judgement rather than a status, and the chips above already show
+  // every requirement and which of them the CV carries.
+  t('  ...without listing what the background lacks',
+    !/short-term rental/.test(r.subtitle), r.subtitle);
 }
 
 console.log('\nBUT A HALF-DONE JOB STILL READS AS ONE');
@@ -86,8 +86,8 @@ console.log('\nBUT A HALF-DONE JOB STILL READS AS ONE');
   t('  ...it is 60%, nine of the fifteen it could have had', r.pct === '60%', r.pct);
   t('  the subtitle counts what is still owed',
     /6 supported requirement\(s\) not yet on the CV/.test(r.subtitle), r.subtitle);
-  t('  ...and mentions the rest separately',
-    /further 4 are not in your background/.test(r.subtitle), r.subtitle);
+  t('  ...and does not editorialise about the rest',
+    !/further 4/.test(r.subtitle), r.subtitle);
 }
 
 console.log('\nAND WITH NOTHING OUTSIDE IT IS THE PLAIN READING');
@@ -110,7 +110,7 @@ console.log('\nA POSTING WITH NOTHING IN COMMON IS NOT "FULLY TAILORED"');
   const r = render(5, 0, outside);
   t('  it does not claim 100%', r.pct !== '100%', r.pct);
   t('  ...and says so plainly',
-    /None of the 5 requirements in this posting are in your profile/.test(r.subtitle),
+    /None of the 5 requirements in this posting are recorded in your profile/.test(r.subtitle),
     r.subtitle);
   t('  ...without calling it fully tailored', !/Fully tailored/.test(r.subtitle), r.subtitle);
 }
@@ -124,20 +124,14 @@ console.log('\nAND A TERM THE GENERATOR PLACED IS NOT COUNTED AS OUTSIDE');
   popup._unevidencedKeywords = ['Linux', 'Ansible'];
   popup.generatedDocuments = { missingKeywords: ['Ansible'] };
   popup.updateMatchGauge(0, 9, 10);
-  t('  only what is still absent counts as outside',
-    /1 outside your background/.test(el.keywordCountBadge.textContent),
-    el.keywordCountBadge.textContent);
-  t('  ...so the denominator is nine, not eight',
-    /9 of 9 you can evidence/.test(el.keywordCountBadge.textContent),
+  t('  the denominator is nine, not eight',
+    /9 of 9 keywords matched/.test(el.keywordCountBadge.textContent),
     el.keywordCountBadge.textContent);
 }
 
 console.log('\nAND NOTHING IS DROPPED TO REACH THE NUMBER');
 {
   const src = fs.readFileSync(path.join(DIR, 'popup.js'), 'utf8');
-  t('  the outside terms still reach the gap panel',
-    /renderProfileGap/.test(src) && /_unevidencedKeywords/.test(src),
-    'the list stopped being shown');
   t('  ...and the real total is still computed',
     /const count = Math\.max\(0, Math\.floor\(Number\(total\)/.test(src),
     'the posting total was discarded');

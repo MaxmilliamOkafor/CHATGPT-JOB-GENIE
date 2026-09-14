@@ -4745,167 +4745,27 @@ class ATSTailor {
     // reason: the profile does not record it. Saying so turns the gauge
     // into an instruction -- add it to the profile and re-run -- rather
     // than a score to stare at.
-    const blocked = outside.length;
     const shortfall = Math.max(0, supportable - hits);
+    // WHAT IS SHORT, NOT A VERDICT ON THE CANDIDATE.
+    //
+    // This used to enumerate the requirements his background does not
+    // cover, which is a list nobody asked for and reads as a judgement
+    // rather than a status. The panel says whether the DOCUMENT is
+    // finished. The chips above already show every requirement and which
+    // of them the CV carries.
     set('matchSubtitle', count
-      // Nothing the posting asked for is in this background at all.
-      // "Fully tailored" is vacuously true there and reads as a boast
-      // beside a zero, so it says the real thing instead.
       ? (supportable === 0
-        ? `None of the ${count} requirements in this posting are in your profile. `
-          + 'This may not be the right role, or your profile may be missing what you have.'
+        ? `None of the ${count} requirements in this posting are recorded in your profile.`
         : shortfall === 0
-        ? (blocked
-          ? `Fully tailored: every requirement your profile supports is on the CV. `
-            + `${blocked} more (${outside.slice(0, 3).join(', ')}${blocked > 3 ? ', ...' : ''}) `
-            + `are not in your background - add any you genuinely have below.`
-          : 'Fully tailored: every requirement the posting listed is on the CV.')
-        : `${shortfall} supported requirement(s) not yet on the CV.`
-          + (blocked ? ` A further ${blocked} are not in your background.` : ''))
+          ? (supportable < count
+            ? 'Fully tailored: every requirement your profile records is on the CV.'
+            : 'Fully tailored: every requirement the posting listed is on the CV.')
+          : `${shortfall} supported requirement(s) not yet on the CV.`)
       : 'No keywords available to measure.');
-    set('keywordCountBadge', blocked
-      ? `${hits} of ${supportable} you can evidence  ·  ${blocked} outside your background`
-      : `${hits} of ${count} keywords matched`);
+    set('keywordCountBadge', `${hits} of ${supportable || count} keywords matched`);
     set('matchPanelProvider', this.aiProvider === 'kimi' ? 'Kimi K2' : 'OpenAI');
-    // The gap section is the newest thing on this panel and the panel
-    // is on the tailoring flow's own stack. Nothing drawn here is worth
-    // failing a run for.
-    try {
-      if (typeof this.renderProfileGap === 'function') this.renderProfileGap();
-    } catch (e) {
-      console.warn('[ATS Tailor] profile gap render failed, tailoring continues:', e && e.message);
-    }
   }
 
-  // ██ THE GAP THAT NO AMOUNT OF TAILORING CLOSES ██
-  //
-  // Measured across eight postings in his own field, the coverage pass
-  // put every term the profile could support onto the CV and still
-  // stopped short -- on Linux, code review, Agile, dbt, Ansible. Not a
-  // matching fault: those words appear nowhere in the profile, and
-  // writing them anyway is inventing experience.
-  //
-  // So the ceiling is the profile, and the profile is a one-time cost
-  // paid once per missing skill. This turns the console warning into
-  // the fix: tick what you have, it is saved, and every posting from
-  // then on counts it. A handful of applications and the gap is gone.
-  renderProfileGap() {
-    const section = document.getElementById('profileGapSection');
-    const chips = document.getElementById('profileGapChips');
-    const btn = document.getElementById('claimGapBtn');
-    if (!section || !chips) return;
-
-    // Only what is STILL absent. A term the generator managed to place
-    // after the injection pass is on the CV, and asking for it back
-    // would be asking twice for something already done.
-    const stillMissing = new Set((Array.isArray(this.generatedDocuments?.missingKeywords)
-      ? this.generatedDocuments.missingKeywords : [])
-      .map((k) => String(k == null ? '' : k).trim().toLowerCase()));
-    const gap = (Array.isArray(this._unevidencedKeywords) ? this._unevidencedKeywords : [])
-      .map((k) => String(k == null ? '' : k).trim())
-      // "7+ years" is not something to tick and save as a skill. The
-      // dates in the experience section answer it already.
-      .filter((k) => k && !ATSTailor.isCriterion(k))
-      .filter((k) => !stillMissing.size || stillMissing.has(k.toLowerCase()));
-    if (!gap.length) { section.classList.add('hidden'); return; }
-
-    section.classList.remove('hidden');
-    const countEl = document.getElementById('profileGapCount');
-    if (countEl) countEl.textContent = String(gap.length);
-    this._claimedGapTerms = this._claimedGapTerms instanceof Set ? this._claimedGapTerms : new Set();
-
-    chips.innerHTML = gap.map((term) => {
-      const on = this._claimedGapTerms.has(term);
-      return `<button type="button" class="keyword-chip gap${on ? ' claimed' : ''}" `
-        + `data-gap-term="${this.escapeHtml(term)}" aria-pressed="${on}">`
-        + `${on ? '✓' : '+'} ${this.escapeHtml(term)}</button>`;
-    }).join('');
-
-    chips.querySelectorAll('[data-gap-term]').forEach((el) => {
-      el.addEventListener('click', () => {
-        const term = el.getAttribute('data-gap-term');
-        if (this._claimedGapTerms.has(term)) this._claimedGapTerms.delete(term);
-        else this._claimedGapTerms.add(term);
-        // The confirmation of the LAST save described a different set of
-        // terms: leaving it up while a new selection is being made read
-        // as "Added 2" above a button offering to add 1.
-        const stale = document.getElementById('profileGapStatus');
-        if (stale) stale.textContent = '';
-        this.renderProfileGap();
-      });
-    });
-
-    if (btn) {
-      btn.disabled = this._claimedGapTerms.size === 0;
-      btn.textContent = this._claimedGapTerms.size
-        ? `Add ${this._claimedGapTerms.size} to my profile`
-        : 'Add to my profile';
-      btn.onclick = () => this.claimProfileGap();
-    }
-  }
-
-  /**
-   * Write the claimed terms into the saved profile's skills.
-   *
-   * Additive and de-duplicated against what is already there, through
-   * the same taxonomy the matcher uses -- claiming "Postgres" when the
-   * profile says "PostgreSQL" must not write a second entry.
-   */
-  async claimProfileGap() {
-    const status = document.getElementById('profileGapStatus');
-    const say = (msg) => { if (status) status.textContent = msg; };
-    const claimed = [...(this._claimedGapTerms || [])];
-    if (!claimed.length) return;
-    if (!this.session?.access_token || !this.session?.user?.id) {
-      say('Sign in to save to your profile.');
-      return;
-    }
-
-    const profile = this._cachedProfile || {};
-    const existing = Array.isArray(profile.skills)
-      ? profile.skills.slice()
-      : (typeof profile.skills === 'string'
-        ? profile.skills.split(',').map((s) => s.trim()).filter(Boolean) : []);
-
-    const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
-    const blob = existing.join(' | ');
-    const toAdd = claimed.filter((term) => {
-      if (TX && typeof TX.appearsIn === 'function') return !TX.appearsIn(blob, term);
-      return existing.every((s) => s.toLowerCase() !== term.toLowerCase());
-    });
-    if (!toAdd.length) { say('Already on your profile.'); this._claimedGapTerms.clear(); return; }
-
-    const next = existing.concat(toAdd);
-    say('Saving...');
-    try {
-      const res = await fetch(
-        `${SUPABASE_URL}/rest/v1/profiles?user_id=eq.${this.session.user.id}`,
-        {
-          method: 'PATCH',
-          headers: {
-            'Content-Type': 'application/json',
-            apikey: SUPABASE_ANON_KEY,
-            Authorization: `Bearer ${this.session.access_token}`,
-            Prefer: 'return=minimal',
-          },
-          body: JSON.stringify({ skills: next }),
-        }
-      );
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      profile.skills = next;
-      this._cachedProfile = profile;
-      this._claimedGapTerms.clear();
-      // Drop what was just claimed out of the gap list so the section
-      // reflects the profile as it now stands.
-      this._unevidencedKeywords = (this._unevidencedKeywords || [])
-        .filter((k) => toAdd.indexOf(k) === -1);
-      say(`Added ${toAdd.length} to your profile. Tailor again to use them.`);
-      this.renderProfileGap();
-    } catch (e) {
-      console.warn('[ATS Tailor] Could not save claimed skills:', e);
-      say('Could not save. Check your connection and try again.');
-    }
-  }
 
   /**
    * OPTIMIZED: Batch update all keyword chips in one DOM operation
