@@ -176,8 +176,19 @@ console.log('\nAND "7+ YEARS" IS NOT A SKILL TO TICK AND SAVE');
     t('  ' + k.padEnd(34) + ' is a criterion', ATSTailor.isCriterion(k), 'offered as a skill');
   }
   for (const k of ['Python', 'design patterns', 'multi-tenant', 'self-organised',
-    'stakeholder management']) {
+    'stakeholder management',
+    // These carry an article and are still real requirements, which is
+    // why the prose rule matches experience WORDING rather than articles.
+    'Infrastructure as a Service', 'Platform as a Service', 'software as a service',
+    'experience with Python', 'working knowledge of SQL']) {
     t('  ' + k.padEnd(34) + ' is a skill', !ATSTailor.isCriterion(k), 'wrongly filtered');
+  }
+  // A line lifted out of the job description is not something a CV can
+  // carry or an applicant tracking system can filter on.
+  for (const k of ['experience at a competitor', 'worked at a startup',
+    'experience in a fast-paced environment', 'preferably a degree',
+    'Kubernetes is a plus', 'SaaS experience preferred']) {
+    t('  ' + k.padEnd(34) + ' is lifted prose', ATSTailor.isCriterion(k), 'offered as a skill');
   }
   t('  ...so it leaves the denominator',
     JSON.stringify(ATSTailor.requirementsOnly(['Python', '7+ years', 'AWS', '401k']))

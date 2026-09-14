@@ -5766,6 +5766,22 @@ class ATSTailor {
       /\b\d+\s*\+?\s*(?:years?|yrs?)\s+(?:of\s+)?(?:relevant\s+|professional\s+|proven\s+)?experience\b/i,
       /^(?:bachelor|master|doctorate|phd|mba|degree)('?s)?(?:\s+degree)?$/i,
       /^(?:bachelor|master)('?s)?\s+degree\s+in\b/i,
+      // LIFTED PROSE IS NOT A KEYWORD.
+      //
+      // "experience at a competitor" arrived as a chip. It is a line
+      // from the job description: no CV contains it, no applicant
+      // tracking system filters on it, and nothing a person could write
+      // would satisfy it. Same for "worked at a startup".
+      //
+      // Matched on EXPERIENCE WORDING followed by an article, not on
+      // articles alone. "Infrastructure as a Service", "Platform as a
+      // Service" and "software as a service" are real requirements that
+      // happen to contain "a", and a bare article rule deleted all
+      // three. "Experience with Python" carries no article and is
+      // reduced to Python by the qualifier rules, so it is untouched.
+      /^(?:experience|experienced|worked|working|background|familiarity|exposure|knowledge|understanding|comfortable|proven)\b[^,;]*\b(?:a|an|the)\s+\w/i,
+      /^(?:preferably|ideally|nice to have|bonus|desirable|a plus|plus if)\b/i,
+      /\b(?:is a plus|preferred|desirable|nice to have)\s*$/i,
     ];
   }
 
