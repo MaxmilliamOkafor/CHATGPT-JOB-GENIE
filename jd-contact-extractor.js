@@ -58,14 +58,54 @@
     return 30;
   }
 
-  function contextualCandidate(email, context, source) {
-    const score = _scoreEmail(email);
-    if (score <= 0) return null;
-    const local = email.split('@')[0];
+  // WHY AN ADDRESS WAS TURNED DOWN IS NOT THE SAME AS FINDING NONE.
+  //
+  // A posting saying "please email us directly at Privacy@Redwood.com"
+  // HAS published an address. Declining it is right -- that is the GDPR
+  // data-removal inbox, and an application sent there lands in front of
+  // the one team certain to remember it, which is exactly the history a
+  // later application to the same employer gets read against. But the
+  // panel then said "No recipient. Add an address the employer
+  // published", which is false, and sent the reader back to the posting
+  // to look for an address they were already looking at.
+  const DECLINE_REASON = [
+    [/noreply|no-reply|donotreply|do-not-reply|unsubscribe|bounce|mailer-daemon|postmaster/i,
+      'an unattended mailbox'],
+    [/privacy|dpo|gdpr/i, 'the privacy and data-protection inbox'],
+    [/legal|compliance/i, 'the legal and compliance inbox'],
+    [/accommodat|accessib|disabilit/i, 'the adjustments and accessibility inbox'],
+    [/security|abuse/i, 'the security inbox'],
+    [/support|help/i, 'the customer support inbox'],
+    [/press|media/i, 'the press inbox'],
+    [/sales|marketing|billing/i, 'a sales or billing inbox'],
+    [/info|admin|webmaster|contact|enquir|inquir|general/i, 'a general enquiries inbox'],
+  ];
+  function declineReason(email, evidence) {
+    const local = String(email).split('@')[0];
+    for (const [re, why] of DECLINE_REASON) if (re.test(local)) return why;
+    if (/accommodat|accessibility|privacy|data protection/i.test(evidence || '')) {
+      return 'published for accessibility or privacy requests, not for applications';
+    }
+    return 'not an address published for applications';
+  }
+
+  function contextualCandidate(email, context, source, declined) {
     const evidence = String(context || '').trim();
-    if (/accommodat|accessibility|technical (?:issue|support)|privacy|data protection|unsubscribe/i.test(evidence)) return null;
+    const note = () => {
+      const key = String(email).toLowerCase();
+      if (declined && !declined.has(key)) {
+        declined.set(key, { email, reason: declineReason(email, evidence), source });
+      }
+      return null;
+    };
+    const score = _scoreEmail(email);
+    if (score <= 0) return note();
+    const local = email.split('@')[0];
+    if (/accommodat|accessibility|technical (?:issue|support)|privacy|data protection|unsubscribe/i.test(evidence)) return note();
     const hiring = /recruit|hiring|talent acquisition|applicationContact|contact.{0,45}(?:role|position|job)|(?:role|position|job).{0,45}contact|send.{0,30}(?:cv|resume|application)/i.test(evidence);
     const mailbox = RECRUITING_LOCAL.test(local) || /recruit|talent|hiring/i.test(local);
+    // Not a rejection: an ordinary company address with nothing around it
+    // to say it is for applicants. Nothing useful to report about it.
     if (!hiring && !mailbox) return null;
     return {email, score: score + (hiring ? 15 : 0), source,
       context: evidence.slice(0, 240), contactName: hiring ? extractContactName(evidence) : '',
@@ -207,6 +247,8 @@
 
     const found = [];
     const seen = new Set();
+    // Addresses the posting published that are not for applications.
+    const declined = new Map();
     let m;
     const re = new RegExp(EMAIL_RE.source, 'g');
     while ((m = re.exec(jdText)) !== null) {
@@ -217,7 +259,7 @@
       const start = Math.max(jdText.lastIndexOf('\n', m.index), jdText.lastIndexOf(';', m.index));
       const end = jdText.indexOf('\n', m.index);
       const context = jdText.slice(Math.max(start + 1, m.index - 160), end < 0 ? m.index + e.length + 100 : Math.min(end, m.index + e.length + 100));
-      const candidate = contextualCandidate(e, context, 'job-description');
+      const candidate = contextualCandidate(e, context, 'job-description', declined);
       if (candidate) found.push(candidate);
     }
     // PAGE-PUBLISHED SOURCES.
@@ -242,7 +284,7 @@
       for (const h of harvested.emails) {
         const key = String(h.email || '').toLowerCase();
         if (!key || key === own) continue;
-        const candidate = contextualCandidate(h.email, h.context, h.source);
+        const candidate = contextualCandidate(h.email, h.context, h.source, declined);
         if (!candidate) continue;
         const score = candidate.score + (SOURCE_BONUS[h.source] || 0);
         const existing = found.find((f) => f.email.toLowerCase() === key);
@@ -283,6 +325,9 @@
       orgUrl: (harvested && harvested.orgUrl) || '',
       url,
       hasPublishedEmail: !!best,
+      // Addresses the posting DID publish that are not for applications,
+      // so the panel can say what it found instead of claiming nothing was.
+      declined: [...declined.values()],
     };
     // Whatever we found that helps them locate the application.
     result.referenceLines = buildReferenceLines(result);

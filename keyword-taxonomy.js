@@ -873,6 +873,42 @@
       'crm process'],
     'Sales Operations': ['quota', 'territory', 'commission plan', 'deal desk'],
     'Languages': ['fluent in', 'native speaker', 'bilingual', 'working proficiency'],
+    // The same gap outside the two capability categories. Forecasting is
+    // the one that showed it: a posting asked for it, a CV describing
+    // demand planning and sales projections could not be credited, and
+    // the chip stayed red because the CV never used that exact word.
+    // Product NAMES are deliberately absent here -- there is no proving
+    // Salesforce without saying Salesforce, and a CV that cannot say it
+    // must not be handed the word.
+    'Forecasting': ['demand plan', 'projected', 'projection', 'predict future',
+      'predictive model', 'run rate', 'pipeline coverage', 'headcount plan'],
+    'Financial Reporting': ['month-end', 'year-end close', 'management accounts',
+      'p&l report', 'statutory account', 'variance analysis'],
+    'Audit': ['audit trail', 'pre-audit', 'iso 27001', 'soc 2', 'evidence pack',
+      'control testing'],
+    'Reconciliation': ['reconcil', 'matched against', 'balanced the', 'break report'],
+    'Data Science': ['hypothesis', 'statistical', 'regression', 'clustering',
+      'feature engineering', 'model accuracy'],
+    'Deep Learning': ['neural network', 'transformer', 'convolutional', 'fine-tun',
+      'pytorch', 'tensorflow'],
+    'Data Pipelines': ['ingestion', 'batch job', 'streaming job', 'orchestrat',
+      'airflow', 'dbt', 'etl', 'elt'],
+    'Software Engineering': ['production code', 'code review', 'unit test',
+      'refactor', 'pull request', 'design document'],
+    'API Design': ['endpoint', 'openapi', 'swagger', 'versioned the api',
+      'rate limit', 'contract between services'],
+    'REST': ['endpoint', 'http api', 'json api', 'openapi'],
+    'Frontend': ['react', 'typescript', 'user interface', 'browser', 'css'],
+    'Backend': ['service written in', 'backend service', 'database schema',
+      'server-side', 'throughput'],
+    'Full Stack': ['front to back', 'end-to-end feature', 'both the ui and'],
+    'DevOps': ['ci/cd', 'deployment pipeline', 'release process', 'infrastructure as code'],
+    'Version Control': ['git', 'branch', 'pull request', 'merge request'],
+    'Containerisation': ['docker', 'container image', 'kubernetes', 'pod'],
+    'Serverless': ['lambda', 'cloud function', 'event-driven function'],
+    'Cloud Cost Management': ['right-sizing', 'reserved instance', 'infrastructure costs',
+      'cloud spend', 'cost per'],
+    'Shell Scripting': ['bash script', 'shell script', 'cron job'],
   };
   // KEYED BY THE GROUP, NOT BY THE SPELLING THE TABLE HAPPENED TO USE.
   //
@@ -899,9 +935,10 @@
     if (_proofCache.has(proof)) return _proofCache.get(proof);
     const n = norm(proof);
     const body = n.split(/[ ./-]+/).filter(Boolean)
-      // ':' is a separator the haystack keeps but norm() does not, which
-      // is why the cue "1:1" could never match the text "1:1".
-      .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\s.:/-]{0,2}');
+      // ':' and '&' are separators the haystack keeps but norm() strips,
+      // which is why the cue "1:1" could never match the text "1:1" and
+      // "p&l report" could never match "p&l reporting".
+      .map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\s.:&/-]{0,2}');
     const re = new RegExp('(?<![\\p{L}\\p{N}_+#])' + body, 'iu');
     _proofCache.set(proof, re);
     return re;
@@ -1032,6 +1069,109 @@
     return _CATEGORY_OF.get(tight(label)) || null;
   }
 
+  // ── WHICH PART OF A POSTING STATES A REQUIREMENT ─────────────────────
+  //
+  // A posting is not all job. It is a job wrapped in a company pitch, a
+  // list of values, a benefits table and a page of legal text, and only
+  // one of those says what the candidate must be able to do.
+  //
+  // Frequency scoring used to hide this: boilerplate words are rare, so
+  // they never scored. The sweep asks whether a requirement is NAMED, and
+  // deliberately does not care how often, which threw that protection
+  // away. One real posting produced these, every one from prose about the
+  // employer rather than about the job:
+  //
+  //   Hiring            "remove your data from our recruitment database"
+  //   Policy            "a zero tolerance policy applied to it"
+  //   Ownership         "the lowest total cost of ownership"
+  //   SaaS              "its SaaS-first automation fabric"
+  //   Innovation        "focus on innovation, growth and what's next"
+  //   Customer Success  "Obsess over Customer Success", a company value
+  //
+  // Hiring is the one that shows the cost. It reached the CV, which then
+  // claimed recruitment experience on an application for a data analyst,
+  // because a GDPR paragraph happened to contain the word "recruitment".
+  //
+  // The test is what the section is ABOUT: a requirements section says
+  // what YOU will do, a company section says what THEY are. Only the
+  // former can introduce a requirement here. Nothing is lost by it --
+  // the frequency and model extractors still read the whole posting, so
+  // a genuinely central theme is still picked up by being repeated.
+  const _NOT_THE_JOB = new RegExp([
+    // "About <anything>" is the company pitch -- "About us", "About
+    // Extenteam" -- EXCEPT when it is about the job itself.
+    '^about\\b(?!\\s+(?:the\\s+)?(?:role|job|position|opportunity|team|work))',
+    'who we are', 'our (?:story|values|mission|culture|team)',
+    'core values', 'company (?:overview|profile)', 'why (?:join|work|us)', 'life at',
+    'benefits', 'perks', 'what we offer', 'compensation( and benefits)?', 'the package',
+    'equal opportunit', '\\beeo\\b', 'the legal bit', 'legal', 'privacy', 'data protection',
+    'diversity', 'inclusion', 'job alert', 'how to apply', 'our process',
+  ].join('|'), 'i');
+
+  // Legal and GDPR text is routinely dropped in with no heading at all,
+  // so the paragraph has to be recognised by what it says.
+  const _BOILERPLATE_PROSE = new RegExp([
+    'equal opportunity employer', 'unlawful discrimination', 'zero tolerance policy',
+    'gdpr', 'data protection law', 'recruitment database', 'reasonable accommodation',
+    'affirmative action', 'protected veteran', 'e-verify',
+  ].join('|'), 'i');
+
+  /**
+   * Does this line look like a section heading rather than prose?
+   *
+   * A HEADING STARTS A BLOCK. Without that requirement every line of a
+   * values list -- "Obsess over Customer Success", "Own the Outcome" --
+   * reads as its own heading, which split the values section into seven
+   * one-line sections and let all seven through as requirements.
+   */
+  function _isHeading(lines, i) {
+    const l = String(lines[i] == null ? '' : lines[i]).trim();
+    if (!l || l.length > 70) return false;
+    if (/[.,;]$/.test(l)) return false;
+    // A bullet is content, however short and however capitalised.
+    if (/^[-*•·◦]|^\d+[.)]/.test(l)) return false;
+    if (i > 0 && String(lines[i - 1] == null ? '' : lines[i - 1]).trim()) return false;
+    if (/:$/.test(l)) return true;
+    const letters = l.replace(/[^A-Za-z]/g, '');
+    if (letters.length >= 3 && letters === letters.toUpperCase()) return true;
+    // Title Case with no sentence punctuation, e.g. "Why this role exists".
+    return /^[A-Z][^.!?]*$/.test(l) && l.split(/\s+/).length <= 8;
+  }
+
+  /**
+   * The parts of a posting that state requirements, with the company
+   * pitch, the values list, the benefits and the legal text removed.
+   *
+   * FAILS OPEN. A posting with no headings, or one where every section
+   * looks like boilerplate, comes back whole: under-reading a posting
+   * costs a real requirement, which is the worse of the two mistakes.
+   */
+  function requirementText(text) {
+    const body = String(text == null ? '' : text);
+    if (!body.trim()) return '';
+    const lines = body.split('\n');
+
+    // Split into [heading, ...lines] blocks. Text before the first
+    // heading is the title and intro, which is part of the job.
+    const blocks = [{ heading: '', lines: [] }];
+    for (let i = 0; i < lines.length; i += 1) {
+      if (_isHeading(lines, i)) blocks.push({ heading: lines[i].trim(), lines: [lines[i]] });
+      else blocks[blocks.length - 1].lines.push(lines[i]);
+    }
+
+    const kept = blocks
+      .filter((b) => !b.heading || !_NOT_THE_JOB.test(b.heading))
+      .map((b) => b.lines
+        // And a boilerplate paragraph that arrived without a heading.
+        .filter((l) => !_BOILERPLATE_PROSE.test(l))
+        .join('\n'))
+      .join('\n');
+
+    // If scoping left almost nothing, the headings were not what they
+    // looked like. Read the whole posting rather than nearly none of it.
+    return kept.trim().length >= Math.min(200, body.trim().length * 0.2) ? kept : body;
+  }
+
   /**
    * Every requirement in the table that the text actually mentions,
    * ranked by how often the text mentions it.
@@ -1050,7 +1190,9 @@
    * and cannot miss a requirement the table knows.
    */
   function sweep(text, limit) {
-    const body = String(text == null ? '' : text).normalize('NFKC');
+    // Scoped, because this pass adds requirements on its own authority
+    // and a company pitch is not a requirement.
+    const body = requirementText(String(text == null ? '' : text)).normalize('NFKC');
     if (!body.trim()) return [];
     const found = [];
     for (const group of GROUPS) {
@@ -1086,7 +1228,7 @@
   global.KeywordTaxonomy = {
     norm, tight, canonical, keyOf, groupOf, variantsOf, appearsIn, dedupe,
     measure, stripQualifiers, GROUPS, impliedIn, IMPLIED_BY,
-    categoryOf, CATEGORIES, sweep,
+    categoryOf, CATEGORIES, sweep, requirementText,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = global.KeywordTaxonomy;
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -88,13 +88,45 @@
     }
     return [...new Set(urls)];
   }
+  // WHY AN ADDRESS WAS TURNED DOWN IS NOT THE SAME AS FINDING NONE.
+  //
+  // A posting that says "please email us directly at Privacy@Redwood.com"
+  // HAS published an address, and declining it is right -- that is the
+  // GDPR data-removal inbox, and an application sent there lands in front
+  // of the one team certain to remember it. But the panel then reported
+  // "No recipient. Add an address the employer published", which is
+  // false, and sent the reader back to the page to look for an address
+  // they were already looking at. It has to say what it found and why it
+  // will not use it.
+  const REJECTION = [
+    [/noreply|no-reply|unsubscribe/i, 'an unattended mailbox'],
+    [/privacy|dpo|gdpr/i, 'the privacy and data-protection inbox'],
+    [/legal/i, 'the legal inbox'],
+    [/accommodat|disabilit|accessib/i, 'the adjustments and accessibility inbox'],
+    [/support/i, 'the customer support inbox'],
+    [/security/i, 'the security inbox'],
+    [/press|media/i, 'the press inbox'],
+    [/sales|billing/i, 'a sales or billing inbox'],
+  ];
+  function rejectionReason(local, context) {
+    for (const [re, why] of REJECTION) if (re.test(local)) return why;
+    if (BLOCKED_CONTEXT.test(context)) return 'published for accessibility adjustments, not for applications';
+    return 'not a recruiting address';
+  }
+
   function harvest(html, domain, source) {
     const clean = html.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, '');
     const contacts = new Map();
+    const declined = new Map();
     function add(raw, context, kind) {
       let email; try { email = decodeURIComponent(decode(raw)).replace(/^mailto:/i,'').split('?')[0].trim().toLowerCase(); } catch (_) { return; }
       if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,24}$/i.test(email)) return;
-      if (!sameDomain(email.split('@')[1], domain) || BLOCKED.test(email.split('@')[0]) || BLOCKED_CONTEXT.test(context)) return;
+      if (!sameDomain(email.split('@')[1], domain)) return;
+      if (BLOCKED.test(email.split('@')[0]) || BLOCKED_CONTEXT.test(context)) {
+        if (!declined.has(email)) declined.set(email, { email, source,
+          reason: rejectionReason(email.split('@')[0], context) });
+        return;
+      }
       const generic = _score(email) > 0;
       if (!generic && (kind !== 'mailto' || !RECRUITING.test(context))) return;
       contacts.set(email, {email, source, context:context.slice(0,240), contactType:generic ? 'recruiting-inbox' : 'published-recruiting-contact', score:generic ? 100 : 90, verification:'published-source', checkedAt:new Date().toISOString(), mailboxVerified:false, requiresReview:true});
@@ -105,11 +137,14 @@
       add(m[1], plain(nearby), 'mailto');
     }
     for (const m of clean.matchAll(EMAIL)) add(m[0],plain(clean.slice(Math.max(0,m.index-100),m.index+m[0].length+100)), 'text');
-    return [...contacts.values()];
+    const out = [...contacts.values()];
+    // Carried alongside, never mixed in: these are reported, never sent to.
+    out.declined = [...declined.values()];
+    return out;
   }
   async function find({companyName, jdUrl, orgUrl, maxPages = 8} = {}) {
     const limit = Math.min(12,Math.max(1,Number(maxPages)||8));
-    const tried = [], found = new Map(); let seeds = [];
+    const tried = [], found = new Map(), declined = new Map(); let seeds = [];
     const supplied = publicUrl(orgUrl);
     if (supplied && !ATS.test(supplied.hostname)) seeds.push(supplied.href);
     const jd = publicUrl(jdUrl);
@@ -129,7 +164,9 @@
         const url = q.urls.shift(); if (visited.has(url)) continue;
         visited.add(url); tried.push(url);
         const html = await fetchPage(url); if (!html) continue;
-        for (const c of harvest(html,q.domain,url)) if (!found.has(c.email)) found.set(c.email,c);
+        const got = harvest(html,q.domain,url);
+        for (const c of got) if (!found.has(c.email)) found.set(c.email,c);
+        for (const d of (got.declined || [])) if (!declined.has(d.email)) declined.set(d.email,d);
         for (const m of html.matchAll(/<a\b[^>]*href\s*=\s*["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
           if (!/careers?|recruit|talent|hiring|contact|our team/i.test(plain(m[2]))) continue;
           const next = publicUrl(m[1],url);
@@ -139,7 +176,8 @@
       if (found.size) break;
     }
     const contacts=[...found.values()].sort((a,b)=>b.score-a.score).slice(0,5);
-    return {email:contacts[0]?.email || '', source:contacts[0]?.source || '', candidates:contacts.map(c=>c.email), contacts, domainsTried:tried, status:contacts.length?'published-contact-found':seeds.length?'no-published-contact':'employer-domain-unconfirmed'};
+    const turnedDown=[...declined.values()];
+    return {email:contacts[0]?.email || '', source:contacts[0]?.source || '', candidates:contacts.map(c=>c.email), contacts, declined:turnedDown, domainsTried:tried, status:contacts.length?'published-contact-found':turnedDown.length?'published-contact-declined':seeds.length?'no-published-contact':'employer-domain-unconfirmed'};
   }
   const api={find,employerDomains,guessDomains,_score,employerUrls,harvest,publicUrl};
   global.CareersAddressFinder=api;

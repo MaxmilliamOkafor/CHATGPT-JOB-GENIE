@@ -2831,7 +2831,7 @@ class ATSTailor {
       }
 
       if (!ctx.email) {
-        setMsg('No recipient. Add an address the employer published in the posting.', 'var(--error)');
+        setMsg(this.followupNoRecipientMessage(), 'var(--error)');
         return;
       }
 
@@ -3057,7 +3057,7 @@ class ATSTailor {
         return;
       }
 
-      if (!ctx.email) { setMsg('No recipient. Add an address the employer published, or leave blank to skip.', 'var(--error)'); return; }
+      if (!ctx.email) { setMsg(this.followupNoRecipientMessage(), 'var(--error)'); return; }
       const jobKey = (this.currentJob?.url || ctx.title || '') + '|' + ctx.email;
 
       // Anti-spam policy: email is permanent in the recipient's mailbox and
@@ -3612,7 +3612,15 @@ class ATSTailor {
         ok('Recipient', (detected.email || typed)
           + ' (' + (detected.emailSource || 'typed by you') + ')');
       } else {
-        note('No recipient yet', 'nothing published on this posting; the lookup below decides');
+        {
+          const turned = Array.isArray(detected.declined) ? detected.declined : [];
+          if (turned.length) {
+            note('No recipient yet', turned[0].email + ' is published here but it is '
+              + turned[0].reason + ', so it is not used');
+          } else {
+            note('No recipient yet', 'nothing published on this posting; the lookup below decides');
+          }
+        }
       }
 
       // 7. The lookup, and what it has to work with.
@@ -4007,6 +4015,28 @@ class ATSTailor {
   // resolved or every route has been exhausted. It used to return
   // immediately while a callback ran on: the caller could not wait for it,
   // so the automatic send read an empty To field and gave up.
+  /**
+   * What to say when there is no recipient.
+   *
+   * "No recipient. Add an address the employer published" is false when
+   * the employer published one and this declined it, which is what
+   * happens on any posting carrying a GDPR or accessibility inbox. Saying
+   * which address was found and why it will not be used is the difference
+   * between a reader who understands the decision and one who goes back
+   * to the posting to re-read an address already on their screen.
+   */
+  followupNoRecipientMessage() {
+    const detected = this.jdContact || this.generatedDocuments?.jdContact || {};
+    const declined = Array.isArray(detected.declined) ? detected.declined : [];
+    if (!declined.length) {
+      return 'No recipient. Add an address the employer published, or leave blank to skip.';
+    }
+    const d = declined[0];
+    return 'Found ' + d.email + ' on this posting, but that is ' + d.reason
+      + ', so it is not used. Sending an application there is remembered by the '
+      + 'wrong team. Paste a recruiting address above, or leave blank to skip.';
+  }
+
   async followupFindCareersAddress() {
     const info = document.getElementById('followupDetected');
     // The careers probe goes through the service worker and can hang if
