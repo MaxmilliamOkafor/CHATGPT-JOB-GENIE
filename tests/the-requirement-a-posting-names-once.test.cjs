@@ -178,5 +178,66 @@ console.log('\nAND NO CUE IN THE TABLE IS UNREACHABLE');
     'the group and the member disagree');
 }
 
+console.log('\nAND EVERY CAPABILITY CAN BE PROVEN BY THE WORK, NOT ONLY BY THE WORD');
+{
+  // A TOOL needs no entailment -- there is no proving Kubernetes without
+  // saying Kubernetes. A CAPABILITY is the opposite: a CV describes the
+  // work and almost never labels it. Fifty-three of them had no cue at
+  // all, so each was gated behind the candidate happening to use the
+  // posting's own word for something the CV already demonstrated.
+  const keyed = new Set(Object.keys(TX.IMPLIED_BY).map((k) => {
+    const g = TX.groupOf(k);
+    return TX.tight(g ? g[0] : k);
+  }));
+  const unprovable = TX.GROUPS
+    .filter((g) => /Soft Skills|Domain Expertise/.test(TX.categoryOf(g[0]) || ''))
+    .filter((g) => !keyed.has(TX.tight(g[0]))).map((g) => g[0]);
+  t('  no capability is creditable only by name', unprovable.length === 0,
+    unprovable.join(', '));
+}
+
+console.log('\nAND NO CUE IS PROVEN BY A NAME THAT MERELY STARTS WITH IT');
+{
+  // The trailing side of a cue is open on purpose, so "load balanc" also
+  // matches "load balancing". The cost is that a cue which is also the
+  // start of a product name proves the product: a project called
+  // "LedgerLens" was evidence of ledger work.
+  t('  a project named LedgerLens is not fintech experience',
+    !TX.impliedIn('Built LedgerLens with Python and XGBoost.', 'Financial Technology'),
+    'still fires');
+  t('  ...while a general ledger still is',
+    TX.impliedIn('Reconciled the general ledger monthly.', 'Financial Technology'),
+    'lost');
+
+  // And no cue may be a single character, which is what a truncated
+  // entry looks like. Two is the floor rather than three because "S3"
+  // and "1:1" are whole identifiers, not the start of a longer word.
+  const tooShort = [];
+  for (const label of Object.keys(TX.IMPLIED_BY)) {
+    for (const cue of TX.IMPLIED_BY[label]) {
+      if (TX.norm(cue).replace(/[^a-z0-9]/g, '').length < 2) tooShort.push(label + ' <- ' + cue);
+    }
+  }
+  t('  and no cue is a single character', tooShort.length === 0, tooShort.join(', '));
+}
+
+console.log('\nAND A PROFILE THAT NEVER DID THE WORK IS STILL NOT CREDITED');
+{
+  const unrelated = [
+    'Ran the payroll for 400 staff across three countries in Workday.',
+    'Reconciled the general ledger and filed the monthly VAT return.',
+  ].join('\n');
+  for (const no of ['Kubernetes', 'PyTorch', 'Short-Term Rental', 'Property Management',
+    'Six Sigma', 'Sales Operations', 'A/B Testing']) {
+    t('  ' + no.padEnd(20) + ' is not proven by unrelated work',
+      !TX.impliedIn(unrelated, no) && !TX.appearsIn(unrelated, no), 'credited anyway');
+  }
+  // Payroll is NAMED here, which appearsIn covers; the entailments are
+  // for the work a CV describes without ever labelling it.
+  t('  ...while the work it DID describe is credited',
+    TX.appearsIn(unrelated, 'Payroll') && TX.impliedIn(unrelated, 'Tax Calculation')
+      && TX.impliedIn(unrelated, 'Accuracy'), 'the cues do not reach real work');
+}
+
 console.log('\n' + PASS + ' passed, ' + FAIL + ' failed');
 process.exit(FAIL ? 1 : 0);
