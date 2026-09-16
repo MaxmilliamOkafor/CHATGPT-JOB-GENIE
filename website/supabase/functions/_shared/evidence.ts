@@ -166,6 +166,15 @@ export function buildEvidenceSources(profile: any): EvidenceSource[] {
   const sources: EvidenceSource[] = [];
   const seen = new Set<string>();
   const push = (label: string, text: unknown, kind: EvidenceSource["kind"]) => {
+    // ONE ENTRY, ONE SOURCE. Flattening a list into a single string puts
+    // every item inside one another's context, and the negation test
+    // reads backwards from the term it found: a project listing
+    // ["No Kafka experience", "Python"] became "No Kafka experience,
+    // Python" and negated Python along with Kafka.
+    if (Array.isArray(text)) {
+      for (const item of text) push(label, item, kind);
+      return;
+    }
     const t = evidenceText(text);
     if (!t) return;
     const key = `${kind}::${t.toLowerCase()}`;
@@ -230,16 +239,21 @@ export function buildEvidenceSources(profile: any): EvidenceSource[] {
       // A description stored as one block is several bullets on one line.
       for (const line of text.split(/\n+/)) push(label, line.replace(/^\s*[-•*]\s*/, ""), "achievement");
     }
-    push(
-      `${label} (recorded tools)`,
-      alias(r, "technologies", "techStack", "tech_stack", "skills", "tools"),
-      "record",
-    );
+    // EVERY SPELLING PRESENT, NOT THE FIRST ONE FOUND. alias() returns a
+    // single field, so a record carrying both technologies and tech_stack
+    // lost one of them without saying so: a project listing Kafka under
+    // one and Python under the other reported only Python, and Kafka came
+    // back unsupported on a CV that names it.
+    for (const field of ["technologies", "techStack", "tech_stack", "skills", "tools"]) {
+      push(`${label} (recorded tools)`, (r as any)?.[field], "record");
+    }
   }
   for (const p of asArray(alias(profile, "relevantProjects", "relevant_projects", "projects"))) {
     const proj = p as any;
     const label = evidenceText(alias(proj, "name", "title")) || "project";
-    push(`${label} (recorded stack)`, alias(proj, "techStack", "tech_stack", "technologies", "skills"), "record");
+    for (const field of ["techStack", "tech_stack", "technologies", "skills"]) {
+      push(`${label} (recorded stack)`, (proj as any)?.[field], "record");
+    }
     const demonstrations = [
       ...asArray(alias(proj, "description")),
       ...asArray(alias(proj, "bullets", "highlights")),

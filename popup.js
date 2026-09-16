@@ -4977,8 +4977,15 @@ class ATSTailor {
       throw new Error(message || `Skill extraction failed (HTTP ${res.status}${code ? ', ' + code : ''}).`);
     }
 
-    const { response } = await res.json();
-    const data = SE.parseResponse(response);
+    // THE WHOLE BODY, NOT A FIELD INSIDE IT.
+    //
+    // This read body.response, which is the shape one version of the
+    // function returns. The deployed one returns the model's JSON
+    // directly, so `response` was undefined on every call and the
+    // extension reported that the extraction had not completed.
+    // parseResponse reads whichever envelope arrives, including none.
+    const body = await res.json();
+    const data = SE.parseResponse(body && body.response ? body.response : body);
     // VALIDATED AGAINST THE POSTING THIS SIDE HOLDS, not against
     // whatever the server echoed back. A validator that trusts the
     // service it is validating is not a validator.

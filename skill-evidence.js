@@ -100,7 +100,34 @@
    */
   function parseResponse(response) {
     const res = response || {};
-    if (res.status !== 'completed') {
+
+    // THREE ENVELOPES, BECAUSE THE SERVER IS NOT OURS TO PIN.
+    //
+    // This was written against the Responses API shape. The function
+    // that actually got deployed calls chat/completions and returns the
+    // model's JSON with no envelope at all, so the extension unwrapped
+    // an undefined and reported "the extraction did not complete" on
+    // every call. A working key would not have fixed it.
+    //
+    // Reading all three is a few lines here and removes a whole class of
+    // failure: the one where each side is correct and together they do
+    // nothing.
+    if (Array.isArray(res.skills)) return res;              // bare result
+    if (res.choices) {                                      // chat/completions
+      const choice = Array.isArray(res.choices) ? res.choices[0] : null;
+      if (choice && choice.finish_reason === 'content_filter') {
+        throw new Error('The model declined to extract from this posting; no report was produced.');
+      }
+      const message = choice && choice.message;
+      if (message && typeof message.refusal === 'string' && message.refusal) {
+        throw new Error('The model declined to extract from this posting; no report was produced.');
+      }
+      const text = message && typeof message.content === 'string' ? message.content : '';
+      if (!text.trim()) throw new Error('The extraction returned no text.');
+      return JSON.parse(text);
+    }
+
+    if (res.status !== 'completed') {                       // responses API
       throw new Error('The extraction did not complete, so no report was produced.');
     }
     const chunks = [];

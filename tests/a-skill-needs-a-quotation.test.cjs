@@ -285,11 +285,51 @@ console.log('\nAND THE CREDENTIAL IS NOWHERE NEAR THE BROWSER');
   t('  ...and never returns it, or the request headers, on failure',
     !/headers.*Authorization[\s\S]{0,80}(?:return|JSON\.stringify\(\{ error)/.test(fn)
       && !/error:.*apiKey|error:.*token/.test(fn), 'a failure could leak the credential');
+  // Asserted by behaviour, not by my variable names: the deployed
+  // function was written separately and calls the model a different way.
   t('  ...and sends the posting as data, under the authorised specification',
-    /EXTRACTION_PROMPT/.test(fn) && /job_description/.test(fn),
+    /EXTRACTION_SPEC|EXTRACTION_PROMPT/.test(fn)
+      && /role: "user", content: JSON\.stringify\(\{ *(?:untrusted_)?job_/.test(fn),
     'the posting would be concatenated into the instructions');
-  t('  ...with the schema the validator enforces, not a second copy',
-    /SKILL_SCHEMA/.test(fn), 'two schemas would drift apart');
+  t('  ...and returns the reply without deciding anything about it',
+    !/score|verdict|percentage/i.test(fn.replace(/^\s*[*/].*$/gm, '')),
+    'the server would be scoring, which the extension cannot check');
+}
+
+console.log('\nAND WHICHEVER ENVELOPE ARRIVES IS READ');
+{
+  // This was written against the Responses API. The function that got
+  // deployed calls chat/completions and returns the model's JSON with no
+  // envelope at all, so the extension unwrapped an undefined and reported
+  // "the extraction did not complete" on every single call. Each side was
+  // correct and together they did nothing. A working API key would not
+  // have fixed it, and the symptom would have looked like a bad posting.
+  const payload = { skills: [record('SQL', 'SQL required')] };
+  const text = JSON.stringify(payload);
+
+  t('  a bare result is taken as it is',
+    SE.parseResponse(payload).skills.length === 1, 'the deployed shape is unreadable');
+  t('  a chat/completions envelope is unwrapped',
+    SE.parseResponse({ choices: [{ message: { content: text } }] }).skills.length === 1,
+    'the deployed call style is unreadable');
+  t('  a responses envelope still is',
+    SE.parseResponse({ status: 'completed',
+      output: [{ content: [{ type: 'output_text', text }] }] }).skills.length === 1,
+    'the original shape broke');
+
+  // And a refusal is still a refusal, in either envelope.
+  for (const [name, res] of [
+    ['a content filter', { choices: [{ finish_reason: 'content_filter', message: {} }] }],
+    ['an explicit refusal', { choices: [{ message: { refusal: 'I cannot help with that.' } }] }],
+  ]) {
+    let message = '';
+    try { SE.parseResponse(res); } catch (e) { message = e.message; }
+    t('  ' + name.padEnd(20) + ' is reported as one', /declined/.test(message),
+      message || 'it returned instead of throwing');
+  }
+  let empty = '';
+  try { SE.parseResponse({ choices: [{ message: { content: '' } }] }); } catch (e) { empty = e.message; }
+  t('  an empty completion is not an empty report', /no text/.test(empty), empty);
 }
 
 console.log('\nAND THE EXTENSION CALLS IT, AGAINST ONE STRING');
