@@ -287,6 +287,11 @@ export function evaluateRevision(opts: {
   coverLetterRevised?: string;
   terms: string[];
 }): { accept: boolean; reason?: string; coverageBefore: number; coverageAfter: number; changedBullets: Array<{ before: string; after: string }> } {
+  // CV TEXT ONLY.
+  // A term that appears only in the cover letter is not on the CV, so counting
+  // it here let a needed CV revision be judged as "no improvement" and gave the
+  // CV credit for coverage it did not have. The cover letter parameters are
+  // accepted for compatibility but never scored.
   const before = measureCoverage(opts.draft, opts.terms);
   const after = measureCoverage(opts.revised, opts.terms);
 

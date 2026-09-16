@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { buildCandidateLocation } from "../_shared/location.ts";
 import {
   aiErrorResponse,
   classifyProviderStatus,
@@ -25,8 +26,13 @@ import {
   CATEGORY_LABEL,
   categoriseSkill,
   isSoftCapability,
+  normaliseSkillsSection,
   placeSkillsInSection,
 } from "../_shared/skillsPlacement.ts";
+import { enforceSummaryShape, type SummaryContext } from "../_shared/summaryShape.ts";
+import { enforceEducationSection } from "../_shared/resumeSections.ts";
+import { chooseHeadline, enforceCoverLetterOriginality, isEmployerNameLine } from "../_shared/coverLetter.ts";
+
 
 
 // We reuse the existing generate-pdf backend function to keep a single client call per job.
@@ -2321,10 +2327,8 @@ serve(async (req) => {
     // role printed "New York" under the candidate's name. That is a factual
     // claim about where the candidate lives, so it now comes from the saved
     // profile only and never from the posting.
-    const smartLocation = [userProfile.city, userProfile.country]
-      .map((v) => (typeof v === "string" ? v.trim() : ""))
-      .filter(Boolean)
-      .join(", ") || "Remote";
+    const smartLocation =
+      buildCandidateLocation(userProfile.city, userProfile.country) || "Remote";
     console.log(`Header location from saved profile: ${smartLocation}`);
 
 
@@ -2333,8 +2337,6 @@ serve(async (req) => {
     // evidence map. Requirements it names are merged into the keyword pool
     // so coverage is measured against what the posting actually asks for.
     const atsStrategy = parseAtsStrategy(userProfile.atsStrategy);
-    // The product target is full supported coverage; do not stop at an older 90% preference.
-    atsStrategy.keywordCoverageTarget = 100;
     const mergedRequirements = Array.from(
       new Set([...requirements, ...atsStrategy.requirements].map((r) => r.trim()).filter(Boolean)),
     );
@@ -2530,14 +2532,11 @@ Rule 0 wins. Lose the keyword, save the candidate's credibility.
 
 RULE 1 - JOB TITLE IN SUMMARY (evidence-capped)
 The summary must never assert a job title the rest of the CV cannot support.
-- If the candidate's own work history contains the SAME or a CLOSELY
-  EQUIVALENT title, the summary MAY use the JD's wording for it.
-- If it does NOT (a genuine career pivot), the summary MUST NOT claim that
-  title. Instead, mirror the JD's vocabulary through skills and domain
-  language that the CV genuinely evidences, and open with what the
-  candidate actually is (e.g. "Software engineer with data analytics and
-  delivery experience across ...").
-- NEVER open the summary with a bare title claim as its first words.
+- Open with a title copied from the candidate's own employment history.
+- Choose by distinctive words only. Manager, senior, lead, principal,
+  director, officer, analyst, engineer and coordinator never establish a fit.
+- If no distinctive word matches, use the current held role.
+- Never use the posting title unless it is character-for-character a held title.
 - The job title may never appear in a requisition-number form; posting
   noise (req numbers, JR-/REQ- codes, "(Remote)") must never appear in
   the CV or cover letter.
@@ -2640,12 +2639,7 @@ anywhere in the source CV. Every one came from the job description.
 - Missing keywords that cannot be honestly claimed are reported in
   KEYWORDS OMITTED. That is the correct outcome, not a failure.
 
-Rewrite the skills section as:
-  Technical Skills: [list ALL hard skill keywords from the JD that the candidate can legitimately claim, comma-separated, exact spelling]
-  Platforms & Tools: [all platforms, cloud services, devtools]
-  Methodologies: [ETL, CI/CD, distributed systems, data modelling, etc.]
-  Soft Skills: [all soft skill keywords from the JD, exact phrasing]
-This section alone can close 15-20 points of the gap. THERE IS NO UPPER LIMIT: list EVERY JD skill, tool and technology the candidate's history evidences, however many that is. There is no lower limit either. A floor is what causes padding -- it is satisfied by adding terms nobody can be proficient in ("b2b", "enterprise", "fast-paced"), which a recruiter reads instantly as machine-assembled and which the candidate cannot defend if asked. Maximum coverage means maximum EVIDENCED coverage: leave out only what the history does not support at all.
+Rewrite TECHNICAL SKILLS as labelled group lines such as "Programming:", "Cloud & DevOps:" and "Data Engineering:". Use each label once, cap each line at ten items, use commas only, and never flatten the section into one comma list. Include only hard skills the candidate can legitimately claim; soft capabilities belong in experience bullets.
 
 RULE 3 - EXPERIENCE BULLETS: INJECT WEIGHTED TERMS (subject to Rule 0)
 For each role in work history:
@@ -2683,19 +2677,39 @@ RULE 6 - SEARCHABILITY FIXES (worth ~10 points)
 - Section headings use standard ATS-readable labels: "Work Experience", "Education", "Skills", "Certifications"
 - Do NOT use tables, columns, graphics, or text boxes
 
-RULE 7 - PROFESSIONAL SUMMARY (replaces any existing summary length guidance)
-The PROFESSIONAL SUMMARY is positioning only, at most TWO sentences and at most 220 characters total.
-It states the held job title or level, the domain, and the value the candidate delivers. Nothing else.
-NO KEYWORD STUFFING IN THE SUMMARY: the summary must NOT list tools, technologies, platforms, frameworks or certifications, and must not contain a comma-separated run of skills. Posting keywords belong in TECHNICAL SKILLS and, above all, in PROFESSIONAL EXPERIENCE bullets - never in the summary.
-Acceptable style: "Senior data engineer with a record of delivering reliable, scalable regulatory reporting platforms and leading small delivery teams in regulated environments."
-Never write "seeking", "looking for", or "open to opportunities". No first-person pronouns anywhere in the CV.
-SUMMARY OPENS ON THE TARGET ROLE: The first sentence of PROFESSIONAL SUMMARY must position the candidate for the role being applied for, in that role's own domain language. Where the candidate holds several titles, lead with the one closest to the target role, not the most senior and not the most recent. Never open with a generic descriptor of a different discipline ("Experienced Software Engineer", "Seasoned Marketing Manager") on an application for another field. The sentence must still be true: it may only name a title, discipline or domain the employment history actually contains. If no held title is close to the target, open on the transferable capability instead of a title (for example "Five years building risk and reporting analytics across regulated financial portfolios") rather than borrowing the target title. The preferred shape for that case is "Background in <the candidate's actual field>, with strengths in <two capabilities the history evidences>." followed by one specific factual achievement already present in the CV. Do not write a closing sentence naming the target role: a later pass adds it, and writing your own produces two.
-SUMMARY LENGTH: The whole summary must be at most 220 characters, which is two rendered lines. Write it to land near that limit, not far under it. A one-clause summary is not a summary.
-NO SENTENCE FRAGMENTS: The summary must be complete sentences. "Experienced Software Engineer." on its own is a stub, not a summary.
+RULE 7 - PROFESSIONAL SUMMARY (replaces any earlier summary guidance)
+The summary is read as a description of the PERSON, so it must be true and checkable. Write exactly this shape, two sentences, 150 to 220 characters in total, no more:
+
+Background in <the candidate's actual field, in that field's own words>, with strengths in <two capabilities the EXPERIENCE section evidences>. <strongest outcome with its figure>; <second outcome with its figure>.
+
+Worked example: "Background in regulatory reporting and risk analytics, with strengths in stakeholder management and process improvement. Rebuilt a credit risk reporting suite for a GBP 2.6bn portfolio; cut month-end close from nine working days to three."
+
+WHY THIS SHAPE AND NOT A TITLE. An earlier version opened with a held job title ("Solutions Architect working across ..."). On an application to another field that announces the wrong profession in the first line a screener reads, and on a pivot the held title is the least relevant true thing on the page. Naming the FIELD and the STRENGTHS says what transfers without claiming a job that was never held. A candidate applying within their own field may still name the field plainly.
+
+NEVER IN THE SUMMARY:
+- A job title the candidate has not held. The headline under the name carries the target role; the summary never borrows the posting's title.
+- Employer names (they are already in the employment block below).
+- Total years of experience ("with nine years") - an age proxy, and the dates are on the page.
+- Place names (Dublin, London, Belfast).
+- Any adjective describing the candidate: accomplished, seasoned, passionate, dynamic, results-driven, highly motivated, proven track record, strong background, operational excellence.
+- Any self-rating: expert, world-class, exceptional, or a seniority above the actual title.
+- First person ("I", "my"), and "seeking", "looking for", "open to opportunities".
+- Tools, technologies, platforms, certifications or any comma-separated run of skills - those belong in TECHNICAL SKILLS and in the bullets.
+
+DO NOT WRITE A CLOSING SENTENCE NAMING THE TARGET ROLE. A later pass adds one, and two of them read as a draft nobody finished.
+
+THE STRENGTHS CLAUSE: two capabilities in the POSTING'S OWN WORDING, and only where a PROFESSIONAL EXPERIENCE bullet evidences them. A term appearing only in the skills list is a word on a page, not work done. If fewer than two qualify, write NO strengths clause at all and let the outcomes carry the sentence. Never pad it.
+
+THE OUTCOMES, ranked highest first: (1) a before and after ("from nine working days to three", "from six hours to under one"); (2) a magnitude (GBP 2.6bn, billions of requests daily, 47 services, 40,000 cases); (3) a percentage; (4) a plain count. Use TWO outcomes joined with a SEMICOLON, never as two separate sentences. Use the profile's figures exactly as written: never round, never drop a figure to shorten a sentence, never invent one. A spelled-out number is fine and often better ("nine working days to three" beats "9 to 3").
+
+RELEVANCE BEATS SIZE. Choose the outcomes the POSTING would care about, not the biggest numbers on the CV. A coaching posting is better served by "trained 24 analysts across two offices" than by a batch job going from six hours to one, however much larger the second figure is.
+
+Every figure in the profile's bullets must survive verbatim into the bullets, because the summary is assembled from the strongest quantified bullet on the page.
+
 
 
 RULE 8 - SECTION ORDER, HEADINGS, ROLE BLOCKS, BULLETS, ACRONYMS, SKILLS, EDUCATION AND OUTPUT HYGIENE
-SECTION ORDER AND HEADINGS: Output sections in exactly this order with these exact uppercase headings, each on its own line: PROFESSIONAL SUMMARY, PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS, PROJECTS, CERTIFICATIONS, EDUCATION. Never write a heading inline with content (no "TECHNICAL SKILLS: Python, SQL" on one line). Never emit the same section twice.
+SECTION ORDER AND HEADINGS: Output sections in exactly this order with these exact uppercase headings, each on its own line: PROFESSIONAL SUMMARY, PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS, PROJECTS, CERTIFICATIONS, EDUCATION. EDUCATION IS LAST, always: for an experienced hire the graduate convention of leading with a degree buries the evidence a reviewer is actually scanning for, so education closes the document. Never write a heading inline with content (no "TECHNICAL SKILLS: Python, SQL" on one line). Never emit the same section twice.
 
 ROLE BLOCK SHAPE: Every role is exactly: company name alone on one line, job title alone on the next line, date range alone on the next line ("January 2023 - Present" format, plain hyphen, full month names), then the bullets. Never join company and city with a comma ("Meta, Dublin" is forbidden - the extension attaches locations from the profile itself). Never join company and title on one line.
 
@@ -2735,7 +2749,7 @@ THE HEADLINE APPEARS ONCE: The line immediately after the candidate's name is th
 CERTIFICATIONS RULE: Omit the CERTIFICATIONS section entirely unless the profile's certifications switch is on - that is, unless the candidate profile supplies a non-empty CERTIFICATIONS list. Whether the job description mentions certification is irrelevant to this decision. When the section is included, list only certifications the profile actually records; never invent one.
 PROJECTS RULE: The CV MUST include a PROJECTS section listing the candidate's projects taken from the profile's relevant_projects array. For each project give the project name, its tech stack, one description line, and the live/code links VERBATIM as recorded in the profile - links are never rewritten, shortened or dropped. If the profile records no projects, omit the PROJECTS section entirely rather than inventing one.
 
-EDUCATION FORMAT: Each entry is: degree plus grade on one line ("MSc in Artificial Intelligence and Machine Learning, Distinction"), institution on the next line, graduation year on the next. Always keep grades and years from the profile - never drop them.
+EDUCATION FORMAT: Each entry is degree plus recorded grade on one line ("MSc in Artificial Intelligence and Machine Learning, Distinction"), institution on the next line. NEVER print graduation years, study dates, date ranges or "Class of 20XX" in EDUCATION. Dates remain in profile data for application forms only. Employment dates are unchanged.
 
 GRADES ARE COPIED, NEVER DERIVED: A numeric grade (a GPA, a "3.8/4.0", a percentage) may appear ONLY if that exact figure is written in the profile's education record. Never convert a classification into a number: a Distinction is not "4.0", First Class Honours is not "3.7", and a 2:1 is not "3.3". If the record holds only a classification, write only the classification.
 
@@ -3188,7 +3202,7 @@ After rewriting, run this internal checklist:
 [ ] Are ALL Phase 1 hard skill keywords present at least once?
 [ ] Are ALL soft skill keywords present (in bullets or skills section)?
 [ ] Are ALL multi-word JD phrases (verb phrases from responsibilities/requirements) present VERBATIM?
-[ ] Are the top 5 keywords in the Professional Summary?
+[ ] Does the Professional Summary contain only 2-3 posting requirements evidenced by experience, with no skill run?
 [ ] Are the JD terms SPREAD across the experience bullets rather than crammed into the first one, with no sentence carrying more than two, and the most recent role carrying the largest share?
 [ ] Does every Tier 1 term in the summary or Core Competencies have a bullet underneath that proves it? If not, move it down or omit it - a declared skill with nothing beneath it is what reads as machine-assembled.
 [ ] Is any single term repeated more than three times across the CV? Presence is what is scored; the rest is padding a human notices.
@@ -3216,7 +3230,7 @@ After rewriting, run this internal checklist:
 [ ] Is "metricsWorthAdding" populated (or empty because every bullet is quantified)?
 [ ] Could an average applicant for this role have written the summary? If yes, rewrite it.
 [ ] Do weighted/repeated JD terms appear more than once in the CV?
-[ ] Does the years of experience in the summary match the JD requirement?
+[ ] Does the summary omit total years of experience entirely?
 If any box is unchecked, fix it before outputting.
 
 ---
@@ -3245,8 +3259,9 @@ VIOLATION = INSTANT REJECTION. The summary describes qualifications ONLY.
 === END CRITICAL RULE ===
 
 ABSOLUTE RULES:
-1. PROFESSIONAL SUMMARY is positioning only: at most TWO sentences and 220 characters total, stating held title or level, domain and the value delivered. NO KEYWORDS IN THE SUMMARY - no tools, technologies, platforms, frameworks or comma-separated skill runs. Never "seeking", "looking for", "open to opportunities". No first-person pronouns anywhere in the CV.
-1a. SUMMARY OPENS ON THE TARGET ROLE: The first sentence must position the candidate for the role being applied for, in that role's own domain language. Where several titles are held, lead with the one closest to the target role, not the most senior and not the most recent. Never open with a generic descriptor of a different discipline ("Experienced Software Engineer", "Seasoned Marketing Manager") on an application for another field. The sentence must still be true: only a title, discipline or domain the employment history actually contains. If no held title is close to the target, open on the transferable capability instead of a title (for example "Five years building risk and reporting analytics across regulated financial portfolios") rather than borrowing the target title. The preferred shape for that case is "Background in <the candidate's actual field>, with strengths in <two capabilities the history evidences>." followed by one specific factual achievement already present in the CV. Do not write a closing sentence naming the target role: a later pass adds it, and writing your own produces two. The summary must be complete sentences, never a fragment such as "Experienced Software Engineer.", and must land near 220 characters rather than far under it.
+1. PROFESSIONAL SUMMARY - REQUIRED SHAPE, two sentences, 150 to 220 characters total: "Background in <the candidate's actual field>, with strengths in <two capabilities the EXPERIENCE section evidences>. <strongest outcome with its figure>; <second outcome with its figure>." Example: "Background in regulatory reporting and risk analytics, with strengths in stakeholder management and process improvement. Rebuilt a credit risk reporting suite for a GBP 2.6bn portfolio; cut month-end close from nine working days to three." Naming the field rather than a held title keeps the first line relevant on a pivot without claiming a job never held.
+1a. NEVER IN THE SUMMARY: a title never held (the headline under the name carries the target role; the summary never borrows the posting's title), employer names, total years of experience, place names, any adjective describing the candidate (accomplished, seasoned, passionate, dynamic, results-driven, proven track record, strong background, operational excellence), any self-rating (expert, world-class, exceptional), first person, "seeking"/"looking for", or tools/technologies/skill runs. Do NOT write a closing sentence naming the target role - a later pass adds one. Strength terms must be in the posting's wording AND evidenced by an experience bullet, not the skills list; if fewer than two qualify, omit the strengths clause entirely rather than pad it. Two outcomes joined by a SEMICOLON, never two sentences; figures exactly as the profile states them - never rounded, never dropped, never invented; prefer a before-and-after, then a magnitude, then a percentage, then a count; and choose the outcomes the POSTING cares about over the biggest numbers on the CV.
+
 1b. KEYWORD PLACEMENT: posting keywords live in TECHNICAL SKILLS (hard skills only) and above all in PROFESSIONAL EXPERIENCE bullets, where each of the top 10-15 evidenced posting terms is shown in action. Soft skills (leadership, communication, collaboration, problem-solving, stakeholder management) are NEVER listed in TECHNICAL SKILLS and never given their own section - they are demonstrated inside bullets through action and outcome. Weight keyword integration towards the most recent, most relevant role and its first one or two bullets. Loading the skills section while leaving bullets generic is a failure.
 2. SECTION ORDER AND HEADINGS: PROFESSIONAL SUMMARY, PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS, PROJECTS, CERTIFICATIONS, EDUCATION. Each heading on its own line, never inline with content, never duplicated.
 3. ROLE BLOCK SHAPE: company alone on one line, title alone on the next, date range alone on the next ("January 2023 - Present", plain hyphen, full month names), then bullets. Never "Meta, Dublin". Never join company and title.
@@ -3259,7 +3274,7 @@ ABSOLUTE RULES:
 6c. TARGET TITLE FIDELITY: Use the target job title EXACTLY as supplied. Never append the company name, "Careers", a location, or any text from the page title to it. Scraped page titles such as "GTM Strategy/Operations Associate | Datadog Careers" are cleaned before they reach you, so the supplied title is already the whole title - never add to it and never quote page furniture in the CV headline or in the cover letter's Re: line.
 6c. THE HEADLINE APPEARS ONCE: The line immediately after the candidate's name is the target job title, on its own line, and it appears exactly once. Never write a second title line, and never repeat the title in the contact line beneath it.
 6c. CERTIFICATIONS RULE: Omit the CERTIFICATIONS section entirely unless the profile's certifications switch is on - that is, unless the candidate profile supplies a non-empty CERTIFICATIONS list. Whether the job description mentions certification is irrelevant to this decision. When the section is included, list only certifications the profile actually records; never invent one.
-7. EDUCATION FORMAT: degree plus grade on one line, institution on the next, graduation year on the next. Keep grades and years from the profile.
+7. EDUCATION FORMAT: degree plus recorded grade on one line, institution on the next. Never print education years, date ranges or "Class of 20XX". Keep education dates only in profile data for application forms. Employment dates remain unchanged.
 8. OUTPUT HYGIENE: plain text only, no markdown, no asterisks, no bullet symbols other than "- " at bullet starts. No em dashes; use a plain hyphen.
 9. Location in CV header MUST be: "${smartLocation}" as the candidate location (NO "open to relocation" suffix, NO second location)
 10. Dates MUST use full month names with a plain hyphen separator, e.g. "January 2023 - Present", "April 2021 - July 2022" (never MM/YYYY, never an en dash)
@@ -3347,7 +3362,7 @@ ${JSON.stringify(userProfile.relevantProjects || [], null, 2)}
    - Header: ${candidateName}
    - Contact Line: ${smartLocation} | ${userProfile.phone} | ${userProfile.email}
    - Links Line: ${userProfile.linkedin} | ${userProfile.github || ""} | ${userProfile.portfolio || ""}
-   - PROFESSIONAL SUMMARY: positioning only, at most TWO sentences and at most 220 characters total, stating the held job title or level, the domain, and the value delivered. NO KEYWORDS IN THE SUMMARY - no tools, technologies, platforms, frameworks, certifications or comma-separated skill runs; those belong in TECHNICAL SKILLS and in the experience bullets. Never write "seeking", "looking for", or "open to opportunities". No first-person pronouns anywhere in the CV. The summary must never repeat name, email, phone, LinkedIn, GitHub, portfolio, or location - those live in the header above. SUMMARY OPENS ON THE TARGET ROLE: the first sentence must position the candidate for the role being applied for, in that role's own domain language; where several titles are held, lead with the one closest to the target role, not the most senior and not the most recent. Never open with a generic descriptor of a different discipline ("Experienced Software Engineer", "Seasoned Marketing Manager") on an application for another field. It must still be true - only a title, discipline or domain the employment history actually contains; if no held title is close to the target, open on the transferable capability instead of a title (for example "Five years building risk and reporting analytics across regulated financial portfolios") rather than borrowing the target title. Complete sentences only, never a fragment such as "Experienced Software Engineer.", and written to land near 220 characters rather than far under it.
+   - PROFESSIONAL SUMMARY: exactly this shape, two sentences, 150 to 220 characters total - "<a job title the employment history actually contains> working across <two or three requirements from this posting that the EXPERIENCE section evidences>. <strongest outcome with its figure>; <second outcome with its figure>." Write grammatical English: every outcome clause begins with a finite action verb; never write a modifier where a noun is required (such as "across compliance and end-to-end") or a noun phrase followed by a dangling participle (such as "Impression reporting, cutting..."). The summary is read as a description of the person, so it must be true and checkable. Lead with the HELD title closest to the posting based only on distinctive title words; manager, senior, lead, principal, director, officer, analyst, engineer and coordinator do not establish a match. If no distinctive word matches, use the current held role. Never include: employer names, total years of experience, place names, adjectives describing the candidate (accomplished, seasoned, passionate, dynamic, results-driven, highly motivated, proven track record, strong background, operational excellence), self-ratings (expert, world-class, exceptional), first person, "seeking"/"looking for"/"open to opportunities", contact details, or tools/technologies/certifications/comma-separated skill runs. Scope terms use the posting's wording and must be evidenced by an experience bullet, never by the skills list; if fewer than two qualify, write no scope clause at all. Two outcomes joined with a SEMICOLON, never two separate sentences, ranked before-and-after, then magnitude, then percentage, then plain count, with every figure exactly as the profile states it - never rounded, never dropped to shorten a sentence, never invented.
    - KEYWORD PLACEMENT: hard skills go in TECHNICAL SKILLS (12-25, labelled groups, posting's exact phrasing, never a soft skill) and each of the top 10-15 evidenced posting terms is demonstrated in action inside a PROFESSIONAL EXPERIENCE bullet. Soft skills are never listed and never get their own section - they are shown through the action and outcome of bullets ("Led a team of four engineers to...", "Partnered with product and data teams to..."). Weight the heaviest keyword integration into the most recent, most relevant role and its first one or two bullets; keep older roles lighter. Every bullet follows [strong action verb] + [skill in context] + [what changed] + [outcome], one to two lines. Figures come only from the profile, exactly as recorded; where none exists, state impact qualitatively and never invent a number.
    - TARGET ROLE LINE: The line immediately after the candidate's name is the TARGET ROLE being applied for - "${jobTitle}" - on its own line, exactly once, written exactly as supplied. It is the application's subject line, not a claim about a job held: the roles actually held are stated in PROFESSIONAL EXPERIENCE, each under its own employer, and are never merged with this line. No pipes, no company name, no location, no skills, no seniority word added or removed, no second title line, and never repeated in the contact line beneath it.
    - PROFESSIONAL EXPERIENCE: roles in this shape: company name alone on one line, job title alone on the next line, date range alone on the next line ("January 2023 - Present" format, plain hyphen, full month names), then the bullets. Never join company and city with a comma ("Meta, Dublin" is forbidden - the extension attaches locations from the profile itself). Never join company and title on one line. Keep every bullet from the source role, in source order, reworded in place. Every bullet starts with a strong past-tense verb for ended roles and present tense only for the current role. Forbidden anywhere in bullets: "I", "we", "our", "responsible for", "tasked with", "duties included", "helped", "assisted with", "involved in", and passive voice. Keep every number from the profile's bullets. Never append a tool or technology to a bullet unless that profile bullet already names it.
@@ -3360,7 +3375,7 @@ ${JSON.stringify(userProfile.relevantProjects || [], null, 2)}
    - THE HEADLINE APPEARS ONCE: The line immediately after the candidate's name is the target job title, on its own line, and it appears exactly once. Never write a second title line, and never repeat the title in the contact line beneath it.
    - CERTIFICATIONS (only per the CERTIFICATIONS RULE below)
    - CERTIFICATIONS RULE: Omit the CERTIFICATIONS section entirely unless the profile's certifications switch is on - that is, unless the candidate profile supplies a non-empty CERTIFICATIONS list. Whether the job description mentions certification is irrelevant to this decision. When the section is included, list only certifications the profile actually records; never invent one.
-   - EDUCATION: each entry is degree plus grade on one line, institution on the next line, graduation year on the next. Always keep grades and years from the profile. GRADES ARE COPIED, NEVER DERIVED: a numeric grade or GPA may appear only if that exact figure is written in the profile's education record; never convert a Distinction, First Class Honours or a 2:1 into a number.
+   - EDUCATION: each entry is degree plus recorded grade on one line and institution on the next. Never print graduation years, study dates, date ranges or "Class of 20XX". Dates remain saved for application forms. GRADES ARE COPIED, NEVER DERIVED: a numeric grade or GPA may appear only if that exact figure is written in the profile's education record; never convert a Distinction, First Class Honours or a 2:1 into a number.
    - NAME THE PRACTICE THE BULLET ALREADY DESCRIBES: when the posting asks for a practice that one of the candidate's own bullets already performs, name it in that bullet in natural English and change nothing else - a bullet provisioning cloud environments with Terraform may read "Provisioned AWS environments as code with Terraform", keeping the tool, scope, figures and outcome exactly as recorded. Never name a practice a bullet does not perform and never add a tool.
 
    OUTPUT HYGIENE: Plain text only - no markdown, no asterisks, no bullet symbols other than "- " at the start of bullet lines. No em dashes anywhere; use a plain hyphen. Section headings are exactly: PROFESSIONAL SUMMARY, PROFESSIONAL EXPERIENCE, TECHNICAL SKILLS, PROJECTS, CERTIFICATIONS, EDUCATION. Never write a heading inline with content. Never emit the same section twice.
@@ -3394,6 +3409,13 @@ ${JSON.stringify(userProfile.relevantProjects || [], null, 2)}
    - Use natural connectors: "with expertise in", "applying", "through", "incorporating"
    - The company name MUST be "${company}" - never use generic placeholders like "your company" or "the company"
    - COMPANY-FIRST BALANCE: Address the company directly - use 'you/your/${company}' at least as often as 'I/my'. Every paragraph must contain at least one sentence about the company's needs or mission, not the candidate.
+
+   THE LETTER MUST NOT RESTATE THE CV (measured: two paragraphs of a real letter shared 61% and 41% of their content words with CV bullets). The reviewer reads both documents, so a restated bullet wastes the one page that can say something new.
+   - Lead EVERY paragraph with the employer's problem, not the candidate's history. The first sentence of a paragraph must be about ${company}, the role, or the work the posting describes.
+   - AT MOST ONE past example per paragraph, ONE sentence long, and only as proof of a forward-looking claim. Never two achievements in one paragraph.
+   - NEVER reuse the wording of a CV bullet. If a bullet reads "Architected a UK retail client's migration to AWS microservices, delivering all 47 services in 11 months", the letter may not restate that achievement at all - pick a different angle or a different point. Any sentence sharing 45% or more of its content words with a bullet is deleted automatically before the letter is exported, so writing one wastes the paragraph.
+   - AT LEAST ONE paragraph must say something specific to ${company} drawn from the posting: their scale, their market, or the problem this role exists to solve.
+   - The CLOSING is exactly TWO sentences and restates nothing.
 
    GAP MITIGATION (CRITICAL - from Rule 13):
    - In paragraph 3, address ANY JD requirements the candidate does NOT directly have
@@ -3437,7 +3459,7 @@ ${
       "github": "${userProfile.github}",
       "portfolio": "${userProfile.portfolio}"
     },
-    "summary": "[PURE QUALIFICATIONS ONLY - open on the discipline or the span of experience, NOT on a self-flattering adjective ('Accomplished', 'Seasoned', 'Experienced', 'Results-driven' are banned openers) - ZERO contact info, names, emails, phones, or URLs - those are ALREADY in header above]",
+    "summary": "[TWO sentences, 150-220 chars: '<a job title the employment history contains> working across <2-3 posting requirements the EXPERIENCE section evidences>. <strongest outcome with its figure>; <second outcome with its figure>.' No unheld title, no employer name, no total years, no place name, no adjective describing the candidate, no self-rating, no first person, no contact details]",
     "coreCompetencies": ["Keyword Phrase 1", "Keyword Phrase 2", "Keyword Phrase 3", "Keyword Phrase 4", "Keyword Phrase 5", "Keyword Phrase 6"],
     "experience": [
       {
@@ -3772,12 +3794,13 @@ ${
     const keywordDecisions: Array<{ term: string; decision: string; evidence?: string }> = [];
 
 
-    const coverageTarget = 100;
+    const coverageTarget = atsStrategy.keywordCoverageTarget ?? 100;
     const revisions: RevisionRecord[] = [];
 
     if (jdKeywords.allKeywords.length > 0 && result.tailoredResume) {
       for (let pass = 1; pass <= 2; pass++) {
         const draftResume: string = result.tailoredResume;
+        // CV TEXT ONLY: cover-letter mentions must not stop a needed CV revision.
         const before = measureCoverage(draftResume, jdKeywords.allKeywords);
         if (before.percent >= coverageTarget) {
           console.log(`[REVISION] Pass ${pass} not needed: coverage ${before.percent}% already at target ${coverageTarget}%`);
@@ -3984,6 +4007,17 @@ ${
         if (verdict.coverageAfter >= coverageTarget) break;
       }
     }
+
+    // THE REVISION'S OWN HIGH-WATER MARK, KEPT FOR THE FINAL RECONCILIATION.
+    // A revision pass can report 100% and the final document still measure 88%,
+    // because the clean-up steps that follow legitimately delete terms the model
+    // wrote in without evidence. Recording what the accepted revision contained
+    // lets the final report name those terms instead of leaving two figures that
+    // silently disagree.
+    const postRevisionMatched: string[] =
+      revisions.some((r) => r.accepted) && result.tailoredResume
+        ? measureCoverage(result.tailoredResume, jdKeywords.allKeywords).matched
+        : [];
 
     // THE CONTACT LINE AND THE SKILLS LIST ARE THE CANDIDATE'S, NOT THE MODEL'S.
     // A live run produced the phone as "+353 08 742 61508" (digits reordered)
@@ -4193,8 +4227,32 @@ ${
     // kept clearly separate from the titles actually held, which stay inside
     // PROFESSIONAL EXPERIENCE under their own employers.
     // ============================================================
+    // THE LINE UNDER THE NAME IS A JOB TITLE, NEVER THE EMPLOYER.
+    // Real output printed the company name there, twice. When the posting title
+    // is missing or is nothing but the company name, the candidate's most
+    // relevant HELD title is written instead.
+    const headlineRoles = Array.isArray(userProfile.professionalExperience) ? userProfile.professionalExperience : [];
+    const headlineHeldTitles = headlineRoles.map((r: any) => String(r?.title || "").trim()).filter(Boolean);
+    const headlineCurrentTitle = String(
+      (headlineRoles.find((role: any) => {
+        const end = String(role?.endDate || role?.end_date || role?.dateRange || role?.dates || "").trim();
+        return !end || /present|current/i.test(end);
+      }) || headlineRoles[0] || {})?.title || "",
+    ).trim();
+    const headlineDecision = chooseHeadline({
+      targetTitle: jobTitle || "",
+      company,
+      currentTitle: headlineCurrentTitle,
+      heldTitles: headlineHeldTitles,
+    });
+    if (headlineDecision.usedFallback) {
+      console.warn(`[HEADLINE] ${headlineDecision.reason}: "${headlineDecision.headline}"`);
+    }
+    result.headline = headlineDecision.headline;
+    result.headlineSource = headlineDecision.reason;
+
     const enforceTargetRoleLine = (resumeText: string): string => {
-      const target = (jobTitle || "").trim();
+      const target = (headlineDecision.headline || "").trim();
       if (!resumeText || !target) return resumeText;
       const lines = resumeText.split("\n");
       const nameIdx = lines.findIndex((l) => l.trim().toLowerCase() === candidateName.toLowerCase());
@@ -4216,19 +4274,38 @@ ${
         lines.splice(nameIdx + 1, 0, target);
       }
 
-      // Never twice, and never inside the contact block beneath it.
+      // Never twice, never a shortened variant beside it, and never inside the
+      // contact block beneath it. A CV went out reading "Manager, Payroll
+      // Operations - Sub Saharan" on one line and "Manager, Payroll Operations"
+      // on the next because two writers each produced one. One writer, one line:
+      // the posting's title character for character, region and team included.
       const headerEnd = Math.min(lines.length, nameIdx + 7);
+      const norm = (s: string) => s.trim().toLowerCase().replace(/[\s,\-–—/]+/g, " ").trim();
+      const targetNorm = norm(target);
       let seen = false;
       for (let i = nameIdx + 1; i < headerEnd; i++) {
-        if (lines[i].trim().toLowerCase() === target.toLowerCase()) {
+        const line = lines[i];
+        if (line.trim().toLowerCase() === target.toLowerCase()) {
           if (seen) lines[i] = "";
           seen = true;
-        } else if (isContact(lines[i])) {
-          lines[i] = lines[i]
+        } else if (isEmployerNameLine(line, company)) {
+          // The employer's name is not a headline, and it is never a second one.
+          lines[i] = "";
+        } else if (isContact(line)) {
+          lines[i] = line
             .replace(new RegExp(`\\s*\\|\\s*${target.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i"), "")
             .trim();
+        } else if (
+          seen &&
+          line.trim() &&
+          looksLikeTitleLine(line) &&
+          (targetNorm.startsWith(norm(line)) || norm(line).startsWith(targetNorm))
+        ) {
+          // A shortened or padded restatement of the same title.
+          lines[i] = "";
         }
       }
+
       return lines.filter((l, i) => !(l === "" && lines[i - 1] === "")).join("\n");
     };
     if (result.tailoredResume) result.tailoredResume = enforceTargetRoleLine(result.tailoredResume);
@@ -4374,6 +4451,29 @@ ${
       result.coverLetterFillerRemoved = scrubbed.removed;
       if (scrubbed.removed.length) {
         console.log(`[COVER LETTER] Removed ${scrubbed.removed.length} enthusiasm/praise/prediction sentences`);
+      }
+
+      // THE LETTER MUST NOT RESTATE THE CV.
+      // Any sentence sharing 45% or more of its content words with a CV bullet
+      // is the same claim read twice, and at most one past example survives per
+      // paragraph - used as proof of a forward-looking claim, never as history.
+      const cvBullets = (result.tailoredResume || "")
+        .split("\n")
+        .filter((l: string) => /^\s*[-•*]\s+\S/.test(l))
+        .map((l: string) => l.trim());
+      const original = enforceCoverLetterOriginality(result.tailoredCoverLetter, cvBullets);
+      result.tailoredCoverLetter = original.text;
+      result.coverLetterRestatementRemoved = original.removedSentences;
+      result.coverLetterOverlap = {
+        maxSentenceOverlap: Math.round(original.maxSentenceOverlap * 100),
+        paragraphOverlaps: original.paragraphOverlaps.map((p) => Math.round(p * 100)),
+        meaning:
+          "Percentage of a sentence's or paragraph's content words that also appear in a single CV bullet, measured on the exported letter. Anything at 45% or above was removed.",
+      };
+      if (original.removedSentences.length) {
+        console.warn(
+          `[COVER LETTER] Removed ${original.removedSentences.length} sentence(s) restating the CV or repeating a past example`,
+        );
       }
     }
 
@@ -4561,6 +4661,123 @@ ${
       result.forceInjectedCount = finalMatched.length - (jdKeywords.allKeywords.length - actualMissing.length - finalMissing.length);
     }
 
+    // ============================================================
+    // THE SUMMARY IS THE LINE THAT DECIDES WHETHER THE REST IS READ.
+    //
+    // A live run opened with "Manager of Payroll Operations with a strong
+    // background in ... operational excellence" above an employment block of
+    // Software Engineer, AI Product Manager, Solutions Architect and Data
+    // Analyst: a title never held, and nothing checkable. The shape is now
+    // enforced deterministically after the model writes:
+    //   <held title> working across <2-3 evidenced posting requirements>.
+    //   <strongest outcome with its figure>; <second outcome with its figure>.
+    // Facts are not invented here - the title comes from the employment
+    // history, the scope terms from the posting where a bullet evidences them,
+    // and the figures verbatim from the candidate's own bullets.
+    // ============================================================
+    const summarySectionOf = (
+      text: string,
+    ): { body: string; start: number; end: number; inline: boolean } | null => {
+      const lines = (text || "").split("\n");
+      // Heading on its own line, or inline with the text ("PROFESSIONAL SUMMARY: ...").
+      let start = lines.findIndex((l) => /^\s*PROFESSIONAL\s+SUMMARY\s*$/i.test(l));
+      if (start >= 0) {
+        let end = start + 1;
+        while (end < lines.length && !/^[A-Z][A-Z\s&]{4,}$/.test(lines[end].trim())) end++;
+        return { body: lines.slice(start + 1, end).join(" ").replace(/\s+/g, " ").trim(), start, end, inline: false };
+      }
+      start = lines.findIndex((l) => /^\s*PROFESSIONAL\s+SUMMARY\s*:\s*\S/i.test(l));
+      if (start < 0) return null;
+      return {
+        body: lines[start].replace(/^\s*PROFESSIONAL\s+SUMMARY\s*:\s*/i, "").replace(/\s+/g, " ").trim(),
+        start,
+        end: start + 1,
+        inline: true,
+      };
+    };
+
+    const experienceBulletsOf = (text: string): string[] => {
+      const lines = (text || "").split("\n");
+      const start = lines.findIndex((l) => /^\s*PROFESSIONAL\s+EXPERIENCE\s*$/i.test(l));
+      if (start < 0) return [];
+      let end = start + 1;
+      while (end < lines.length && !/^(TECHNICAL SKILLS|PROJECTS|CERTIFICATIONS|EDUCATION)$/i.test(lines[end].trim())) end++;
+      return lines
+        .slice(start + 1, end)
+        .filter((l) => /^\s*[-•*]\s+\S/.test(l))
+        .map((l) => l.trim());
+    };
+
+    const profileRoles = Array.isArray(userProfile.professionalExperience) ? userProfile.professionalExperience : [];
+    const currentRole = profileRoles.find((role: any) => {
+      const end = String(role?.endDate || role?.end_date || role?.dateRange || role?.dates || "").trim();
+      return !end || /present|current/i.test(end);
+    }) || profileRoles[0];
+    const summaryContext: SummaryContext = {
+      heldTitles: profileRoles.map((r: any) => String(r?.title || "").trim()).filter(Boolean),
+      currentTitle: String(currentRole?.title || "").trim(),
+      targetTitle: jobTitle || "",
+      requirements: jdKeywords.allKeywords,
+      experienceBullets: experienceBulletsOf(result.tailoredResume || ""),
+      outcomeBullets: profileRoles.flatMap((role: any) =>
+        Array.isArray(role?.bullets)
+          ? role.bullets.map((bullet: any) => String(bullet || ""))
+          : typeof role?.description === "string"
+            ? role.description.split("\n").map((bullet: string) => bullet.trim()).filter(Boolean)
+            : [],
+      ),
+      employers: profileRoles.map((r: any) => String(r?.company || "").trim()).filter(Boolean),
+      places: [
+        userProfile.city,
+        userProfile.country,
+        ...profileRoles.map((r: any) => String(r?.location || "").split(",")[0]),
+      ]
+        .map((p: any) => String(p || "").trim())
+        .filter(Boolean),
+    };
+
+    const currentSummary = summarySectionOf(result.tailoredResume || "");
+    const summaryDecision = enforceSummaryShape(
+      currentSummary?.body || result.resumeStructured?.summary || "",
+      summaryContext,
+    );
+    if (summaryDecision.rebuilt) {
+      console.warn(
+        `[SUMMARY] Rebuilt to the required shape. Violations: ${summaryDecision.violations.join("; ")}`,
+      );
+    }
+    if (summaryDecision.summary) {
+      if (currentSummary) {
+        const lines = (result.tailoredResume || "").split("\n");
+        if (currentSummary.inline) {
+          // Heading and text shared one line; normalise to heading on its own line.
+          lines.splice(currentSummary.start, 1, "PROFESSIONAL SUMMARY", summaryDecision.summary, "");
+        } else {
+          lines.splice(currentSummary.start + 1, currentSummary.end - currentSummary.start - 1, summaryDecision.summary, "");
+        }
+        result.tailoredResume = lines.join("\n");
+      }
+      if (result.resumeStructured) result.resumeStructured.summary = summaryDecision.summary;
+    }
+    result.summaryShape = {
+      summary: summaryDecision.summary,
+      rebuilt: summaryDecision.rebuilt,
+      violations: summaryDecision.violations,
+      meaning:
+        "Two sentences, 150-220 characters: a held job title, the posting requirements the experience evidences, then two figures joined with a semicolon.",
+    };
+
+    if (result.tailoredResume) {
+      result.tailoredResume = normaliseSkillsSection(result.tailoredResume);
+      const educationDecision = enforceEducationSection(result.tailoredResume, userProfile.education);
+      result.tailoredResume = educationDecision.text;
+      if (educationDecision.restored) {
+        console.error("[EDUCATION] Generated CV omitted EDUCATION despite saved profile rows; section restored from profile");
+      }
+    }
+
+
+
     // MEASURED COVERAGE, NOT A PROMISE.
     // The number reported is counted off the final document text with
     // whole-term matching, so Java is never satisfied by JavaScript and
@@ -4594,7 +4811,8 @@ ${
     // rewrite away a bullet that carried a supported requirement. When that
     // happens the final figure drops below target with nothing in the revision
     // record to explain it, so name those terms explicitly.
-    const lostInPostProcessing = firstPass.matched.filter((t) =>
+    const draftHighWaterMark = Array.from(new Set([...firstPass.matched, ...postRevisionMatched]));
+    const lostInPostProcessing = draftHighWaterMark.filter((t) =>
       measured.missing.some((m) => m.toLowerCase() === t.toLowerCase())
     );
     if (lostInPostProcessing.length > 0) {
@@ -4623,7 +4841,7 @@ ${
         coverageTotal === 0
           ? "Not measured - no keywords found in this posting"
           : `${measured.matched.length} of ${coverageTotal} keywords (${measured.percent}%)`,
-      target: atsStrategy.keywordCoverageTarget ?? coverageTarget,
+      target: atsStrategy.keywordCoverageTarget ?? 100,
       matchedTerms: measured.matched,
       missingTerms: measured.missing,
       literalCoverage: dual.literal,
@@ -4748,10 +4966,10 @@ ${
         // PRIORITY 2: Try to extract from raw resume text
         // Try multiple patterns to find the Professional Summary section
         const summaryPatterns = [
-          /\bPROFESSIONAL\s+SUMMARY\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS|TECHNICAL\s+SKILLS)\b)/i,
-          /\bSUMMARY\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS)\b)/i,
-          /\bPROFILE\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS)\b)/i,
-          /\bABOUT\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS)\b)/i,
+          /\bPROFESSIONAL\s+SUMMARY\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:PROFESSIONAL\s+EXPERIENCE|WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS|TECHNICAL\s+SKILLS)\b)/i,
+          /\bSUMMARY\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:PROFESSIONAL\s+EXPERIENCE|WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS)\b)/i,
+          /\bPROFILE\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:PROFESSIONAL\s+EXPERIENCE|WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS)\b)/i,
+          /\bABOUT\b\s*:?\s*([\s\S]*?)(?=\n\s*(?:PROFESSIONAL\s+EXPERIENCE|WORK\s+EXPERIENCE|EXPERIENCE|EMPLOYMENT|EDUCATION|SKILLS|CERTIFICATIONS|PROJECTS|ACHIEVEMENTS)\b)/i,
         ];
 
         let summary = "";
@@ -4864,7 +5082,7 @@ ${
         education: (Array.isArray(userProfile.education) ? userProfile.education : []).map((edu: any) => ({
           degree: edu?.degree || "",
           school: edu?.school || edu?.institution || "",
-          dates: edu?.dates || formatDateRangeATS(edu?.startDate, edu?.endDate),
+          dates: "",
           gpa: edu?.gpa || "",
         })),
         skills: {
@@ -4982,6 +5200,19 @@ ${
 
           console.log(`PDF generated successfully: ${fileName}, size: ${uint8Array.length} bytes`);
           return { pdf: base64, fileName };
+        } else if (contentType.includes("application/json")) {
+          // generate-pdf returns a JSON envelope carrying base64 DOCX bytes.
+          // Treating that as an unexpected type made every attachment report
+          // "failed" even though the document had been generated correctly.
+          const body = await pdfRes.json().catch(() => null);
+          const base64 = body?.docx || body?.pdf || null;
+          if (base64) {
+            if (body?.fileName) fileName = body.fileName;
+            console.log(`Document generated successfully: ${fileName}, base64 length: ${base64.length}`);
+            return { pdf: base64, fileName };
+          }
+          console.error(`generate-pdf returned JSON without document bytes: ${JSON.stringify(body)?.slice(0, 200)}`);
+          return { pdf: null, fileName };
         } else {
           // Unexpected response type
           console.error(`Unexpected response type from generate-pdf: ${contentType}`);

@@ -335,6 +335,95 @@ export type Database = {
         }
         Relationships: []
       }
+      job_contacts: {
+        Row: {
+          checked_at: string
+          company: string | null
+          contact_identity: string | null
+          contact_page_url: string | null
+          contact_type: string
+          created_at: string
+          discovery_method: string | null
+          email: string | null
+          first_seen_at: string
+          id: string
+          job_id: string | null
+          job_key: string
+          last_seen_at: string
+          mailbox_verified: boolean
+          name: string | null
+          profile_url: string | null
+          removed_at: string | null
+          requires_review: boolean
+          source_context: string | null
+          source_url: string | null
+          title: string | null
+          updated_at: string
+          user_id: string
+          verification_status: string
+        }
+        Insert: {
+          checked_at?: string
+          company?: string | null
+          contact_identity?: string | null
+          contact_page_url?: string | null
+          contact_type?: string
+          created_at?: string
+          discovery_method?: string | null
+          email?: string | null
+          first_seen_at?: string
+          id?: string
+          job_id?: string | null
+          job_key: string
+          last_seen_at?: string
+          mailbox_verified?: boolean
+          name?: string | null
+          profile_url?: string | null
+          removed_at?: string | null
+          requires_review?: boolean
+          source_context?: string | null
+          source_url?: string | null
+          title?: string | null
+          updated_at?: string
+          user_id: string
+          verification_status?: string
+        }
+        Update: {
+          checked_at?: string
+          company?: string | null
+          contact_identity?: string | null
+          contact_page_url?: string | null
+          contact_type?: string
+          created_at?: string
+          discovery_method?: string | null
+          email?: string | null
+          first_seen_at?: string
+          id?: string
+          job_id?: string | null
+          job_key?: string
+          last_seen_at?: string
+          mailbox_verified?: boolean
+          name?: string | null
+          profile_url?: string | null
+          removed_at?: string | null
+          requires_review?: boolean
+          source_context?: string | null
+          source_url?: string | null
+          title?: string | null
+          updated_at?: string
+          user_id?: string
+          verification_status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "job_contacts_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "jobs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       job_pool: {
         Row: {
           company: string
@@ -668,6 +757,7 @@ export type Database = {
           country: string | null
           cover_letter: string | null
           created_at: string | null
+          criminal_record: boolean | null
           current_salary: string | null
           cv_file_name: string | null
           cv_file_path: string | null
@@ -677,12 +767,14 @@ export type Database = {
           education: Json | null
           email: string | null
           excluded_companies: string[] | null
+          excluded_keywords: Json
           expected_salary: string | null
           first_name: string | null
           gender: string | null
           github: string | null
           highest_education: string | null
           hispanic_latino: boolean | null
+          how_heard: string | null
           id: string
           kimi_api_key: string | null
           kimi_enabled: boolean | null
@@ -690,13 +782,18 @@ export type Database = {
           last_name: string | null
           learned_preferences: Json | null
           linkedin: string | null
+          middle_name: string | null
+          needs_accommodation: boolean | null
           notice_period: string | null
           openai_api_key: string | null
           openai_enabled: boolean | null
+          over_18: boolean | null
           phone: string | null
+          phone_type: string | null
           portfolio: string | null
           preferred_ai_provider: string | null
           professional_experience: Json | null
+          provider_enrichment_enabled: boolean
           race_ethnicity: string | null
           relevant_projects: Json | null
           security_clearance: boolean | null
@@ -707,8 +804,10 @@ export type Database = {
           user_id: string
           veteran_status: boolean | null
           visa_required: boolean | null
+          was_referred: boolean | null
           willing_to_relocate: boolean | null
           work_authorized_countries: string[]
+          worked_here_before: boolean | null
           zip_code: string | null
         }
         Insert: {
@@ -724,6 +823,7 @@ export type Database = {
           country?: string | null
           cover_letter?: string | null
           created_at?: string | null
+          criminal_record?: boolean | null
           current_salary?: string | null
           cv_file_name?: string | null
           cv_file_path?: string | null
@@ -733,12 +833,14 @@ export type Database = {
           education?: Json | null
           email?: string | null
           excluded_companies?: string[] | null
+          excluded_keywords?: Json
           expected_salary?: string | null
           first_name?: string | null
           gender?: string | null
           github?: string | null
           highest_education?: string | null
           hispanic_latino?: boolean | null
+          how_heard?: string | null
           id?: string
           kimi_api_key?: string | null
           kimi_enabled?: boolean | null
@@ -746,13 +848,18 @@ export type Database = {
           last_name?: string | null
           learned_preferences?: Json | null
           linkedin?: string | null
+          middle_name?: string | null
+          needs_accommodation?: boolean | null
           notice_period?: string | null
           openai_api_key?: string | null
           openai_enabled?: boolean | null
+          over_18?: boolean | null
           phone?: string | null
+          phone_type?: string | null
           portfolio?: string | null
           preferred_ai_provider?: string | null
           professional_experience?: Json | null
+          provider_enrichment_enabled?: boolean
           race_ethnicity?: string | null
           relevant_projects?: Json | null
           security_clearance?: boolean | null
@@ -763,8 +870,10 @@ export type Database = {
           user_id: string
           veteran_status?: boolean | null
           visa_required?: boolean | null
+          was_referred?: boolean | null
           willing_to_relocate?: boolean | null
           work_authorized_countries?: string[]
+          worked_here_before?: boolean | null
           zip_code?: string | null
         }
         Update: {
@@ -780,6 +889,7 @@ export type Database = {
           country?: string | null
           cover_letter?: string | null
           created_at?: string | null
+          criminal_record?: boolean | null
           current_salary?: string | null
           cv_file_name?: string | null
           cv_file_path?: string | null
@@ -789,12 +899,14 @@ export type Database = {
           education?: Json | null
           email?: string | null
           excluded_companies?: string[] | null
+          excluded_keywords?: Json
           expected_salary?: string | null
           first_name?: string | null
           gender?: string | null
           github?: string | null
           highest_education?: string | null
           hispanic_latino?: boolean | null
+          how_heard?: string | null
           id?: string
           kimi_api_key?: string | null
           kimi_enabled?: boolean | null
@@ -802,13 +914,18 @@ export type Database = {
           last_name?: string | null
           learned_preferences?: Json | null
           linkedin?: string | null
+          middle_name?: string | null
+          needs_accommodation?: boolean | null
           notice_period?: string | null
           openai_api_key?: string | null
           openai_enabled?: boolean | null
+          over_18?: boolean | null
           phone?: string | null
+          phone_type?: string | null
           portfolio?: string | null
           preferred_ai_provider?: string | null
           professional_experience?: Json | null
+          provider_enrichment_enabled?: boolean
           race_ethnicity?: string | null
           relevant_projects?: Json | null
           security_clearance?: boolean | null
@@ -819,8 +936,10 @@ export type Database = {
           user_id?: string
           veteran_status?: boolean | null
           visa_required?: boolean | null
+          was_referred?: boolean | null
           willing_to_relocate?: boolean | null
           work_authorized_countries?: string[]
+          worked_here_before?: boolean | null
           zip_code?: string | null
         }
         Relationships: []
