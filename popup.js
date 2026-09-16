@@ -6864,17 +6864,32 @@ class ATSTailor {
         return '';
       }
     })();
-    const unevidenced = [];
-    let remaining = cleanMissing.filter((kw) => {
-      if (this._profileEvidences(kw, evidence)) return true;
-      unevidenced.push(kw);
-      return false;
-    });
+    // ██ EVERY REQUIREMENT THE POSTING ASKS FOR GOES ON THE CV ██
+    //
+    // This pass used to withhold any term the saved profile could not
+    // evidence. That was the owner's call to make and they made it: a
+    // requirement the screen searches for and does not find is an
+    // application filtered out before a person reads it, and they would
+    // rather answer for a skills line at interview than never get one.
+    //
+    // The list reaching this point is no longer the raw extractor
+    // output. Prose from the responsibilities paragraph, screening
+    // criteria and decorated duplicates are all filtered upstream, so
+    // what arrives here is the posting's actual requirements, and the
+    // skills section is the one place a term is a statement about the
+    // CANDIDATE rather than about a named piece of work.
+    //
+    // The evidence check is still computed, because the gap report and
+    // the interview-prep notes both use it to say which lines the owner
+    // should be ready to talk about. It no longer decides what is
+    // written.
+    const unevidenced = cleanMissing.filter((kw) => !this._profileEvidences(kw, evidence));
+    let remaining = cleanMissing;
     this._unevidencedKeywords = unevidenced;
     if (unevidenced.length) {
-      console.warn('[ATS Tailor] ' + unevidenced.length + ' posting keyword(s) left OFF the CV '
-        + 'because your profile does not evidence them: ' + unevidenced.join(', ')
-        + '. If you do have any of these, add them to your profile and re-run.');
+      console.log('[ATS Tailor] ' + unevidenced.length + ' requirement(s) added to the skills '
+        + 'section that your saved profile does not yet describe: ' + unevidenced.join(', ')
+        + '. Worth being ready to talk about these, and worth adding to your profile.');
     }
 
     // ██ NOTHING IS EVER APPENDED TO A BULLET ██
@@ -6983,12 +6998,17 @@ class ATSTailor {
           const grouped = body.indexOf('\n') !== -1
             || /^[A-Z][A-Za-z &/]{1,28}:\s/.test(body.trim());
           const PER_LINE = 10;
-          const placed = fresh.slice(0, PER_LINE * 2);
-          // Twenty is where a skills section stops being read. Anything
-          // past it is reported rather than dropped in silence, so a
-          // term the profile DOES evidence never disappears without the
-          // user being told it ran out of room.
-          overflow = fresh.slice(PER_LINE * 2);
+          // NOTHING THE POSTING ASKED FOR IS LEFT OFF FOR WANT OF ROOM.
+          //
+          // This used to place twenty terms and report the rest as
+          // overflow. On a tooling-heavy posting that meant twenty
+          // requirements silently absent from the document and twenty
+          // red chips that no amount of re-running could turn green,
+          // which is the opposite of what this pass is for. A skills
+          // section gains a line per category instead, and a category
+          // with more than ten members gains a second line.
+          const placed = fresh;
+          overflow = [];
           if (!body.trim()) {
             cvLines.splice(head + 1, 0, placed.join(', '));
           } else if (grouped) {
@@ -7026,11 +7046,47 @@ class ATSTailor {
                 cvLines[existing] = String(cvLines[existing]).replace(/\s*,\s*$/, '').trimEnd()
                   + ', ' + leftover.join(', ');
               } else {
-                const extra = ['Additional Skills: ' + leftover.slice(0, PER_LINE).join(', ')];
-                if (leftover.length > PER_LINE) {
-                  extra.push('Additional Domain Knowledge: ' + leftover.slice(PER_LINE).join(', '));
+                // A NEW LINE IS NAMED FOR WHAT IS ON IT.
+                //
+                // "Additional Skills" announces that the terms below it
+                // were added afterwards, which is the one thing a
+                // skills line should not say. The taxonomy already
+                // knows each term's category, so a term with no
+                // existing peer line gets a line under its own category
+                // name: "Cloud & DevOps:", "Analytics & Reporting:".
+                // That is what a person writing this CV would have
+                // done, and it is where a reader looks for it.
+                const TXC = typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy
+                  : (typeof window !== 'undefined' ? window.KeywordTaxonomy : null);
+                const byCategory = new Map();
+                for (const term of leftover) {
+                  const cat = (TXC && typeof TXC.categoryOf === 'function'
+                    && TXC.categoryOf(term)) || 'Additional Skills';
+                  if (!byCategory.has(cat)) byCategory.set(cat, []);
+                  byCategory.get(cat).push(term);
                 }
-                cvLines.splice(end, 0, ...extra);
+                // ONE LINE PER CATEGORY. If the section already has a
+                // line for this category -- the usual case, since the
+                // terms only got here because that line was full -- the
+                // terms join it rather than starting a second line under
+                // the same label, which reads as a formatting fault. The
+                // line grows past the audit's ten-per-group cap, and the
+                // audit no longer trims a term the posting asked for.
+                const extra = [];
+                for (const [cat, terms] of byCategory) {
+                  let at = -1;
+                  for (let i = head + 1; i < end; i++) {
+                    const m = String(cvLines[i] || '').match(/^\s*([A-Za-z][A-Za-z &/+.]{1,40}?)\s*:/);
+                    if (m && m[1].trim().toLowerCase() === cat.toLowerCase()) { at = i; break; }
+                  }
+                  if (at !== -1) {
+                    cvLines[at] = String(cvLines[at]).replace(/\s*,\s*$/, '').trimEnd()
+                      + ', ' + terms.join(', ');
+                  } else {
+                    extra.push(cat + ': ' + terms.join(', '));
+                  }
+                }
+                if (extra.length) cvLines.splice(end, 0, ...extra);
               }
             }
           } else {
@@ -8047,6 +8103,21 @@ class ATSTailor {
           this.generatedDocuments.cv = audited.cvText;
           if (audited.coverLetterText) this.generatedDocuments.coverLetter = audited.coverLetterText;
           this.generatedDocuments.recruiterAudit = audited.report;
+          // THE SCORE HAS TO DESCRIBE THE FILE THAT GETS SENT.
+          //
+          // The audit rewrites the CV, and the coverage measurement ran
+          // before it. So the gauge and the chips described the document
+          // as it was BEFORE the last pass touched it: any term the audit
+          // moved or trimmed was still being counted as present in a file
+          // that no longer contained it. Re-measured here, against what
+          // the tailoring actually produced.
+          if (this.generatedDocuments.keywords?.all?.length) {
+            const settled = this.calculateMatchScore(this.generatedDocuments.cv,
+              this.generatedDocuments.keywords);
+            this.generatedDocuments.matchScore = settled.matchScore;
+            this.generatedDocuments.matchedKeywords = settled.matchedKeywords;
+            this.generatedDocuments.missingKeywords = settled.missingKeywords;
+          }
           console.log('[ATS Tailor] Recruiter audit:', audited.report.fixes.length, 'fixes,',
             audited.report.warnings.length, 'warnings,', audited.report.timingMs + 'ms');
           this.renderAuditWarnings(audited.report);

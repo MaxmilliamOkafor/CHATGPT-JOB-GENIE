@@ -75,21 +75,29 @@ test('the reported gap closes on terms the saved profile evidences', () => {
   }
 });
 
-test('a term the profile cannot support is left off and named', () => {
+// The owner's decision: a requirement the screen searches for and does
+// not find is an application filtered out before a person reads it, so
+// everything the posting asks for is written. What the profile cannot
+// support is still NAMED, which is what makes it possible to prepare an
+// answer and to fix the profile at the source.
+test('a term the profile cannot support is written, and named', () => {
   const popup = make(PROFILE);
   const keywords = {all: ['Rust', 'Salesforce', 'Kubernetes']};
   const out = popup.fastKeywordInjection(CV, keywords, ['Rust', 'Salesforce', 'Kubernetes']);
-  assert.ok(!/Rust|Salesforce/.test(out.tailoredCV), 'an unevidenced term reached the CV');
+  assert.match(out.tailoredCV, /Rust/, 'a posting requirement was withheld');
+  assert.match(out.tailoredCV, /Salesforce/, 'a posting requirement was withheld');
   assert.ok(out.tailoredCV.includes('Kubernetes'), 'a saved skill was withheld');
   assert.deepEqual(Array.from(out.reviewKeywords), ['Rust', 'Salesforce']);
   assert.deepEqual(Array.from(popup._unevidencedKeywords), ['Rust', 'Salesforce']);
 });
 
-test('with no saved profile nothing whatsoever is added', () => {
+test('with no saved profile the posting is still the source of truth', () => {
   const popup = make(null);
   const out = popup.fastKeywordInjection(CV, {all: ['Kubernetes']}, ['Kubernetes']);
-  assert.equal(out.tailoredCV, CV);
-  assert.deepEqual(Array.from(out.injectedKeywords), []);
+  assert.match(out.tailoredCV, /Kubernetes/, 'an unreadable profile silenced the posting');
+  assert.deepEqual(Array.from(out.injectedKeywords), ['Kubernetes']);
+  // Nothing could be checked, so everything is flagged for review.
+  assert.deepEqual(Array.from(popup._unevidencedKeywords), ['Kubernetes']);
 });
 
 test('the existing group lines survive byte for byte', () => {

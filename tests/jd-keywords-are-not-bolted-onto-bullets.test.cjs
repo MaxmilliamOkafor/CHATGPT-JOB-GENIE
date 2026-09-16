@@ -125,15 +125,37 @@ console.log('NOTHING IS APPENDED TO A BULLET, EVER');
   }
 }
 
-console.log('\nAND A TOOL THE PROFILE NEVER MENTIONS REACHES NOTHING AT ALL');
+console.log('\nA TOOL THE PROFILE NEVER MENTIONS REACHES THE SKILLS SECTION, AND ONLY THAT');
+// The owner's call, made explicitly and more than once: a requirement
+// the screen searches for and does not find is an application filtered
+// out before a person reads it, and they would rather answer for a
+// skills line at interview than never get one.
+//
+// The rule this file exists to hold is unchanged and is the one that
+// matters: it goes on the SKILLS LINE, never into a bullet. A bullet is
+// a claim about a specific piece of work, and a tool appended to one
+// says the tool was used for that work. A skills entry says only that
+// the candidate lists the skill.
+const _skillsBlock = (cv) => {
+  const lines = cv.split('\n');
+  const head = lines.findIndex((l) => /^(TECHNICAL SKILLS|SKILLS|CORE COMPETENCIES)/i.test(l.trim()));
+  if (head === -1) return '';
+  const rest = lines.slice(head + 1);
+  const end = rest.findIndex((l) => !l.trim());
+  return rest.slice(0, end === -1 ? rest.length : end).join('\n');
+};
 for (const tool of INVENTED) {
-  t('  "' + tool + '" is nowhere on the CV',
-    out.tailoredCV.toLowerCase().indexOf(tool.toLowerCase()) === -1,
-    out.tailoredCV.split('\n').filter((l) => l.toLowerCase().indexOf(tool.toLowerCase()) !== -1).join(' / '));
+  t('  "' + tool + '" is on the CV',
+    out.tailoredCV.toLowerCase().indexOf(tool.toLowerCase()) !== -1,
+    'a requirement the posting asked for was withheld');
+  t('    ...in the skills section',
+    _skillsBlock(out.tailoredCV).toLowerCase().indexOf(tool.toLowerCase()) !== -1,
+    _skillsBlock(out.tailoredCV));
 }
-t('  none of them is reported as injected',
-  !out.injectedKeywords.some((k) => INVENTED.some((v) => v.toLowerCase() === String(k).toLowerCase())),
-  JSON.stringify(out.injectedKeywords));
+t('  and each is named, so they can be prepared for and added to the profile',
+  INVENTED.every((v) => (popup._unevidencedKeywords || [])
+    .some((k) => String(k).toLowerCase() === v.toLowerCase())),
+  JSON.stringify(popup._unevidencedKeywords));
 
 console.log('\nBUT A SKILL THE PROFILE DOES EVIDENCE IS STILL SURFACED');
 // This is the legitimate half: the posting asked for it, the candidate
@@ -188,15 +210,21 @@ console.log('\nA GROUPED SKILLS SECTION KEEPS ITS GROUPS');
       && !/Additional Skills: .*Python/i.test(o.tailoredCV), aline);
 }
 
-console.log('\nWITH NO PROFILE TO CHECK AGAINST, NOTHING IS ADDED');
+console.log('\nWITH NO PROFILE TO CHECK AGAINST, THE POSTING IS STILL THE SOURCE');
 {
-  // The safe direction. An empty profile is not permission to invent.
+  // The requirements come from the POSTING, not the profile, so an
+  // unreadable profile is no reason to send a CV the screen will filter.
+  // The bullets are still untouched, which is the invariant that keeps
+  // this honest: nothing is claimed about a piece of work.
   const blank = Object.create(sandbox.PopupClass.prototype); blank._cachedProfile = null;
   const o = blank.fastKeywordInjection(CV, { all: MISSING }, MISSING);
-  t('  no keyword is injected', o.injectedKeywords.length === 0,
-    JSON.stringify(o.injectedKeywords));
+  t('  the posting\'s requirements are still written',
+    o.injectedKeywords.length === MISSING.length, JSON.stringify(o.injectedKeywords));
   t('  and the bullets are untouched',
     bulletsOf(o.tailoredCV).every((b, i) => b === BULLETS[i]), 'a bullet changed');
+  t('  ...and every one is named as unevidenced, since nothing could be checked',
+    (blank._unevidencedKeywords || []).length === MISSING.length,
+    JSON.stringify(blank._unevidencedKeywords));
 }
 
 console.log('\nAND THE METRICS IN THE BULLETS ARE ALL STILL THERE');

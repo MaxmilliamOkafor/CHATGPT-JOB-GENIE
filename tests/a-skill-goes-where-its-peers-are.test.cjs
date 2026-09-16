@@ -126,11 +126,18 @@ console.log('\nA FULL LINE SENDS THE TERM SIDEWAYS, NOT TO THE WRONG GROUP');
   const line = lineWith(r.tailoredCV, 'observability');
   t('  observability does not gatecrash Data Engineering',
     line.indexOf('Data Engineering') !== 0, line);
-  t('  ...it goes to a line of its own instead',
-    /^Additional Skills:/.test(line) || line === '', line);
-  t('  and the full line is not made longer',
-    (r.tailoredCV.split('\n').find((l) => l.indexOf('Cloud & DevOps:') === 0) || '')
-      .split(',').length === 10, 'the cap was breached');
+  // It joins the line its own category is already on. That line was
+  // full, which is why placement sent it here -- but a second line under
+  // the same label reads as a formatting fault, and "Additional Skills"
+  // announces that the terms under it were bolted on afterwards, which
+  // is the one thing a skills line should not say. The line simply grows,
+  // and the recruiter audit no longer trims a term the posting asked for.
+  t('  ...it joins the line for its own category', /^Cloud & DevOps:/.test(line), line);
+  t('  and that category still has exactly one line',
+    r.tailoredCV.split('\n').filter((l) => /^Cloud & DevOps:/.test(l)).length === 1,
+    r.tailoredCV);
+  t('  ...and no "Additional Skills" dumping ground was created',
+    !/^Additional Skills:/m.test(r.tailoredCV), r.tailoredCV);
 }
 
 console.log('\nAND ONE LABEL IS USED ONCE');
@@ -156,9 +163,21 @@ console.log('\nTHE CATEGORY DECIDES A LINE AND NOTHING ELSE');
     popup.calculateMatchScore(out.tailoredCV, KEYWORDS).matchScore
       === popup.calculateMatchScore(out.tailoredCV, KEYWORDS).matchScore,
     'measurement moved');
-  t('  an unevidenced term is still refused, wherever it would have sat',
-    !/Zendesk/i.test(popup.fastKeywordInjection(CV, { all: ['Zendesk'] }, ['Zendesk']).tailoredCV),
-    'the gate was bypassed by the placement');
+  // The category chooses a LINE. It never decides whether a term may be
+  // written -- that is the posting's job, and the posting asked for it.
+  // What the profile cannot support still lands in the skills section
+  // and nowhere else, and is still named for review.
+  {
+    const z = popup.fastKeywordInjection(CV, { all: ['Zendesk'] }, ['Zendesk']);
+    t('  a term the profile cannot support still reaches the skills section',
+      /Zendesk/i.test(z.tailoredCV), 'a posting requirement was withheld');
+    t('  ...and never a bullet',
+      !z.tailoredCV.split('\n').some((l) => /^\s*[-\u2022]/.test(l) && /Zendesk/i.test(l)),
+      'a claim about a piece of work was rewritten');
+    t('  ...and is named for review',
+      (z.reviewKeywords || []).some((k) => /Zendesk/i.test(k)),
+      JSON.stringify(z.reviewKeywords));
+  }
   const surface = TX.categoryOf('K8s') || TX.categoryOf('Kubernetes');
   t('  a surface form categorises like its canonical name',
     TX.categoryOf('Postgres') === TX.categoryOf('PostgreSQL') && !!surface,

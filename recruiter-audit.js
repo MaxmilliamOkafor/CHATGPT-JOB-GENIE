@@ -5221,7 +5221,40 @@
       .trim();
   }
 
-  function sanitiseSkillsSection(cvText) {
+  // A REQUIREMENT THE POSTING ASKED FOR IS NEVER TRIMMED FOR LENGTH.
+  //
+  // This runs AFTER the coverage pass has written the posting's terms
+  // onto the skills lines, and it replaces the CV. So the ten-per-group
+  // readability cap was deleting keywords that had just been added for
+  // this application, from the document that actually gets sent, after
+  // the gauge had already measured the version that still had them.
+  // Same shape as every other silent-loss bug here: the number described
+  // a file that no longer existed.
+  //
+  // The cap still governs everything else, which is what keeps a skills
+  // line readable. It simply cannot cost this application a keyword.
+  function sanitiseSkillsSection(cvText, jobKeywords) {
+    const _protected = (() => {
+      const set = new Set();
+      try {
+        const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy)
+          || (typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy : null);
+        for (const k of _flatKeywords(jobKeywords)) {
+          if (!k) continue;
+          set.add(_skillKey(k));
+          if (TX && typeof TX.keyOf === 'function') set.add('k:' + TX.keyOf(k));
+        }
+      } catch (e) {}
+      return set;
+    })();
+    const _isAsked = (item) => {
+      if (_protected.has(_skillKey(item))) return true;
+      try {
+        const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy)
+          || (typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy : null);
+        return !!(TX && typeof TX.keyOf === 'function' && _protected.has('k:' + TX.keyOf(item)));
+      } catch (e) { return false; }
+    };
     const text = String(cvText || '');
     if (!text) return { text, dropped: 0, moved: 0, samples: [] };
     const lines = text.split('\n');
@@ -5283,7 +5316,9 @@
           moved++;
           continue;
         }
-        if (kept.length >= _MAX_PER_GROUP) { dropped++; samples.push(item0); continue; }
+        if (kept.length >= _MAX_PER_GROUP && !_isAsked(item)) {
+          dropped++; samples.push(item0); continue;
+        }
         seen.add(key);
         kept.push(item);
       }
@@ -5303,10 +5338,12 @@
       const own = groups.find((g) => _RELOCATED_LABEL.toLowerCase() === g.label.trim().toLowerCase());
       if (own && lines[own.at]) {
         lines[own.at] = lines[own.at].replace(/\s*$/, '') + ', '
-          + relocated.slice(0, _MAX_PER_GROUP).join(', ');
+          + relocated.slice(0, Math.max(_MAX_PER_GROUP,
+            relocated.filter(_isAsked).length)).join(', ');
       } else {
         lines[lastAt] = (lines[lastAt] === null ? '' : lines[lastAt] + '\n')
-          + indent + _RELOCATED_LABEL + ': ' + relocated.slice(0, _MAX_PER_GROUP).join(', ');
+          + indent + _RELOCATED_LABEL + ': ' + relocated.slice(0, Math.max(_MAX_PER_GROUP,
+            relocated.filter(_isAsked).length)).join(', ');
       }
     }
     return {
@@ -6897,7 +6934,7 @@
       // Last in the section: the labels are settled, so a group can be
       // judged by the label it will actually print with.
       try {
-        const ss = sanitiseSkillsSection(outCV);
+        const ss = sanitiseSkillsSection(outCV, jobKeywords);
         if (ss.dropped || ss.moved) {
           outCV = ss.text;
           const parts = [];

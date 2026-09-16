@@ -131,10 +131,19 @@ console.log('\nEND TO END: THE ROLE HE IS QUALIFIED FOR');
       out.tailoredCV.toLowerCase().indexOf(term.toLowerCase()) !== -1,
       'evidenced and still withheld');
   }
-  t('  and what the profile cannot support is still refused',
-    !/Zendesk/i.test(out.tailoredCV), 'a fabricated term reached the CV');
-  t('  ...and is named so it can be fixed at the source',
+  // What the profile cannot support goes on too: that is the owner's
+  // decision, taken because a requirement the screen cannot find costs
+  // the whole application. What entailment still changes is WHERE the
+  // effort goes -- a capability the profile proves is written as a
+  // matched requirement rather than one to prepare an answer for.
+  t('  what the profile cannot support is written as well',
+    /Zendesk/i.test(out.tailoredCV), 'a posting requirement was withheld');
+  t('  ...but is named, so it can be prepared for and added to the profile',
     (out.reviewKeywords || []).some((k) => /Zendesk/i.test(k)),
+    JSON.stringify(out.reviewKeywords));
+  t('  ...while the entailed ones are NOT named, because the profile proves them',
+    !['infrastructure as code', 'observability', 'SRE'].some((term) =>
+      (out.reviewKeywords || []).some((k) => String(k).toLowerCase() === term)),
     JSON.stringify(out.reviewKeywords));
 }
 
