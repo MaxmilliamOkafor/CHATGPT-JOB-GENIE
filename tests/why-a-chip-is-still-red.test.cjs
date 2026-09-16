@@ -21,11 +21,14 @@ const fs = require('fs'), path = require('path'), vm = require('vm');
 const DIR = path.join(__dirname, '..');
 global.window = global;
 require(path.join(DIR, 'keyword-taxonomy.js'));
+require(path.join(DIR, 'jd-requirements.js'));
 require(path.join(DIR, 'dynamic-score.js'));
 const TX = global.KeywordTaxonomy;
+const JDR = global.JDRequirements;
 const sandbox = {
-  window: { addEventListener() {}, KeywordTaxonomy: TX, DynamicScore: global.DynamicScore },
-  KeywordTaxonomy: TX, DynamicScore: global.DynamicScore,
+  window: { addEventListener() {}, KeywordTaxonomy: TX, JDRequirements: JDR,
+    DynamicScore: global.DynamicScore },
+  KeywordTaxonomy: TX, JDRequirements: JDR, DynamicScore: global.DynamicScore,
   document: { addEventListener() {}, getElementById: () => null },
   console: { log() {}, warn() {}, error() {} },
 };
@@ -85,6 +88,19 @@ console.log('\nTHE SAME REQUIREMENT DECORATED IS NOT A SECOND REQUIREMENT');
   }
   t('  and a bare requirement is untouched',
     P.collapseDecoratedPhrases(['Machine Learning'])[0] === 'Machine Learning', 'collapsed itself');
+
+  // A QUALIFIED TERM IS NOT COLLAPSED BACK TO THE AMBIGUOUS ONE.
+  //
+  // jd-requirements resolves "Own customer onboarding" to Customer
+  // Onboarding precisely because bare Onboarding is ambiguous: IT,
+  // employee and customer onboarding are three different jobs. Collapsing
+  // to the single concept the phrase names undid that a step later and
+  // put the ambiguous word back on the CV.
+  for (const qualified of ['Customer Onboarding', 'IT Onboarding', 'Employee Onboarding']) {
+    t('  ' + qualified + ' is not collapsed to "Onboarding"',
+      P.collapseDecoratedPhrases([qualified])[0] === qualified,
+      JSON.stringify(P.collapseDecoratedPhrases([qualified])));
+  }
 }
 
 console.log('\nONE POSTING, END TO END');

@@ -6273,6 +6273,18 @@ class ATSTailor {
       if (!raw || !/[\s-]/.test(raw)) return kw;
       if (TX.groupOf(raw)) return kw;              // already a requirement itself
       const named = TX.sweep(raw, 4);
+      // A QUALIFIED TERM IS NOT COLLAPSED BACK TO THE BARE ONE.
+      //
+      // jd-requirements resolves "Own customer onboarding" to Customer
+      // Onboarding precisely because bare Onboarding is ambiguous -- IT,
+      // employee and customer onboarding are different jobs. Collapsing
+      // to the single concept the phrase names undid that one step later
+      // and put the ambiguous word back on the CV.
+      const JDR = (typeof window !== 'undefined' && window.JDRequirements) || null;
+      if (named.length === 1 && JDR && JDR.AMBIGUOUS
+        && JDR.AMBIGUOUS[named[0].label] && JDR.AMBIGUOUS[named[0].label].qualify) {
+        return kw;
+      }
       // Exactly one requirement named is the whole test. Whatever else
       // the phrase contains is, by the table's own account, not a
       // requirement -- so "models" in "forecasting models" is decoration
