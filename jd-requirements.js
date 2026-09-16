@@ -172,6 +172,61 @@
     'QA': { siblings: true, need: /\b(?:quality assurance|qa)\s*(?:engineer|analyst|automation|testing|process|team)\b|\btest(?:ing)?\b/i, reject: null },
     'Architecture': { siblings: true, need: /\b(?:software|system|solution|enterprise|cloud|data|technical|application|microservices?|security)\s+architect/i,
       reject: /\b(?:building|landscape|interior|naval)\s+architecture\b/i },
+    // ── PRODUCT NAMES THAT ARE ALSO ORDINARY ENGLISH ──────────────────
+    //
+    // Every one of these is a real tool AND a word a careers page uses in
+    // a sentence. They are accepted only when the statement gives a
+    // technical cue or names another unambiguous tool beside them, which
+    // is how "Load testing with Locust and Artillery" works while "an
+    // artillery of ideas" does not.
+    'Lighthouse': { siblings: true, need: /\blighthouse\s*(?:audits?|scores?|ci|reports?|performance)\b|\brun lighthouse\b/i,
+      reject: /\blighthouse\s+(?:project|customer|account|client|brand)\b/i },
+    'Locust': { siblings: true, need: /\blocust\s*(?:io|files?|load|swarm)?\b(?=.{0,40}\b(?:load|performance|test|users?)\b)|\bload test\w*\b/i, reject: /\blocust[- ]like\b/i },
+    'Artillery': { siblings: true, need: /\bartillery\b(?=.{0,40}\b(?:load|performance|test|script)\b)|\bload test\w*\b/i,
+      reject: /\bartillery of\b/i },
+    'Percy': { siblings: true, need: /\bpercy\b(?=.{0,40}\b(?:visual|snapshot|regression|screenshot)\b)|\bvisual regression\b/i, reject: null },
+    'Feast': { siblings: true, need: /\bfeast\b(?=.{0,40}\b(?:feature store|features?|ml|serving)\b)|\bfeature store\b/i,
+      reject: /\bfeast\s+(?:on|of|for)\b/i },
+    'Lit': { siblings: true, need: /\blit\s*(?:element|html|web components?)\b/i,
+      reject: /\blit\s+(?:team|culture|up|fuse)\b|\bwell[- ]lit\b/i },
+    'Sanity': { siblings: true, need: /\bsanity\s*(?:\.io|cms|studio|content)\b/i,
+      reject: /\b(?:your|our|the|maintain|keep)\s+sanity\b|\bsanity\s+check\b/i },
+    'Remix': { siblings: true, need: /\bremix\s*(?:run|js|framework|routes?|loaders?)\b/i,
+      reject: /\ba remix of\b|\bremix\s+of\b/i },
+    'Kong': { siblings: true, need: /\bkong\s*(?:gateway|api|ingress|enterprise)\b|\bapi gateway\b/i,
+      reject: /\bthe kong of\b|\bking kong\b/i },
+    'Soda': { siblings: true, need: /\bsoda\s*(?:core|cloud|cl|checks?|scans?)\b|\bdata quality\b/i,
+      reject: /\b(?:a|the|free|grab a)\s+soda\b/i },
+    'Ray': { siblings: true, need: /\bray\s*(?:serve|tune|train|cluster|core|data)\b|\bdistributed (?:compute|training)\b/i,
+      reject: /\bray of\b|\bx[- ]ray\b/i },
+    'Pest': { siblings: true, need: /\bpest\s*(?:php|testing|framework)\b|\bphpunit\b/i,
+      reject: /\bpest[- ]free\b|\bpest\s+control\b/i },
+    'Heap': { siblings: true, need: /\bheap\s*(?:analytics|io)\b|\bproduct analytics\b/i,
+      reject: /\bheap\s+of\b|\bheap\s+(?:analysis|dump|memory|size)\b/i },
+    'Chroma': { siblings: true, need: /\bchroma\s*(?:db)?\b(?=.{0,40}\b(?:vector|embedding|retrieval|rag)\b)|\bvector (?:database|store|search)\b/i, reject: null },
+    'Falco': { siblings: true, need: /\bfalco\b(?=.{0,40}\b(?:runtime|security|kubernetes|container)\b)|\bruntime security\b/i, reject: null },
+    'Wiz': { siblings: true, need: /\bwiz\b(?=.{0,40}\b(?:cloud|security|cspm|cnapp)\b)|\bcloud security\b/i,
+      reject: /\bwiz(?:ard|ardry)\b/i },
+    'Envoy': { siblings: true, need: /\benvoy\s*(?:proxy|filter|sidecar)\b|\bservice mesh\b|\bapi gateway\b/i, reject: null },
+    'Segment': { siblings: true, need: /\bsegment\s*(?:\.com|io)\b|\bcustomer data platform\b|\bcdp\b/i,
+      reject: /\b(?:customer|market|user|audience|network|business)\s+segments?\b|\bsegment\s+(?:of|the)\b/i },
+    'Cargo': { siblings: true, need: /\bcargo\s*(?:build|test|crates?|toml)\b|\brust\b/i,
+      reject: /\bcargo\s+(?:ship|freight|handling|plane)\b/i },
+    'Poetry': { siblings: true, need: /\bpoetry\s*(?:lock|install|add|env)\b|\bpython\b/i, reject: null },
+    'Composer': { siblings: true, need: /\bcomposer\s*(?:install|require|json)\b|\bphp\b/i, reject: null },
+    'Bundler': { siblings: true, need: /\bbundler\b(?=.{0,30}\b(?:ruby|gem|gemfile)\b)|\bruby\b/i, reject: null },
+    'Unity': { siblings: true, need: /\bunity\s*(?:3d|engine|editor|c#)\b|\bgame (?:development|engine)\b/i,
+      reject: /\bunity\s+(?:of|and diversity|in the team)\b|\bteam unity\b/i },
+    'Emotion': { siblings: true, need: /\bemotion\s*(?:js|css|styled)\b|\bcss[- ]in[- ]js\b/i,
+      reject: /\bemotion(?:al|s)?\b/i },
+    'Squid': { siblings: true, need: /\bsquid\s*(?:proxy|cache)\b|\bproxy server\b/i, reject: null },
+    'Snort': { siblings: true, need: /\bsnort\b(?=.{0,40}\b(?:ids|ips|intrusion|rules?|network)\b)|\bintrusion detection\b/i, reject: null },
+    'Zeek': { siblings: true, need: /\bzeek\b(?=.{0,40}\b(?:network|nsm|logs?|monitoring)\b)|\bnetwork security monitoring\b/i, reject: null },
+    'Sentinel': { siblings: true, need: /\b(?:microsoft|azure)\s+sentinel\b|\bsentinel\b(?=.{0,30}\b(?:siem|soc|logs?)\b)/i, reject: null },
+    'Prettier': { siblings: true, need: /\bprettier\b(?=.{0,30}\b(?:eslint|format|lint|config)\b)|\beslint\b/i,
+      reject: /\bprettier\s+than\b|\bmuch prettier\b/i },
+    'Reproducibility': { siblings: true, need: /\breproducib\w+\b(?=.{0,40}\b(?:model|experiment|build|pipeline|research)\b)|\bexperiment tracking\b/i, reject: null },
+    'Estimation': { siblings: false, need: /\b(?:effort|story|sprint|project|cost|delivery)\s+estimation\b|\bestimat\w+\s+(?:effort|work|stories|delivery|timelines?)\b/i, reject: null },
     'Provisioning': { siblings: true, need: /\bprovision(?:ing)?\s+(?:\w+\s+){0,2}(?:devices?|laptops?|accounts?|users?|hardware|equipment|infrastructure|servers?|access)\b/i, reject: null },
   };
 
@@ -349,7 +404,12 @@
     }
     if (rule.need && rule.need.test(statement)) return label;
     if (rule.siblings && _hasSibling(statement, label)) return label;
-    return rule.need ? null : label;
+    // A rule that asks for context and finds none REJECTS. Falling
+    // through to acceptance is what let "a lighthouse project", "feast on
+    // interesting problems" and "maintain your sanity" read as Lighthouse,
+    // Feast and Sanity -- all three are real products, and all three
+    // sentences are ordinary English from a careers page.
+    return (rule.need || rule.siblings) ? null : label;
   }
 
   // ── THE PASS ─────────────────────────────────────────────────────────

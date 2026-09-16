@@ -184,6 +184,77 @@ console.log('\nAMBIGUOUS TERMS RESOLVE FROM THEIR OWN SENTENCE');
   }
 }
 
+console.log('\nA PRODUCT NAME THAT IS ALSO AN ORDINARY WORD NEEDS ITS CONTEXT');
+{
+  // The vocabulary is nine hundred concepts, and a good many of them are
+  // words a careers page already uses in a sentence. Every pair below is
+  // the same name twice: once as English, once as the tool.
+  const req = (line) => JDR.extract('Requirements\n- ' + line + '\n')
+    .requirements.map((r) => r.label);
+  const PROSE = [
+    'We are looking for a lighthouse project to showcase our work.',
+    'You will feast on interesting problems with a lit team culture.',
+    'Maintain your sanity in a fast-paced environment, we make it fun.',
+    'A remix of design and engineering, with real ownership and pace.',
+    'You will be the kong of your domain and a wizard with customers.',
+    'Bring energy, artillery of ideas, and a locust-like appetite for scale.',
+    'Percy in accounts will onboard you; grab a soda from the kitchen.',
+    'We move at pace and ray of sunshine attitudes are welcome here.',
+    'Free lunch, a pest-free office and a heap of learning opportunities.',
+    'We serve customer segments across EMEA with unity and emotion.',
+  ];
+  for (const line of PROSE) {
+    const got = req(line);
+    t('  nothing from: ' + JSON.stringify(line.slice(0, 46)), got.length === 0, got.join(', '));
+  }
+  const TECH = [
+    ['Run Lighthouse audits and axe-core checks in CI.', 'Lighthouse'],
+    ['Load testing with Locust and Artillery.', 'Locust'],
+    ['Load testing with Locust and Artillery.', 'Artillery'],
+    ['Visual regression testing with Percy and Applitools.', 'Percy'],
+    ['Feature store built on Feast and Tecton.', 'Feast'],
+    ['Vector search with Chroma and pgvector.', 'Chroma'],
+    ['Runtime security with Falco and Wiz.', 'Falco'],
+    ['API gateway using Kong and Envoy.', 'Kong'],
+    ['Data quality checks with Soda and Great Expectations.', 'Soda'],
+    ['Build UIs with Lit and Storybook.', 'Lit'],
+    ['Content modelling in Sanity and Contentful.', 'Sanity'],
+    ['Remix Run routes and loaders with React Router.', 'Remix'],
+    ['Product analytics in Heap and Amplitude.', 'Heap'],
+    ['Customer data platform work in Segment and RudderStack.', 'Segment'],
+  ];
+  for (const [line, want] of TECH) {
+    t('  ' + want.padEnd(11) + ' is found when it is the tool', req(line).includes(want),
+      req(line).join(', '));
+  }
+}
+
+console.log('\nAND THE VOCABULARY REACHES THE WORK IT WAS ADDED FOR');
+{
+  // A requirement the table cannot name is invisible however plainly it
+  // is asked for. These are the shapes a modern posting actually uses.
+  const cases = [
+    ['Serve models with vLLM and Triton Inference Server.', 'vLLM'],
+    ['Retrieval over pgvector with LangChain and reranking.', 'pgvector'],
+    ['SAST with Semgrep and Snyk in the pipeline.', 'Semgrep'],
+    ['Integration tests using Testcontainers and Pact.', 'Testcontainers'],
+    ['Build Workday Studio integrations and Workday Extend apps.', 'Workday Studio'],
+    ['Instrument with OpenTelemetry and ship to Honeycomb.', 'OpenTelemetry'],
+    ['Policy as Code with Open Policy Agent and Kyverno.', 'Open Policy Agent'],
+    ['Change data capture with Debezium and Kafka Connect.', 'Debezium'],
+    ['Dimensional modelling with star schema and slowly changing dimensions.', 'Star Schema'],
+    ['Trunk-based development with feature flags in LaunchDarkly.', 'Feature Flags'],
+    ['Chaos engineering and fault injection against our RTO.', 'Chaos Engineering'],
+    ['Detection-as-code with Sigma rules and MITRE ATT&CK mapping.', 'Detection-as-Code'],
+    ['Geospatial analysis in PostGIS and QGIS.', 'PostGIS'],
+    ['PLC programming and SCADA integration over Modbus.', 'SCADA'],
+  ];
+  for (const [line, want] of cases) {
+    const got = JDR.extract('Requirements\n- ' + line + '\n').requirements.map((r) => r.label);
+    t('  ' + want.padEnd(22) + ' is extracted', got.includes(want), got.join(', '));
+  }
+}
+
 console.log('\nAND DISTINCT TECHNOLOGIES ARE NEVER MERGED');
 {
   for (const [a, b] of [['Git', 'GitHub'], ['Git', 'GitHub Actions'], ['ETL', 'ELT'],
