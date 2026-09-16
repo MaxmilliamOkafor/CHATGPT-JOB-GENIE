@@ -61,14 +61,45 @@
     return u && !ATS.test(u.hostname) ? [u.hostname.replace(/^(www|jobs|careers|apply)\./i, '')] : [];
   }
   const guessDomains = employerDomains;
-  async function fetchPage(url) {
+  // A 403 IS NOT AN EMPTY PAGE.
+  //
+  // Bank and corporate sites routinely reject an unfamiliar user agent
+  // while serving the identical page to a browser. Returning '' for that
+  // made a site that refused to talk to us indistinguishable from one
+  // that published no address, and the panel reported the second. It is
+  // the same silent failure as declining a published address and calling
+  // it "none found".
+  //
+  // So a refusal is retried once with ordinary browser headers. Nothing
+  // is disguised: the request is still credential-less, still redirect:
+  // 'error', still capped. It asks the way a browser asks, because that
+  // is the only thing being refused.
+  const BROWSER_HEADERS = {
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'en-GB,en;q=0.9',
+  };
+  const REFUSED = new Set([401, 403, 406, 429]);
+
+  async function fetchOnce(url, headers) {
     const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 5000);
     try {
       // Do not follow an unvalidated redirect into a different origin or local service.
-      const r = await fetch(url, {signal: ctrl.signal, credentials:'omit', redirect:'error', cache:'no-store'});
-      if (!r.ok || !/text\/html|application\/xhtml/i.test(r.headers.get('content-type') || '')) return '';
-      return (await r.text()).slice(0,400000);
-    } catch (_) { return ''; } finally { clearTimeout(timer); }
+      const init = {signal: ctrl.signal, credentials:'omit', redirect:'error', cache:'no-store'};
+      if (headers) init.headers = headers;
+      const r = await fetch(url, init);
+      if (!r.ok) return {status: r.status, html: ''};
+      if (!/text\/html|application\/xhtml/i.test(r.headers.get('content-type') || '')) {
+        return {status: r.status, html: ''};
+      }
+      return {status: r.status, html: (await r.text()).slice(0,400000)};
+    } catch (_) { return {status: 0, html: ''}; } finally { clearTimeout(timer); }
+  }
+
+  async function fetchPage(url) {
+    const first = await fetchOnce(url, null);
+    if (first.html || !REFUSED.has(first.status)) return first.html;
+    const retry = await fetchOnce(url, BROWSER_HEADERS);
+    return retry.html;
   }
   function employerUrls(html) {
     const urls = [];

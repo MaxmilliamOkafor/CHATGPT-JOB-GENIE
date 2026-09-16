@@ -49,14 +49,60 @@
   'use strict';
 
   // ── NORMALISATION ────────────────────────────────────────────────────
+  //
+  // TWO SIDES OF ONE COMPARISON, AND THEY HAVE TO AGREE.
+  //
+  // norm() cleans the TERM being searched for. fold() cleans the DOCUMENT
+  // being searched. They were not doing the same thing, so a document
+  // could plainly contain a requirement and still not match it:
+  //
+  //   posting says            term normalises to     result
+  //   Bachelor's degree       "bachelors degree"      no match
+  //   2016-2024               "2016-2024"             no match on 2016<en>2024
+  //   full-stack              "full-stack"            no match on full<nb>stack
+  //
+  // The apostrophe case is the worst of them and needs no exotic
+  // characters at all: norm strips the apostrophe out of the term, the
+  // document keeps it, and the pattern hunts "masters" through a page
+  // that says "Master's". "Bachelor's degree" and "Master's degree" are
+  // in most postings, so those chips could never go green.
+  //
+  // Typography does the rest. Posting text pasted from a web page is full
+  // of curly apostrophes and en-dashes, and a word processor rewrites
+  // ASCII into them as you type.
+  //
+  // FOLDED AT COMPARISON TIME ONLY. What gets written to the CV keeps its
+  // real punctuation, because that is what the applicant tracking system
+  // parses and what a person reads.
+  const _APOSTROPHE = /[‘’‚‛ʼʹ`´']/g;
+  const _DASH = /[‐‑‒–—―−]/g;
+  const _SPACE = /[     ]/g;
+
   function norm(s) {
     return String(s == null ? '' : s)
       .normalize('NFKC')
       .toLowerCase()
-      .replace(/[‘’'`´]/g, '')
+      .replace(_APOSTROPHE, '')
       .replace(/[^a-z0-9+#./ -]+/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
+  }
+
+  /**
+   * A document put into the same shape the search terms are in.
+   *
+   * Every rule here mirrors one in norm(): apostrophes removed because
+   * norm removes them, dash variants folded to the ASCII hyphen that
+   * formPattern's separator class accepts, exotic spaces folded to a
+   * plain one. Nothing else is touched, so the text a caller matches
+   * against is still the text it was given.
+   */
+  function fold(s) {
+    return String(s == null ? '' : s)
+      .normalize('NFKC')
+      .replace(_APOSTROPHE, '')
+      .replace(_DASH, '-')
+      .replace(_SPACE, ' ');
   }
 
   /** All separators removed, so "node.js", "node js" and "nodejs" agree. */
@@ -532,7 +578,9 @@
 
   /** Does this document satisfy this requirement? */
   function appearsIn(text, term) {
-    const haystack = String(text == null ? '' : text).normalize('NFKC');
+    // Folded, so a document that says Master's or 2016<en-dash>2024 is
+    // searched in the same shape the term was normalised into.
+    const haystack = fold(text);
     if (!haystack) return false;
     for (const form of variantsOf(term)) {
       const pattern = formPattern(form);
@@ -949,7 +997,7 @@
     const label = group ? group[0] : String(term || '');
     const proofs = _IMPLIED_LOOKUP.get(tight(label));
     if (!proofs) return false;
-    const haystack = String(text == null ? '' : text).normalize('NFKC').toLowerCase();
+    const haystack = fold(text).toLowerCase();
     if (!haystack) return false;
     for (const proof of proofs) {
       // THE CUE MUST START A WORD, BUT NEED NOT FINISH ONE.
@@ -1192,7 +1240,7 @@
   function sweep(text, limit) {
     // Scoped, because this pass adds requirements on its own authority
     // and a company pitch is not a requirement.
-    const body = requirementText(String(text == null ? '' : text)).normalize('NFKC');
+    const body = fold(requirementText(String(text == null ? '' : text)));
     if (!body.trim()) return [];
     const found = [];
     for (const group of GROUPS) {
@@ -1226,7 +1274,7 @@
   }
 
   global.KeywordTaxonomy = {
-    norm, tight, canonical, keyOf, groupOf, variantsOf, appearsIn, dedupe,
+    norm, tight, fold, canonical, keyOf, groupOf, variantsOf, appearsIn, dedupe,
     measure, stripQualifiers, GROUPS, impliedIn, IMPLIED_BY,
     categoryOf, CATEGORIES, sweep, requirementText,
   };
