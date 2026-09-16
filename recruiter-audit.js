@@ -134,17 +134,66 @@
   // shortening risks losing important content.
   // ===================================================================
 
+  // A LETTER THAT BEGINS "ADDITIONALLY" LOST ITS FIRST PARAGRAPH.
+  //
+  // Measured on a real delivered .docx. The whole body was:
+  //
+  //   Dear Hiring Manager,
+  //   Additionally, I mentored two junior engineers, facilitating their
+  //   transition to permanent roles, ...
+  //
+  // "Additionally" refers back to something, and there is nothing behind
+  // it. The opening paragraph -- the one that says what the application
+  // is and why -- was never written or was cut, and every pass after
+  // that tidied the remains without noticing the hole. The letter went
+  // out at 85 words of body: four sentences, no opening, no argument.
+  //
+  // The connective is the tell, and it is cheap to look for. So is the
+  // length: a body this short is a fragment, whatever it says.
+  const _SALUTATION = /^\s*(?:dear|hello|hi|to whom)\b/i;
+  const _SIGNOFF = /^\s*(?:sincerely|kind regards|best regards|warm regards|regards|yours (?:sincerely|faithfully|truly)|best|thank you)\s*,?\s*$/i;
+  const _ORPHAN_CONNECTIVE = /^(?:additionally|furthermore|moreover|in addition|also|secondly|second|similarly|likewise|besides|what(?:'s| is) more|on top of that|as well)\b/i;
+
+  function coverLetterBody(coverText) {
+    const lines = String(coverText || '').split('\n');
+    let from = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (_SALUTATION.test(lines[i])) { from = i + 1; break; }
+    }
+    let to = lines.length;
+    for (let i = from; i < lines.length; i++) {
+      if (_SIGNOFF.test(lines[i])) { to = i; break; }
+    }
+    return lines.slice(from, to).filter((l) => l.trim());
+  }
+
   function coverLetterHealth(coverText) {
-    if (!coverText) return { wordCount: 0, tooLong: false, iCount: 0, youCount: 0, selfHeavy: false };
-    const wordCount = coverText.split(/\s+/).filter(Boolean).length;
-    const iCount = (coverText.match(/\bI\b/g) || []).length;
-    const youCount = (coverText.match(/\b(you|your|we|our)\b/gi) || []).length;
+    if (!coverText) {
+      return { wordCount: 0, tooLong: false, iCount: 0, youCount: 0, selfHeavy: false,
+        bodyWords: 0, tooShort: false, opensOnConnective: false, opening: '' };
+    }
+    const text = String(coverText);
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+    const iCount = (text.match(/\bI\b/g) || []).length;
+    const youCount = (text.match(/\b(you|your|we|our)\b/gi) || []).length;
+    const body = coverLetterBody(text);
+    const bodyWords = body.join(' ').split(/\s+/).filter(Boolean).length;
+    const opening = (body[0] || '').trim();
     return {
       wordCount,
       tooLong: wordCount > 350,
       iCount,
       youCount,
       selfHeavy: iCount > 0 && youCount > 0 && iCount / (iCount + youCount) > 0.65,
+      bodyWords,
+      // 120, not 150. The line being drawn is "structurally incomplete",
+      // not "could be longer": three tight paragraphs come to about 130
+      // words and are a whole letter, while the one that prompted this
+      // was 85 with no opening at all. A floor that flags a complete
+      // letter for being brief is a warning nobody thanks you for.
+      tooShort: bodyWords > 0 && bodyWords < 120,
+      opensOnConnective: !!opening && _ORPHAN_CONNECTIVE.test(opening),
+      opening: opening.slice(0, 120),
     };
   }
 
@@ -7690,6 +7739,25 @@
       if (h.selfHeavy) {
         report.warnings.push({ kind: 'cover-letter-self-heavy', iCount: h.iCount, youCount: h.youCount });
       }
+      // The two that mean the letter is incomplete rather than imperfect.
+      // Raised as critical because a missing opening paragraph is not
+      // something a reader forgives, and it is invisible to every other
+      // pass: each one tidied the remains without noticing the hole.
+      if (h.opensOnConnective) {
+        report.warnings.push({
+          kind: 'cover-letter-opening-lost', severity: 'critical', opening: h.opening,
+          note: 'The body starts with a connective, so it refers back to an opening '
+            + 'paragraph that is not there. Regenerate the letter before sending it.',
+        });
+      }
+      if (h.tooShort) {
+        report.warnings.push({
+          kind: 'cover-letter-too-short', severity: 'critical',
+          bodyWords: h.bodyWords, target: 150,
+          note: h.bodyWords + ' words of body. There is no room in that for an opening, '
+            + 'a proof point and a close, so one of the three is missing.',
+        });
+      }
     }
 
     // v3: honesty audit (warning only -- never rewrites the CV)
@@ -8179,7 +8247,7 @@
     stripFillers,
     weakVerbAudit,
     actionVerbAudit,
-    coverLetterHealth,
+    coverLetterHealth, coverLetterBody,
     // v3
     honestyAudit,
     clampSummary,
