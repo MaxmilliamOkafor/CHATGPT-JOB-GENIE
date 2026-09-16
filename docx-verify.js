@@ -220,8 +220,43 @@
         + 'which is what a parser expects to find there: ' + JSON.stringify(first.slice(0, 60)));
     }
 
+    // A REPEATED LINE IN THE HEADER.
+    //
+    // A real CV arrived with the employer's name twice where the role
+    // belongs, above two contact lines. Several passes write into that
+    // block and each checked only its own line, so nothing saw the
+    // duplication. It is the first thing both a parser and a person
+    // read, and it is trivial to detect here.
+    {
+      const head = text.split('\n').slice(0, 8).map((l) => l.trim()).filter(Boolean);
+      const seen = new Set();
+      const dupes = [];
+      for (const line of head) {
+        const key = line.toLowerCase().replace(/\s+/g, ' ');
+        if (seen.has(key)) dupes.push(line);
+        seen.add(key);
+      }
+      if (dupes.length) {
+        result.problems.push('the header repeats ' + dupes.length + ' line(s): '
+          + dupes.slice(0, 3).map((d) => JSON.stringify(d.slice(0, 40))).join(', '));
+      }
+      const contacts = head.filter((l) => l.indexOf('@') !== -1);
+      if (contacts.length > 1) {
+        result.problems.push('the header carries ' + contacts.length + ' contact lines');
+      }
+      if (opts.company) {
+        const c = String(opts.company).toLowerCase().replace(/[^a-z0-9]+/g, '');
+        if (head.slice(1, 3).some((l) => l.toLowerCase().replace(/[^a-z0-9]+/g, '') === c)) {
+          result.problems.push('the line under the name is the employer\'s name, '
+            + 'not a job title');
+        }
+      }
+    }
+
     // AND THE SECTIONS AN ATS LOOKS FOR.
-    for (const heading of ['EXPERIENCE', 'EDUCATION', 'SKILLS']) {
+    const wantSections = opts.kind === 'cover-letter' ? []
+      : ['EXPERIENCE', 'EDUCATION', 'SKILLS'];
+    for (const heading of wantSections) {
       if (!new RegExp(heading, 'i').test(text)) {
         result.warnings.push('no ' + heading.toLowerCase() + ' heading in the text layer');
       }

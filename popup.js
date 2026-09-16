@@ -5435,6 +5435,7 @@ class ATSTailor {
       const report = V.verify(docx, {
         name: this._cachedProfile && (this._cachedProfile.full_name || this._cachedProfile.name),
         email: (this.session && this.session.user && this.session.user.email) || '',
+        company: (this.currentJob && this.currentJob.company) || '',
         keywords: this.generatedDocuments.keywords || null,
       });
       this.generatedDocuments.deliveredReport = report;

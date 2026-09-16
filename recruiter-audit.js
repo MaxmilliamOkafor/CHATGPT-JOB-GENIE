@@ -1218,7 +1218,85 @@
   // candidate's own most recent title is used, which is always true.
   // Nothing is invented, and the slot is never left empty when a real
   // title exists to fill it.
-  function ensureHeadline(cvText, jdTitle) {
+  // ===================================================================
+  // THE HEADER IS FIVE LINES AND NONE OF THEM REPEATS
+  // -------------------------------------------------------------------
+  // A real CV went out reading
+  //
+  //   Maxmilliam Okafor
+  //   Grupo QuintoAndar
+  //   Grupo QuintoAndar
+  //   Dublin, IE (open to relocation) | +353 ... | Email: max@...
+  //   Dublin, Ireland | +353 ... | Email: max@...
+  //
+  // The employer's name where the role belongs, twice, above two contact
+  // lines. Several passes write into this block -- the model writes a
+  // headline, the extension inserts one, the location pass rewrites the
+  // contact line -- and each checked only the one line it cared about,
+  // so no pass ever saw the block as a whole.
+  //
+  // This is that missing pass. It looks only at the header, only
+  // removes, and leaves the first of anything it keeps.
+  function tidyHeader(cvText, jdCompany) {
+    const text = String(cvText || '');
+    if (!text) return { text, removed: [] };
+    const lines = text.split('\n');
+
+    let nameAt = -1;
+    for (let i = 0; i < lines.length; i += 1) {
+      if (lines[i].trim()) { nameAt = i; break; }
+    }
+    if (nameAt === -1) return { text, removed: [] };
+
+    // The header runs to the first section heading or the first blank
+    // line after real content, whichever comes first. Eight lines is a
+    // ceiling, not a target: no CV header is longer than that.
+    let end = nameAt + 1;
+    while (end < lines.length && end < nameAt + 9) {
+      const l = lines[end];
+      if (!l.trim()) break;
+      if (_ANY_HEAD.test(l)) break;
+      end += 1;
+    }
+    const block = lines.slice(nameAt, end);
+    if (block.length < 2) return { text, removed: [] };
+
+    const norm = (x) => String(x || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const company = norm(jdCompany);
+    const removed = [];
+    const kept = [];
+    const seen = new Set();
+    // Among contact lines, the fullest one wins: the location pass adds
+    // "(open to relocation)" to its copy, and dropping that copy would
+    // undo a correction another pass deliberately made.
+    // AN EMAIL ADDRESS, not "anything that looks contact-ish". A header
+    // legitimately carries a phone-and-email line AND a separate links
+    // line, and treating both as the same kind made the longer links
+    // line evict the phone number. Only lines bearing an address compete
+    // with each other, which is exactly the duplication seen live.
+    const isContact = (l) => l.indexOf('@') !== -1;
+    const contacts = block.filter(isContact);
+    const bestContact = contacts.slice().sort((a, b) => b.length - a.length)[0];
+    let contactKept = false;
+
+    for (let i = 0; i < block.length; i += 1) {
+      const line = block[i];
+      const key = norm(line);
+      if (i > 0 && key && seen.has(key)) { removed.push(line.trim()); continue; }
+      // The employer's name is not part of the candidate's header.
+      if (i > 0 && company && key === company) { removed.push(line.trim()); continue; }
+      if (i > 0 && isContact(line)) {
+        if (contactKept || line !== bestContact) { removed.push(line.trim()); continue; }
+        contactKept = true;
+      }
+      seen.add(key);
+      kept.push(line);
+    }
+    if (!removed.length) return { text, removed: [] };
+    return { text: lines.slice(0, nameAt).concat(kept, lines.slice(end)).join('\n'), removed };
+  }
+
+  function ensureHeadline(cvText, jdTitle, jdCompany) {
     const text = String(cvText || '');
     if (!text) return { text, added: false };
     const lines = text.split('\n');
@@ -1259,9 +1337,38 @@
     // every real title with its dates, and the posting's own words in
     // the first line the screener reads is worth more than the
     // distinction.
-    if (title) {
+    // A COMPANY NAME IS NOT A JOB TITLE.
+    //
+    // A real CV went out reading
+    //
+    //   Maxmilliam Okafor
+    //   Grupo QuintoAndar
+    //   Grupo QuintoAndar
+    //
+    // because the scrape of that posting produced the employer's name
+    // where the role should be, and this accepted whatever it was given.
+    // The first line a screener reads named their own company as the
+    // candidate's job title, twice.
+    //
+    // Comparing against the company is the precise test, and it costs
+    // nothing: a genuine title is never the employer's name. Falling
+    // through picks the closest held title instead, which is what the
+    // branch below already does when there is no posting title at all.
+    const _sameAsCompany = (a, b) => {
+      const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const A = norm(a), B = norm(b);
+      return !!A && !!B && (A === B || A.indexOf(B) === 0 || B.indexOf(A) === 0);
+    };
+    const titleIsCompany = _sameAsCompany(title, jdCompany);
+    if (titleIsCompany) {
+      try {
+        console.warn('[RecruiterAudit] The posting title scraped as the company name ('
+          + title + '); using a held title for the headline instead.');
+      } catch (e) { /* console is optional */ }
+    }
+    if (title && !titleIsCompany) {
       headline = title;
-    } else if (title && blob.indexOf(title.toLowerCase()) !== -1) {
+    } else if (title && !titleIsCompany && blob.indexOf(title.toLowerCase()) !== -1) {
       headline = title;
     } else {
       // ALL the held titles, then the one CLOSEST to the posting's
@@ -1287,7 +1394,8 @@
         }
       }
       if (held.length) {
-        const want = title.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+        const want = (titleIsCompany ? '' : title)
+          .toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
         let best = held[0], bestScore = 0;
         for (const h of held) {
           const hw = h.toLowerCase().split(/[^a-z0-9]+/);
@@ -1326,7 +1434,15 @@
       if (after.indexOf('|') !== -1 || after.indexOf('@') !== -1) return;   // contact line
       if (_ANY_HEAD.test(after)) return;                                    // a section heading
       if (after.split(/\s+/).length > 8) return;
-      if (!_TITLE_WORD.test(after)) return;
+      // NOT ONLY AN ECHO THAT LOOKS LIKE A TITLE.
+      //
+      // This required the repeated line to contain a word like
+      // "engineer" or "manager", so when the headline was a company name
+      // the duplicate underneath it was never examined and both shipped.
+      // An exact repeat of the line above is a duplicate whatever it
+      // says; the title-word test still guards the looser prefix match
+      // below, where a false positive would delete a real line.
+      if (a !== settled && !_TITLE_WORD.test(after)) return;
       if (a === settled || settled.indexOf(a) === 0 || a.indexOf(settled) === 0) {
         lines.splice(nameAt + 2, 1);
       }
@@ -6658,7 +6774,14 @@
     // the real most-recent title is readable as its own line.
     if (outCV) {
       try {
-        const hl = ensureHeadline(outCV, jdTitle);
+        const hl = ensureHeadline(outCV, jdTitle, jdCompany);
+        // The header as a whole, after every pass that writes into it.
+        const tidied = tidyHeader(hl && hl.text ? hl.text : outCV, jdCompany);
+        if (tidied.removed.length) {
+          hl.text = tidied.text;
+          report.fixes.push('Header: removed ' + tidied.removed.length
+            + ' repeated line(s) (' + tidied.removed.join(', ') + ')');
+        }
         // THE TEXT COMES BACK WHETHER OR NOT A HEADLINE WAS ADDED.
         //
         // This used to take hl.text only inside the `added` and
@@ -7605,7 +7728,7 @@
     ensureCitizenshipLine, ensureTruthfulLocation,
     normaliseSkillLabels,
     sanitiseSkillsSection,
-    echoJobTitle, normaliseJobTitle, scrubRawTitle, repairSummary, _historyFacts, scoreSevenFilters, summaryNamesAnotherProfession, summaryReadsBroken, sortExperienceByStartDate,
+    echoJobTitle, normaliseJobTitle, tidyHeader, scrubRawTitle, repairSummary, _historyFacts, scoreSevenFilters, summaryNamesAnotherProfession, summaryReadsBroken, sortExperienceByStartDate,
     firstSixSecondsCheck,
     // v2
     stripFillers,
