@@ -41,7 +41,8 @@
     try {
       for (const a of doc.querySelectorAll('a[href^="mailto:"]')) {
         const raw = a.getAttribute('href') || '';
-        const addr = _clean(raw.slice(7).split('?')[0]);
+        let addr;
+        try { addr = _clean(decodeURIComponent(raw.slice(7).split('?')[0])); } catch (e) { continue; }
         if (!addr || addr.indexOf('@') === -1) continue;
         const ctx = _clean((a.textContent || '') + ' ' + _clean(a.parentElement && a.parentElement.textContent).slice(0, 160));
         out.push({ email: addr, context: ctx, source: 'mailto' });

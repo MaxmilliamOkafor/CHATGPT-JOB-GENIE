@@ -46,7 +46,7 @@
     if (BLOCKED_DOMAIN.test(domain)) return -1;
     // Checked before the human-name heuristic below, which it would
     // otherwise satisfy.
-    if (PURPOSE_LOCAL.test(local)) return 20;
+    if (PURPOSE_LOCAL.test(local)) return -1;
     // A named human on the hiring side gets read; a shared inbox gets
     // triaged. Both are legitimate published targets, so prefer the person.
     if (/(recruit|talent|hiring)/.test(local) && /[._]/.test(local)) return 100;
@@ -56,6 +56,114 @@
     if (RECRUITING_LOCAL.test(local)) return 88;
     if (/^[a-z]{3,20}$/.test(local)) return 50;
     return 30;
+  }
+
+  // WHY AN ADDRESS WAS TURNED DOWN IS NOT THE SAME AS FINDING NONE.
+  //
+  // A posting saying "please email us directly at Privacy@Redwood.com"
+  // HAS published an address. Declining it is right -- that is the GDPR
+  // data-removal inbox, and an application sent there lands in front of
+  // the one team certain to remember it, which is exactly the history a
+  // later application to the same employer gets read against. But the
+  // panel then said "No recipient. Add an address the employer
+  // published", which is false, and sent the reader back to the posting
+  // to look for an address they were already looking at.
+  // AND A WRONG INBOX BEATS NO INBOX.
+  //
+  // Not preferred, and never over a real recruiting address -- but when
+  // the employer published nothing else, a human who can forward the mail
+  // is worth more than a skipped application, which is a guaranteed zero.
+  // So each of these carries a rank, best fallback first, and the panel
+  // offers the best one with its name on it.
+  //
+  // UNATTENDED IS THE EXCEPTION, and not on judgement. noreply@,
+  // postmaster@ and mailer-daemon@ are configured not to deliver to a
+  // person at all, so mail to them is not a worse choice, it is no
+  // choice: it bounces or is discarded, and the application is skipped
+  // anyway with the sender believing it was sent.
+  const UNATTENDED = /noreply|no-reply|donotreply|do-not-reply|unsubscribe|bounce|mailer-daemon|postmaster/i;
+  const DECLINE_REASON = [
+    [UNATTENDED, 'an unattended mailbox', 0],
+    [/info|admin|webmaster|contact|enquir|inquir|general/i, 'a general enquiries inbox', 6],
+    [/support|help/i, 'the customer support inbox', 5],
+    [/sales|marketing|billing/i, 'a sales or billing inbox', 4],
+    [/press|media/i, 'the press inbox', 3],
+    [/legal|compliance/i, 'the legal and compliance inbox', 2],
+    [/privacy|dpo|gdpr/i, 'the privacy and data-protection inbox', 2],
+    [/security|abuse/i, 'the security inbox', 1],
+    // Last, because this one is a channel disabled candidates rely on to
+    // request adjustments. Still offered, because it is a real person.
+    [/accommodat|accessib|disabilit/i, 'the adjustments and accessibility inbox', 1],
+  ];
+  function declineReason(email, evidence) {
+    const local = String(email).split('@')[0];
+    for (const [re, why, rank] of DECLINE_REASON) {
+      if (re.test(local)) return { reason: why, rank, usable: rank > 0 };
+    }
+    if (/accommodat|accessibility|privacy|data protection/i.test(evidence || '')) {
+      return { reason: 'published for accessibility or privacy requests, not for applications',
+        rank: 1, usable: true };
+    }
+    return { reason: 'not an address published for applications', rank: 3, usable: true };
+  }
+
+  /**
+   * The part of the surrounding text that belongs to THIS address.
+   *
+   * The context window is a whole line, and a line often carries two
+   * addresses: "Email careers@acme.com to apply. Also privacy@acme.com
+   * for data removal." The word "privacy" then vetoed careers@ -- a real
+   * recruiting inbox thrown away because of prose about a different
+   * mailbox on the same line, which is the shape of every page footer.
+   * Cutting at the nearest other address keeps each one's evidence to
+   * itself.
+   */
+  function ownClause(context, email) {
+    const text = String(context || '');
+    const at = text.toLowerCase().indexOf(String(email).toLowerCase());
+    if (at < 0) return text.trim();
+    const end = at + email.length;
+    let from = 0, to = text.length;
+    for (const m of text.matchAll(new RegExp(EMAIL_RE.source, 'gi'))) {
+      if (m.index + m[0].length <= at) from = Math.max(from, m.index + m[0].length);
+      else if (m.index >= end) { to = Math.min(to, m.index); }
+    }
+    // The next address usually carries a LABEL in front of it -- "Apply:
+    // careers@acme.com | Privacy: privacy@acme.com" -- and that label sits
+    // inside this address's slice, so cutting at the address alone still
+    // let "Privacy" veto careers@. Drop back to the separator.
+    const tail = text.slice(end, to);
+    const cut = Math.max(tail.lastIndexOf('|'), tail.lastIndexOf(';'),
+      tail.lastIndexOf('·'), tail.lastIndexOf('•'));
+    if (cut >= 0 && to < text.length) to = end + cut;
+    const head = text.slice(from, at);
+    const opens = Math.max(head.indexOf('|'), head.indexOf(';'),
+      head.indexOf('·'), head.indexOf('•'));
+    if (opens >= 0 && from > 0) from += opens + 1;
+    return text.slice(from, to).trim();
+  }
+
+  function contextualCandidate(email, context, source, declined) {
+    const evidence = ownClause(context, email);
+    const note = () => {
+      const key = String(email).toLowerCase();
+      if (declined && !declined.has(key)) {
+        declined.set(key, Object.assign({ email, source }, declineReason(email, evidence)));
+      }
+      return null;
+    };
+    const score = _scoreEmail(email);
+    if (score <= 0) return note();
+    const local = email.split('@')[0];
+    if (/accommodat|accessibility|technical (?:issue|support)|privacy|data protection|unsubscribe/i.test(evidence)) return note();
+    const hiring = /recruit|hiring|talent acquisition|applicationContact|contact.{0,45}(?:role|position|job)|(?:role|position|job).{0,45}contact|send.{0,30}(?:cv|resume|application)/i.test(evidence);
+    const mailbox = RECRUITING_LOCAL.test(local) || /recruit|talent|hiring/i.test(local);
+    // Not a rejection: an ordinary company address with nothing around it
+    // to say it is for applicants. Nothing useful to report about it.
+    if (!hiring && !mailbox) return null;
+    return {email, score: score + (hiring ? 15 : 0), source,
+      context: evidence.slice(0, 240), contactName: hiring ? extractContactName(evidence) : '',
+      relevance: hiring ? 'job-context' : 'recruiting-mailbox'};
   }
 
   /**
@@ -193,6 +301,8 @@
 
     const found = [];
     const seen = new Set();
+    // Addresses the posting published that are not for applications.
+    const declined = new Map();
     let m;
     const re = new RegExp(EMAIL_RE.source, 'g');
     while ((m = re.exec(jdText)) !== null) {
@@ -200,8 +310,11 @@
       const key = e.toLowerCase();
       if (seen.has(key) || key === own) continue;
       seen.add(key);
-      const score = _scoreEmail(e);
-      if (score > 0) found.push({ email: e, score });
+      const start = Math.max(jdText.lastIndexOf('\n', m.index), jdText.lastIndexOf(';', m.index));
+      const end = jdText.indexOf('\n', m.index);
+      const context = jdText.slice(Math.max(start + 1, m.index - 160), end < 0 ? m.index + e.length + 100 : Math.min(end, m.index + e.length + 100));
+      const candidate = contextualCandidate(e, context, 'job-description', declined);
+      if (candidate) found.push(candidate);
     }
     // PAGE-PUBLISHED SOURCES.
     // The text scan only sees visible prose. An employer who puts their
@@ -225,12 +338,12 @@
       for (const h of harvested.emails) {
         const key = String(h.email || '').toLowerCase();
         if (!key || key === own) continue;
-        const base = _scoreEmail(h.email);
-        if (base <= 0) continue;                 // noreply/legal rejected as ever
-        const score = base + (SOURCE_BONUS[h.source] || 0);
+        const candidate = contextualCandidate(h.email, h.context, h.source, declined);
+        if (!candidate) continue;
+        const score = candidate.score + (SOURCE_BONUS[h.source] || 0);
         const existing = found.find((f) => f.email.toLowerCase() === key);
         if (existing) { existing.score = Math.max(existing.score, score); existing.source = h.source; }
-        else { seen.add(key); found.push({ email: h.email, score, source: h.source }); }
+        else { seen.add(key); found.push({...candidate, score}); }
       }
     }
 
@@ -247,7 +360,10 @@
       emailSource: best ? (best.source || 'job-description') : '',
       allEmails: found.map((f) => f.email).slice(0, 5),
       jobId: extractJobId(jdText, url) || (harvested && harvested.jobId) || '',
-      contactName: extractContactName(jdText) || harvestedName,
+      contactName: best?.contactName || '',
+      contactEvidence: best?.context || '',
+      contactRelevance: best?.relevance || '',
+      requiresReview: true,
       // Every name the page published, with the LinkedIn profile handle
       // when the hiring-team card carried one. Carried through so an
       // opt-in lookup can resolve THAT person rather than guessing at the
@@ -263,6 +379,14 @@
       orgUrl: (harvested && harvested.orgUrl) || '',
       url,
       hasPublishedEmail: !!best,
+      // Addresses the posting DID publish that are not for applications,
+      // so the panel can say what it found instead of claiming nothing was.
+      declined: [...declined.values()].sort((a, b) => b.rank - a.rank),
+      // The best of them that a person actually reads, offered only when
+      // nothing better was published. Never overrides a real recruiting
+      // address: `best` is checked first everywhere this is used.
+      fallback: best ? null : ([...declined.values()]
+        .filter((d) => d.usable).sort((a, b) => b.rank - a.rank)[0] || null),
     };
     // Whatever we found that helps them locate the application.
     result.referenceLines = buildReferenceLines(result);

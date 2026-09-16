@@ -1,5 +1,5 @@
 // universal-jd-parser.js - Universal Job Description Parser with Structure Detection
-// 100% reliable parsing for ANY job description format: bullets, sections, narrative, messy text
+// Shared parsing for supported HTML and text descriptions; unknown content is preserved.
 
 (function(global) {
   'use strict';
@@ -12,7 +12,7 @@
   function getCacheKey(text) {
     // Fast hash for caching
     let hash = 0;
-    const sample = text.slice(0, 500) + text.slice(-500);
+    const sample = String(text || '');
     for (let i = 0; i < sample.length; i++) {
       hash = ((hash << 5) - hash) + sample.charCodeAt(i);
       hash |= 0;
@@ -86,6 +86,10 @@
   function stripHTML(rawHTML) {
     if (!rawHTML) return '';
     
+    if (!/<\/?[a-z][^>]*>/i.test(rawHTML)) return normalizeWhitespace(rawHTML);
+    // Preserve block boundaries before reading textContent.
+    rawHTML = rawHTML.replace(/<br\s*\/?\s*>/gi, '\n').replace(/<\/(?:p|div|li|h[1-6]|section|article|tr)>/gi, '$&\n');
+
     // Create temporary element for HTML parsing
     const temp = document.createElement('div');
     temp.innerHTML = rawHTML;
@@ -125,22 +129,23 @@
    * @returns {string} Text without boilerplate
    */
   function removeBoilerplate(text) {
-    const boilerplatePatterns = [
-      /equal\s+opportunity\s+employer[^]*?(?=\n\n|\n[A-Z]|$)/gi,
-      /we\s+are\s+an?\s+(?:equal|inclusive)[^]*?(?=\n\n|\n[A-Z]|$)/gi,
-      /benefits\s*(?:include)?[:\s][^]*?(?=\n\n(?:requirements|qualifications|about|$))/gi,
-      /salary\s*(?:range)?[:\s][^]*?(?=\n\n|$)/gi,
-      /how\s+to\s+apply[^]*$/gi,
-      /apply\s+now[^]*$/gi,
-      /about\s+(?:us|our\s+company|the\s+company)[^]*?(?=\n\n(?:requirements|role|position|responsibilities)|$)/gi
-    ];
-    
-    let cleaned = text;
-    boilerplatePatterns.forEach(pattern => {
-      cleaned = cleaned.replace(pattern, '\n');
-    });
-    
-    return normalizeWhitespace(cleaned);
+    // Only explicit form boundaries end a description. An Apply button
+    // above the responsibilities must not discard the actual job text.
+    const form = /(?:^|\n)\s*(?:apply for this job|voluntary self-identification|voluntary self identification|submit your application)\s*[:*]?\s*(?:\n|$)/i.exec(text);
+    let cleaned = form ? text.slice(0, form.index) : text;
+    const relevantHeading = /^(?:(?:minimum|preferred|required|basic)\s+)?(?:requirements|qualifications|responsibilities|skills|experience|key focuses|duties|summary|about (?:the role|you)|what you(?: will|'ll) do|who you are|your role)\s*:?$/i;
+    const irrelevantHeading = /^(?:benefits(?: include)?|our benefits|perks|about us|about our company|who we are|our mission|equal opportunity(?: employer)?|privacy notice)\s*:?$/i;
+    const lines = cleaned.split('\n');
+    const out = [];
+    let skip = false;
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (relevantHeading.test(trimmed)) skip = false;
+      else if (irrelevantHeading.test(trimmed)) { skip = true; continue; }
+      if (/^(?:apply now|apply|back to jobs)\s*$/i.test(trimmed)) continue;
+      if (!skip) out.push(line);
+    }
+    return normalizeWhitespace(out.join('\n'));
   }
 
   /**
