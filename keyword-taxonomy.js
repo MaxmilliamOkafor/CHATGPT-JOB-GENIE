@@ -815,6 +815,23 @@
     return i === null ? 'raw:' + tight(stripQualifiers(term) || term) : 'g:' + i;
   }
 
+  // ── THE FIRST-WORD INDEX ─────────────────────────────────────────────
+  //
+  // Which groups are even worth testing against a given piece of text.
+  // Keyed on the first word of every surface form, because a form can
+  // only match if its first word is present. "node.js" indexes under
+  // "node", "c++" under "c", ".NET" under "net".
+  const _BY_FIRST_TOKEN = new Map();
+  function _firstToken(form) {
+    const m = norm(form).match(/[a-z0-9]+/);
+    return m ? m[0] : '';
+  }
+  function _tokensOf(text) {
+    const out = new Set();
+    for (const m of String(text).toLowerCase().matchAll(/[a-z0-9]+/g)) out.add(m[0]);
+    return out;
+  }
+
   // ── MATCHING ─────────────────────────────────────────────────────────
   //
   // One regex per surface form, with every separator inside it made
@@ -1630,7 +1647,28 @@
     const body = fold(requirementText(String(text == null ? '' : text)));
     if (!body.trim()) return [];
     const found = [];
-    for (const group of GROUPS) {
+    // ONLY THE GROUPS WHOSE FIRST WORD IS ACTUALLY ON THE PAGE.
+    //
+    // This used to test all nine hundred groups against the text, every
+    // form of every one, on every call. At four hundred groups that was
+    // tolerable; at nine hundred it reached 265ms for a single short
+    // string, and the passes above call sweep once per statement and once
+    // per chip. A real posting froze the popup's main thread for tens of
+    // seconds, which is what "Measuring..." forever actually was.
+    //
+    // A group can only match if the first word of one of its forms
+    // appears in the text, so the text's own words decide which handful
+    // of groups are worth testing. Every match the full scan would have
+    // found is still found: the prefilter only skips groups that could
+    // not have matched.
+    const present = _tokensOf(body);
+    const candidates = new Set();
+    for (const token of present) {
+      const bucket = _BY_FIRST_TOKEN.get(token);
+      if (bucket) for (const i of bucket) candidates.add(i);
+    }
+    for (const index of candidates) {
+      const group = GROUPS[index];
       // MEMBERSHIP IS DECIDED BY THE SAME TEST EVERYTHING ELSE USES, so a
       // posting that says "roadmaps" or "ships" names Roadmap and
       // Delivery, and one that says "no experience with Kafka" names
@@ -1658,6 +1696,17 @@
     found.sort((a, b) => b.hits - a.hits || a.label.localeCompare(b.label));
     const cap = Math.max(1, Number(limit) || 40);
     return found.slice(0, cap);
+  }
+
+  // Populated once, after variantsOf exists, so plurals are indexed too.
+  for (let i = 0; i < GROUPS.length; i += 1) {
+    for (const form of variantsOf(GROUPS[i][0])) {
+      const token = _firstToken(form);
+      if (!token) continue;
+      if (!_BY_FIRST_TOKEN.has(token)) _BY_FIRST_TOKEN.set(token, []);
+      const bucket = _BY_FIRST_TOKEN.get(token);
+      if (bucket[bucket.length - 1] !== i) bucket.push(i);
+    }
   }
 
   global.KeywordTaxonomy = {

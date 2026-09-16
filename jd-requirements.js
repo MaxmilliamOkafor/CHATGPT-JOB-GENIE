@@ -376,12 +376,17 @@
 
   // ── CONCEPT DETECTION, ONE STATEMENT AT A TIME ───────────────────────
 
-  /** Does this statement name an unambiguous technical concept? */
-  function _hasSibling(statement, exceptLabel) {
-    const tx = TX();
-    if (!tx) return false;
-    const found = tx.sweep(statement, 8);
-    return found.some((r) => r.label !== exceptLabel && !AMBIGUOUS[r.label]);
+  /**
+   * Does this statement name an unambiguous technical concept?
+   *
+   * Takes the concepts ALREADY found in the statement when the caller has
+   * them. Re-sweeping here meant every ambiguous hit paid for a second
+   * full scan of the statement, on top of the one that found it.
+   */
+  function _hasSibling(statement, exceptLabel, known) {
+    const named = Array.isArray(known) ? known
+      : (TX() ? TX().sweep(statement, 8).map((r) => r.label) : []);
+    return named.some((label) => label !== exceptLabel && !AMBIGUOUS[label]);
   }
 
   /**
@@ -392,7 +397,7 @@
    * permission, "Excel" before "at" is a verb, and "Teams" after
    * "cross-functional" is a group of people.
    */
-  function resolve(label, statement) {
+  function resolve(label, statement, known) {
     const rule = AMBIGUOUS[label];
     if (!rule) return label;
     if (rule.reject && rule.reject.test(statement)) return null;
@@ -403,13 +408,37 @@
       return null;
     }
     if (rule.need && rule.need.test(statement)) return label;
-    if (rule.siblings && _hasSibling(statement, label)) return label;
+    if (rule.siblings && _hasSibling(statement, label, known)) return label;
     // A rule that asks for context and finds none REJECTS. Falling
     // through to acceptance is what let "a lighthouse project", "feast on
     // interesting problems" and "maintain your sanity" read as Lighthouse,
     // Feast and Sanity -- all three are real products, and all three
     // sentences are ordinary English from a careers page.
     return (rule.need || rule.siblings) ? null : label;
+  }
+
+  /**
+   * Every statement with the concepts it names, computed once per posting.
+   *
+   * extract() and filterAgainstPosting() both need exactly this, and both
+   * are called on the same posting in the same run. Computing it twice
+   * doubled the cost of the one path the popup blocks on.
+   */
+  let _lastText = null;
+  let _lastScan = null;
+  function _scan(jdText) {
+    const key = String(jdText == null ? '' : jdText);
+    if (_lastText === key && _lastScan) return _lastScan;
+    const tx = TX();
+    const statements = segment(key);
+    const scanned = statements.map((st) => {
+      const named = tx ? tx.sweep(st.text, 12).map((h) => h.label) : [];
+      for (const extra of dutyConcepts(st.text)) if (!named.includes(extra)) named.push(extra);
+      return { st, named };
+    });
+    _lastText = key;
+    _lastScan = { statements, scanned };
+    return _lastScan;
   }
 
   // ── THE PASS ─────────────────────────────────────────────────────────
@@ -423,7 +452,7 @@
    */
   function extract(jdText) {
     const tx = TX();
-    const statements = segment(jdText);
+    const { statements, scanned } = _scan(jdText);
     const requirements = [];
     const excluded = [];
     const conditions = [];
@@ -432,18 +461,16 @@
     }
     const byKey = new Map();
 
-    for (const st of statements) {
+    for (const { st, named } of scanned) {
       const inCoverage = COVERED.has(st.section);
       // A working condition is a fact about the job, recorded for the
       // person deciding whether to apply and never scored as a skill.
       if (st.section === SECTION.CONDITIONS) {
         conditions.push({ label: st.text, evidence: st.text, start: st.start, end: st.end });
       }
-      const named = tx.sweep(st.text, 12).map((h) => h.label);
-      for (const extra of dutyConcepts(st.text)) if (!named.includes(extra)) named.push(extra);
       for (const label of named) {
         const hit = { label };
-        const resolved = resolve(hit.label, st.text);
+        const resolved = resolve(hit.label, st.text, named);
         if (!resolved) {
           excluded.push({ term: hit.label, reason: 'means something else here',
             section: st.section, evidence: st.text, start: st.start, end: st.end });
@@ -554,14 +581,12 @@
     const tx = TX();
     const list = Array.isArray(labels) ? labels : [];
     if (!tx || !String(jdText || '').trim()) return { kept: list.slice(), dropped: [] };
-    const statements = segment(jdText);
+    const { statements, scanned } = _scan(jdText);
     const supported = new Map();
-    for (const st of statements) {
+    for (const { st, named } of scanned) {
       if (!COVERED.has(st.section)) continue;
-      const named = tx.sweep(st.text, 12).map((h) => h.label);
-      for (const extra of dutyConcepts(st.text)) if (!named.includes(extra)) named.push(extra);
       for (const label of named) {
-        const resolved = resolve(label, st.text);
+        const resolved = resolve(label, st.text, named);
         if (!resolved) continue;
         if (VAGUE.test(resolved) || CONDITION.test(resolved)) continue;
         if (!supported.has(tx.keyOf(resolved))) supported.set(tx.keyOf(resolved), { resolved, st });

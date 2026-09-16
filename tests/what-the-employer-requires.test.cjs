@@ -342,15 +342,60 @@ console.log('\nAND THE AWKWARD SHAPES DO NOT BREAK IT');
 
 console.log('\nAND THE MODULE IS ACTUALLY LOADED BY THE EXTENSION');
 {
+  // BOTH LOADERS, BECAUSE THEY ARE DIFFERENT PLACES.
+  //
+  // The manifest covers content scripts. The popup loads its own scripts
+  // with <script> tags, and popup.js is where every one of these passes
+  // actually runs. Checking only the manifest is why the module shipped
+  // registered and never loaded: window.JDRequirements was undefined in
+  // the popup, the guards fell through, and none of this filtering ran in
+  // the browser at all while the tests passed.
   const manifest = fs.readFileSync(path.join(DIR, 'manifest.json'), 'utf8');
   t('  jd-requirements.js is in the manifest', /jd-requirements\.js/.test(manifest),
-    'the module would never run in the browser');
+    'it would never run in a content script');
+  const html = fs.readFileSync(path.join(DIR, 'popup.html'), 'utf8');
+  t('  ...and popup.html loads it', /<script src="jd-requirements\.js">/.test(html),
+    'it would never run in the popup, which is where popup.js lives');
+  t('  ...after the taxonomy it reads',
+    html.indexOf('keyword-taxonomy.js') < html.indexOf('jd-requirements.js'),
+    'the module would load before the table it depends on');
   const src = fs.readFileSync(path.join(DIR, 'popup.js'), 'utf8');
   t('  ...and extraction calls it',
     /JDR\.filterAgainstPosting\(base\.all, jobDescription\)/.test(src),
     'the model output is still unfiltered');
   t('  ...for the requirement sweep too', /JDR\.extract\(jobDescription\)/.test(src),
     'the sweep is still section-blind');
+}
+
+console.log('\nAND IT IS FAST ENOUGH TO RUN ON THE POPUP\'S MAIN THREAD');
+{
+  // The table went from four hundred groups to nine hundred, and sweep
+  // tested every group against every call. At 265ms for one short string,
+  // with one call per statement and one per chip, a real posting froze
+  // the popup for tens of seconds: "Measuring..." that never finished.
+  //
+  // The first-word index fixed it, and these numbers are what stop it
+  // coming back. They are deliberately loose -- ten times slower than
+  // measured still passes -- because this is a freeze guard, not a
+  // benchmark.
+  const warm = 'Requirements\n- Python, SQL and Airflow experience.\n';
+  JDR.extract(warm);                                    // pay the regex compilation once
+  TX.sweep('warm up the pattern cache', 4);
+
+  let at = Date.now();
+  for (let i = 0; i < 200; i += 1) TX.sweep('forecasting models ' + i, 4);
+  const perSweep = (Date.now() - at) / 200;
+  t('  a short sweep stays under 5ms', perSweep < 5, perSweep.toFixed(2) + 'ms each');
+
+  at = Date.now();
+  JDR.extract(WEBFLOW + '\n');
+  const once = Date.now() - at;
+  t('  a whole posting stays under 400ms', once < 400, once + 'ms');
+
+  at = Date.now();
+  for (let i = 0; i < 5; i += 1) JDR.extract(WEBFLOW + '\n' + i);
+  const each = (Date.now() - at) / 5;
+  t('  ...and under 150ms once warm', each < 150, each.toFixed(0) + 'ms each');
 }
 
 console.log('\n' + PASS + ' passed, ' + FAIL + ' failed');
