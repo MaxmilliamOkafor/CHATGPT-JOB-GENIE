@@ -114,9 +114,35 @@ function mentionIsNegated(text: string, term: string): boolean {
 /** Collects the profile into labelled, tiered evidence lines. */
 export function buildEvidenceSources(profile: any): EvidenceSource[] {
   const sources: EvidenceSource[] = [];
+  // A PROFILE DOES NOT ARRIVE IN ONE SHAPE.
+  //
+  // It comes from the API normaliser in camelCase and from the stored
+  // profile row in snake_case, achievements are sometimes strings and
+  // sometimes { text }, and a "description" is sometimes a string and
+  // sometimes an array. String()-ing that yields "[object Object]", and
+  // a reader that only knows one spelling yields nothing at all, which
+  // classifies every requirement as unsupported and empties the CV.
+  //
+  // So this unwraps rather than stringifies, and the two callers below
+  // name every spelling instead of assuming one.
   const push = (label: string, text: unknown, kind: EvidenceSource["kind"]) => {
-    const t = (text ?? "").toString().trim();
-    if (t) sources.push({ label, text: t, kind });
+    if (Array.isArray(text)) { text.forEach((item) => push(label, item, kind)); return; }
+    if (text && typeof text === "object") {
+      for (const key of ["text", "description", "bullet", "name"]) {
+        if (typeof (text as Record<string, unknown>)[key] === "string") {
+          push(label, (text as Record<string, unknown>)[key], kind);
+          return;
+        }
+      }
+      return;
+    }
+    if (typeof text !== "string") return;
+    const t = text.trim();
+    // The same role reached through two aliases is one piece of evidence,
+    // not two: duplicated sources would read as corroboration.
+    if (t && !sources.some((s) => s.label === label && s.text === t && s.kind === kind)) {
+      sources.push({ label, text: t, kind });
+    }
   };
 
   // Explicit records: skills, certifications, education, per-role tech lists.
@@ -153,21 +179,30 @@ export function buildEvidenceSources(profile: any): EvidenceSource[] {
   }
 
   // Demonstrations: achievement bullets on real roles, and project work.
-  for (const role of Array.isArray(profile?.professionalExperience) ? profile.professionalExperience : []) {
-    const label = [(role as any)?.title, (role as any)?.company].filter(Boolean).join(" at ") || "experience";
-    for (const b of Array.isArray((role as any)?.bullets) ? (role as any).bullets : []) {
-      push(label, b, "achievement");
+  // Both the API-normalised and the stored-profile shapes carry these.
+  const arrays = (...values: unknown[]) =>
+    values.flatMap((value) => (Array.isArray(value) ? value : []));
+  for (const role of arrays(profile?.professionalExperience, profile?.professional_experience)) {
+    const label = [(role as any)?.title || (role as any)?.jobTitle,
+      (role as any)?.company || (role as any)?.companyName]
+      .filter(Boolean).join(" at ") || "experience";
+    for (const field of ["bullets", "description", "achievements", "responsibilities"]) {
+      push(label, (role as any)?.[field], "achievement");
     }
-    const tech = (role as any)?.technologies ?? (role as any)?.techStack;
-    push(`${label} (recorded tools)`, Array.isArray(tech) ? tech.join(", ") : tech, "record");
+    for (const field of ["technologies", "techStack", "tech_stack", "skills"]) {
+      push(`${label} (recorded tools)`, (role as any)?.[field], "record");
+    }
   }
-  for (const p of Array.isArray(profile?.relevantProjects) ? profile.relevantProjects : []) {
-    const label = (p as any)?.name || "project";
-    const stack = (p as any)?.techStack;
-    push(`${label} (recorded stack)`, Array.isArray(stack) ? stack.join(", ") : stack, "record");
-    push(label, (p as any)?.description, "achievement");
-    for (const b of Array.isArray((p as any)?.bullets) ? (p as any).bullets : []) push(label, b, "achievement");
+  for (const project of arrays(profile?.relevantProjects, profile?.relevant_projects)) {
+    const label = (project as any)?.name || (project as any)?.title || "project";
+    for (const field of ["techStack", "tech_stack", "technologies", "skills"]) {
+      push(`${label} (recorded stack)`, (project as any)?.[field], "record");
+    }
+    for (const field of ["description", "bullets", "achievements"]) {
+      push(label, (project as any)?.[field], "achievement");
+    }
   }
+  push("saved achievements", profile?.achievements, "achievement");
   return sources;
 }
 
