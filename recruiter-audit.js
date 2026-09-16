@@ -1384,7 +1384,7 @@
    * through the employment block, and writing "candidate" over a genuine
    * match sells it short.
    */
-  function ensureTitleInSummary(cvText, jdTitle, jdCompany) {
+  function ensureTitleInSummary(cvText, jdTitle, jdCompany, jobText) {
     const text = String(cvText || '');
     const title = normaliseJobTitle(jdTitle);
     if (!text || !title) return { text, added: false };
@@ -1430,8 +1430,15 @@
     const body14 = lines.slice(head + 1, end).join(' ').toLowerCase();
     // Already said, in the summary itself, under this name or the same
     // title without its level word.
+    // The level-stripped form is only usable as an "already said" test
+    // while it still names a profession. core("Principal Engineer") is
+    // "Engineer", which appears in most engineering summaries ever
+    // written, and matching on it silenced this pass on nearly every
+    // application. Two words or more, or the full title only.
+    const coreTitle = core(title);
+    const coreUsable = /\s/.test(coreTitle);
     if (body14.indexOf(title.toLowerCase()) !== -1
-      || (core(title) && body14.indexOf(core(title).toLowerCase()) !== -1)) {
+      || (coreUsable && body14.indexOf(coreTitle.toLowerCase()) !== -1)) {
       return { text, added: false };
     }
 
@@ -1475,6 +1482,61 @@
     if (employers.some((e) => _same(e, title))) return { text, added: false };
     if (!held.length) return { text, added: false };
 
+    // ── THE YEARS CLAUSE, AND WHEN IT IS TRUE ────────────────────────
+    //
+    // "bringing 8 years of relevant experience that meets the position's
+    // stated experience requirement" is an assertion about eligibility,
+    // not a description. It is worth making when it is true and it is a
+    // false statement on an application when it is not.
+    //
+    // A posting stating a number is NOT enough to license it. Almost
+    // every such requirement is domain-qualified, and the domain is the
+    // whole of it. The posting that produced this rule reads:
+    //
+    //   1+ years of hands-on, front-of-house hospitality operations
+    //   experience at a hotel or resort ... (Airline, event, or food &
+    //   beverage-only experience does not meet this requirement.)
+    //
+    // A software engineer of eight years satisfies the number and none
+    // of the requirement. On the trigger "the posting mentions years"
+    // alone, that CV goes out asserting it meets a bar it fails, under a
+    // history that says otherwise three lines down.
+    //
+    // So the domain is checked too. Not through the evidence machinery:
+    // this compares the qualifying words of the posting's own sentence
+    // against the titles the employment block states. No overlap, no
+    // claim, and the plain closing line is used instead.
+    const _yearsAsked = (text) => {
+      const src = String(text || '');
+      const re = /(\d{1,2})\s*\+?\s*years?[^.\n]{0,90}/gi;
+      let m;
+      while ((m = re.exec(src)) !== null) {
+        const clause = m[0];
+        // A sentence about years that is not about the candidate's:
+        // "delivering 47 services in 11 months" shapes, and the
+        // employer's own age.
+        if (!/experience|background|working|worked|hands[- ]on|track record/i.test(clause)) continue;
+        return { years: parseInt(m[1], 10), clause };
+      }
+      return null;
+    };
+
+    // The words that qualify the requirement, minus the furniture. What
+    // is left is the domain: for the posting above, hospitality,
+    // operations, hotel, resort, desk.
+    const _STOP = new Set(['years', 'year', 'experience', 'of', 'in', 'the', 'a', 'an',
+      'and', 'or', 'with', 'at', 'to', 'for', 'on', 'plus', 'minimum', 'least',
+      'proven', 'relevant', 'related', 'similar', 'working', 'worked', 'hands',
+      'track', 'record', 'previous', 'prior', 'strong', 'solid', 'demonstrable',
+      'progressive', 'professional', 'full', 'time', 'role', 'roles', 'position',
+      // "Minimum 3 years of experience required" qualifies no domain. Left
+      // in, "required" became the domain and the clause never fired on the
+      // one shape where the number genuinely is the whole requirement.
+      'required', 'requirement', 'requirements', 'preferred', 'desirable',
+      'must', 'have', 'ideally', 'equivalent', 'combined', 'total', 'least']);
+    const _domainWords = (clause) => String(clause || '').toLowerCase()
+      .split(/[^a-z]+/).filter((w) => w.length > 3 && !_STOP.has(w));
+
     // AT THE END, NOT THE FRONT.
     //
     // A first version opened the summary with the title: "Customer
@@ -1496,7 +1558,36 @@
     // pressed send.
     let last = body;
     for (let i = body; i < end; i++) if (lines[i].trim()) last = i;
-    const sentence = 'Now applying that experience to the ' + title + ' role.';
+
+    // THREE OUTCOMES, AND ONLY ONE OF THEM MENTIONS YEARS.
+    //
+    //   The posting states a number, the domain is one this history
+    //   covers, and the span clears the bar: the claim is made, with a
+    //   digit, because "8" is what a reader and a parser both scan for
+    //   and "eight" is what neither does.
+    //
+    //   The posting states a number and the domain is somebody else's:
+    //   NO number. The plain line. This is the branch that keeps a
+    //   software engineer from telling a hotel he meets their bar.
+    //
+    //   The posting states no number: the plain line, because there is
+    //   no requirement to say anything about.
+    const asked = _yearsAsked(jobText);
+    let sentence = 'Interested in applying this experience to the ' + title + ' role.';
+    if (asked) {
+      const facts = _historyFacts(text);
+      const want = _domainWords(asked.clause);
+      const mine = (facts.titles || []).join(' ').toLowerCase();
+      // Overlap on the posting's own qualifying words. A requirement
+      // with no domain words at all ("5+ years of experience") is
+      // unqualified, so the number is the whole of it.
+      const covered = !want.length || want.some((w) => mine.indexOf(w) !== -1);
+      if (covered && facts.years >= asked.years) {
+        sentence = 'Seeking to apply this background to the ' + title + ' role, bringing '
+          + facts.years + ' years of relevant experience that meets the position’s '
+          + 'stated experience requirement.';
+      }
+    }
     lines[last] = lines[last].replace(/\s+$/, '').replace(/([^.!?])$/, '$1.')
       + ' ' + sentence;
     return { text: lines.join('\n'), added: true, sentence };
@@ -7659,7 +7750,7 @@
         // lines a recruiter reads -- and the clamp's budget is reduced
         // by what the closing line costs, so the sentence carrying the
         // title is not the one the clamp throws away.
-        const st = ensureTitleInSummary(outCV, jdTitle, jdCompany);
+        const st = ensureTitleInSummary(outCV, jdTitle, jdCompany, jdText);
         const c = clampSummary(st.added ? st.text : outCV, {
           maxChars: 220 + (st.added ? st.sentence.length + 1 : 0),
         });

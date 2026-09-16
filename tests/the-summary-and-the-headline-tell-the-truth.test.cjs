@@ -155,7 +155,7 @@ console.log('\nAND THE SKILLS LINE IS NOT EVIDENCE OF DOING THE WORK');
   // and no years. What must not appear is payroll as something the
   // candidate has DONE, which is what the rebuilt prose would be
   // asserting.
-  const closing = / Now applying that experience to the .*? role\.$/.exec(summary);
+  const closing = / (?:Interested in applying this experience|Seeking to apply this background) to the [\s\S]*$/.exec(summary);
   const prose = closing ? summary.slice(0, closing.index) : summary;
   t('  the rebuilt summary does not claim payroll',
     !/payroll/i.test(prose), JSON.stringify(prose));
@@ -251,7 +251,7 @@ for (const good of [
   // this guards against: nothing they wrote is touched.
   t('  "' + good.slice(0, 46) + '..." survives', summary.indexOf(good) === 0, JSON.stringify(summary));
   t('  ...and gains only the closing line',
-    / Now applying that experience to the .*? role\.$/
+    / (?:Interested in applying this experience|Seeking to apply this background) to the [\s\S]*$/
       .test(summary.slice(good.length)) || summary === good,
     JSON.stringify(summary.slice(good.length)));
 }

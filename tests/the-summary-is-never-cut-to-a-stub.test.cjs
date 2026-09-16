@@ -149,7 +149,7 @@ console.log('\nAND THE REST OF THE CV IS NEVER TOUCHED');
   // The prose is held to the cap; the closing line naming the target
   // role is measured separately, because it is added after the writing
   // and the clamp is given room for it on purpose.
-  const closing = / Now applying that experience to the .*? role\.$/.exec(summaryLine);
+  const closing = / (?:Interested in applying this experience|Seeking to apply this background) to the [\s\S]*$/.exec(summaryLine);
   const prose = closing ? summaryLine.slice(0, closing.index) : summaryLine;
   t('  and the summary itself is a real summary',
     prose.length > CAP * 0.45 && prose.length <= CAP,

@@ -156,7 +156,7 @@ console.log('\nA HEADLINE IS NOT READ AS A JOB TITLE');
   // application: "Meta candidate with a background as a Software
   // Engineer". A closing line leaves the opening saying what it said.
   t('  ...at the end, not the front',
-    /Now applying that experience to the Customer Support Coach role\.$/.test(summary),
+    /Interested in applying this experience to the Customer Support Coach role\.$/.test(summary),
     summary);
   t('  ...and the opening still names the real profession',
     /^Software Engineer working across/.test(summary), summary);
@@ -202,11 +202,69 @@ console.log('\nAND THE AWKWARD SHAPES DO NOT BREAK IT');
     'it would be named twice');
 }
 
+console.log('\nAND THE YEARS CLAUSE IS MADE ONLY WHERE IT IS TRUE');
+{
+  // "bringing 8 years of relevant experience that meets the position's
+  // stated experience requirement" is an assertion about eligibility. A
+  // posting stating a number does not license it, because the number is
+  // almost always domain-qualified and the domain is the whole of it.
+  //
+  // Measured on the posting that produced this rule:
+  //
+  //   1+ years of hands-on, front-of-house hospitality operations
+  //   experience at a hotel or resort ... (Airline, event, or food &
+  //   beverage-only experience does not meet this requirement.)
+  //
+  // A software engineer of eight years clears the number and fails the
+  // requirement. Triggering on "the posting mentions years" alone sends
+  // a CV that claims a bar it does not meet, three lines above a history
+  // that says so.
+  const has = (title, jd) => {
+    const o = RA.ensureTitleInSummary(CV, title, 'Acme', jd);
+    return o.added ? o.sentence : '';
+  };
+  const hospitality = has('Customer Support Coach',
+    '1+ years of hands-on, front-of-house hospitality operations experience at a hotel or resort.');
+  t('  a hospitality bar gets no years claim from a software history',
+    !/years of relevant experience/.test(hospitality), hospitality);
+  t('  ...and the role is still named', /Customer Support Coach role\.$/.test(hospitality),
+    hospitality);
+
+  const matched = has('Senior Backend Engineer',
+    '5+ years of software engineering experience building backend services.');
+  t('  a software bar does get one from a software history',
+    /bringing \d+ years of relevant experience that meets/.test(matched), matched);
+  t('  ...written as a digit, which is what a reader and a parser both scan for',
+    /bringing \d+ years/.test(matched) && !/bringing (?:five|eight|nine|ten) years/.test(matched),
+    matched);
+
+  t('  an unqualified bar is met by the number alone',
+    /bringing \d+ years/.test(has('Operations Lead', 'Minimum 3 years of experience required.')),
+    has('Operations Lead', 'Minimum 3 years of experience required.'));
+  t('  a bar the history does not clear gets no claim',
+    !/years of relevant experience/.test(
+      has('Principal Engineer', '12+ years of software engineering experience.')),
+    has('Principal Engineer', '12+ years of software engineering experience.'));
+  t('  a posting that states no number says nothing about years',
+    !/years/.test(has('Customer Support Coach', 'Excellent communication skills.')),
+    has('Customer Support Coach', 'Excellent communication skills.'));
+
+  // A number in a posting is not always a number of years of experience.
+  t('  "delivering 47 services in 11 months" is not an experience bar',
+    !/years of relevant experience/.test(
+      has('Customer Support Coach', 'Our team ships in 2 years of platform history.')),
+    has('Customer Support Coach', 'Our team ships in 2 years of platform history.'));
+
+  t('  and no job text at all falls back to the plain line',
+    /^Interested in applying this experience to the/.test(has('Customer Support Coach', '')),
+    has('Customer Support Coach', ''));
+}
+
 console.log('\nAND THE AUDIT RUNS IT, IN THE ONE PLACE IT CAN');
 {
   const src = fs.readFileSync(path.join(DIR, 'recruiter-audit.js'), 'utf8');
   t('  the module exports it', typeof RA.ensureTitleInSummary === 'function', 'not exported');
-  t('  the audit calls it', /const st = ensureTitleInSummary\(outCV, jdTitle, jdCompany\);/.test(src),
+  t('  the audit calls it', /const st = ensureTitleInSummary\(outCV, jdTitle, jdCompany, jdText\);/.test(src),
     'the pass exists but nothing runs it');
   // AFTER repairSummary, which rebuilds a summary whose opening claims
   // an unheld title, and BEFORE the clamp, so the paragraph is still
