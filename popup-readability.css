@@ -54,6 +54,26 @@ input::placeholder,textarea::placeholder { color:#b4b4ca; }
 .keyword-chip.matched { color:#6ee7b7; background:rgba(16,185,129,0.14); border-color:rgba(16,185,129,0.45); }
 .keyword-chip.missing { color:#fca5a5; background:rgba(239,68,68,0.12); border-color:rgba(239,68,68,0.40); }
 .keyword-chip .chip-icon { font-weight:700; opacity:.9; }
+
+/* A chip is a control, not a label: clicking it strikes the keyword off
+   for good. It has to look pressable, and it has to be reachable from the
+   keyboard, or the only way to exclude anything is the text box. */
+.keyword-chip[role="button"] { cursor:pointer; }
+.keyword-chip[role="button"]:hover { border-color:#818cf8; }
+.keyword-chip[role="button"]:focus-visible { outline:2px solid #818cf8; outline-offset:1px; }
+.keyword-chip.excluded { color:#94a3b8; background:#181830; border-color:#33334d; text-decoration:line-through; }
+.keyword-chip.excluded:hover { color:#cbd5e1; text-decoration:none; }
+.keyword-section.exclusions { margin-top:10px; padding-top:8px; border-top:1px solid #2a2a45; }
+.keyword-section.exclusions .section-title { color:#94a3b8; }
+.exclusion-add { display:flex; gap:5px; margin-bottom:6px; }
+.exclusion-input { flex:1; min-width:0; padding:4px 7px; font-size:12px; border-radius:6px;
+  border:1px solid #33334d; background:#12122a; color:#e2e8f0; }
+.exclusion-input:focus { outline:none; border-color:#818cf8; }
+.exclusion-btn { padding:4px 9px; font-size:12px; font-weight:600; border-radius:6px; cursor:pointer;
+  border:1px solid #33334d; background:#202039; color:#cbd5e1; }
+.exclusion-btn:hover { border-color:#818cf8; color:#fff; }
+/* Empty: the box to type in stays, the chip row and its heading count go. */
+.keyword-section.exclusions.is-empty .section-count { display:none; }
 .preview-content { color:#f1f5f9; background:#0b0b18; white-space:pre-wrap; overflow-wrap:anywhere; font-size:13px; line-height:1.5; max-height:240px; overflow:auto; }
 .preview-tab.active { background:var(--accent-primary); color:#fff; }
 .workspace-guidance,.ats-guidance,.boost-description,.btn-time,.stats-card { display:none; }

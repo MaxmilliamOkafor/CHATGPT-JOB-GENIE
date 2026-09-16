@@ -267,6 +267,10 @@ class ATSTailor {
       this.session = null;
     }
 
+    // Before anything renders a keyword: the filter is synchronous, so
+    // the cache has to be warm by the time the first chip is drawn.
+    try { await this.loadKeywordExclusions(); } catch (e) { console.error('[ATS Tailor] loadKeywordExclusions error:', e); }
+
     try { await this.loadAIProviderSettings(); } catch (e) { console.error('[ATS Tailor] loadAIProviderSettings error:', e); this.showToast('Failed to load AI settings', 'error'); }
     try { await this.loadWorkdayState(); } catch (e) { console.error('[ATS Tailor] loadWorkdayState error:', e); this.showToast('Failed to load Workday state', 'error'); }
     try { await this.loadBaseCVFromProfile(); } catch (e) { console.error('[ATS Tailor] loadBaseCVFromProfile error:', e); this.showToast('Failed to load base CV', 'error'); }
@@ -746,6 +750,7 @@ class ATSTailor {
     document.getElementById('previewDocumentSelect')?.addEventListener('change', event => this.switchPreviewTab(event.target.value));
     document.getElementById('copyContent')?.addEventListener('click', () => this.copyCurrentContent());
     document.getElementById('copyCoverageBtn')?.addEventListener('click', () => this.copyCoverageReport());
+    this.bindKeywordExclusionEvents();
     
     // NEW: Text download buttons
     document.getElementById('downloadCvText')?.addEventListener('click', () => this.downloadTextVersion('cv'));
@@ -4667,6 +4672,22 @@ class ATSTailor {
     }
   }
 
+  /**
+   * The owner's standing exclusions, taken out of a list of terms.
+   *
+   * Never throws and never returns fewer than it should when the store
+   * has not loaded: an empty cache returns the list untouched. A keyword
+   * shown that should have been hidden is visible and one click from
+   * being hidden again; one hidden that should have been shown is a
+   * requirement silently missing from a CV.
+   */
+  static dropExcluded(list) {
+    const items = Array.isArray(list) ? list : [];
+    const store = (typeof window !== 'undefined' && window.KeywordExclusions) || null;
+    if (!store || typeof store.filter !== 'function') return items;
+    try { return store.filter(items); } catch (e) { return items; }
+  }
+
   /** The same, across priority tiers: a higher tier keeps the requirement. */
   canonicaliseTiers(keywordsObj) {
     const TX = typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy
@@ -4682,8 +4703,15 @@ class ATSTailor {
       // the raw tiers, so benefits lines and screening criteria appeared
       // as chips that the gauge had already discarded. Nineteen chips
       // over a badge reading "10 of 10" is that disagreement on screen.
-      const asked = ATSTailor.requirementsOnly(
-        ATSTailor.collapseDecoratedPhrases(Array.isArray(list) ? list : []));
+      //
+      // Standing exclusions are applied HERE, in the one funnel, rather
+      // than at each place a keyword list is consumed. A term the owner
+      // struck off has to be absent from the gauge, the chips, the
+      // injection and the coverage score at the same moment; filtering
+      // per-consumer is how this project has previously ended up showing
+      // one document and sending another.
+      const asked = ATSTailor.dropExcluded(ATSTailor.requirementsOnly(
+        ATSTailor.collapseDecoratedPhrases(Array.isArray(list) ? list : [])));
       for (const entry of TX.dedupe(asked)) {
         if (claimed.has(entry.key)) continue;      // already shown, higher up
         claimed.add(entry.key);
@@ -4881,6 +4909,127 @@ class ATSTailor {
   // damning verdict on a CV nobody looked at. "data", "analysis",
   // "process" and "management" cannot all be absent from a real CV; a
   // zero that total is a missing input, not a result.
+  // ============ KEYWORDS THE OWNER HAS STRUCK OFF ============
+  //
+  // Extraction can be right about the posting and wrong about the
+  // candidate. "Salesforce" is genuinely in the advert; the owner has
+  // never opened it and will not defend it at interview. Deleting it by
+  // hand on every application is not a fix, it is the same work again.
+  //
+  // The decision is stored on the ACCOUNT, not in the extension, so
+  // uninstalling, reinstalling or moving machine does not lose it.
+
+  async loadKeywordExclusions() {
+    const store = window.KeywordExclusions;
+    if (!store) return;
+    if (this.session?.access_token && this.session?.user?.id) {
+      store.connect({
+        supabaseUrl: SUPABASE_URL,
+        anonKey: SUPABASE_ANON_KEY,
+        accessToken: this.session.access_token,
+        userId: this.session.user.id,
+      });
+    } else {
+      store.disconnect();
+    }
+    await store.load({ force: true });
+    this.renderExcludedKeywords();
+  }
+
+  async excludeKeyword(term) {
+    const store = window.KeywordExclusions;
+    const raw = String(term == null ? '' : term).trim();
+    if (!store || !raw) return;
+    const entry = await store.add(raw);
+    if (!entry) { this.showToast(`${raw} is already excluded`, 'warning'); return; }
+    this.renderExcludedKeywords();
+    // Redrawn rather than left until the next run: the chip has to leave
+    // the panel now, or it reads as a click that did nothing.
+    this.updateMatchAnalysisUI();
+    // Said out loud, because excluding "Machine Learning" also excludes
+    // "ML" and discovering that later is worse than being told now.
+    const also = (entry.covers || [])
+      .filter((c) => String(c).toLowerCase() !== entry.term.toLowerCase());
+    this.showToast(also.length
+      ? `Excluded ${entry.term}, and ${also.slice(0, 3).join(', ')}`
+      : `Excluded ${entry.term}`, 'success');
+  }
+
+  async restoreKeyword(term) {
+    const store = window.KeywordExclusions;
+    const raw = String(term == null ? '' : term).trim();
+    if (!store || !raw) return;
+    if (!(await store.remove(raw))) return;
+    this.renderExcludedKeywords();
+    this.updateMatchAnalysisUI();
+    this.showToast(`${raw} will be used again`, 'success');
+  }
+
+  renderExcludedKeywords() {
+    const store = window.KeywordExclusions;
+    const container = document.getElementById('excludedChips');
+    if (!store || !container) return;
+    const list = store.all();
+    container.innerHTML = list.map((e) => {
+      const covers = (e.covers || [])
+        .filter((c) => String(c).toLowerCase() !== String(e.term).toLowerCase());
+      const title = (covers.length
+        ? 'Also covers ' + covers.slice(0, 6).join(', ')
+        : 'Excluded from future tailoring') + '. Click to use it again.';
+      // The term is read back out of .chip-text on click rather than out
+      // of an attribute, so a keyword containing a quote cannot break the
+      // markup it is written into.
+      return '<span class="keyword-chip excluded" role="button" tabindex="0" '
+        + `title="${this.escapeAttr(title)}">`
+        + `<span class="chip-text">${this.escapeHtml(e.term)}</span>`
+        + '<span class="chip-icon">↺</span></span>';
+    }).join('');
+    const countEl = document.getElementById('excludedCount');
+    if (countEl) countEl.textContent = String(list.length);
+    const hint = document.getElementById('exclusionsHint');
+    if (hint) {
+      hint.textContent = store.syncState() === 'account'
+        ? 'Kept on your account, so removing the extension does not lose them.'
+        : 'Kept on this device. Sign in to keep them if the extension is removed.';
+    }
+    const section = document.getElementById('exclusionsSection');
+    if (section) section.classList.toggle('is-empty', !list.length);
+  }
+
+  bindKeywordExclusionEvents() {
+    // One delegated listener, because the chips are rewritten on every
+    // render and per-chip listeners would leak with them.
+    document.getElementById('keywordsContainer')?.addEventListener('click', (event) => {
+      const chip = event.target.closest?.('.keyword-chip');
+      if (!chip) return;
+      const term = chip.querySelector('.chip-text')?.textContent || '';
+      if (chip.classList.contains('excluded')) this.restoreKeyword(term);
+      else this.excludeKeyword(term);
+    });
+    document.getElementById('keywordsContainer')?.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      const chip = event.target.closest?.('.keyword-chip');
+      if (!chip) return;
+      event.preventDefault();
+      const term = chip.querySelector('.chip-text')?.textContent || '';
+      if (chip.classList.contains('excluded')) this.restoreKeyword(term);
+      else this.excludeKeyword(term);
+    });
+
+    // Typed, for a term this posting did not raise but the next one will.
+    const input = document.getElementById('excludeInput');
+    const submit = () => {
+      const value = (input?.value || '').trim();
+      if (!value) return;
+      input.value = '';
+      this.excludeKeyword(value);
+    };
+    document.getElementById('excludeAddBtn')?.addEventListener('click', submit);
+    input?.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') { event.preventDefault(); submit(); }
+    });
+  }
+
   batchUpdateKeywordChips(keywordsObj, cvText, matchedKeywords) {
     // Coerced rather than assumed. Both arguments arrive from
     // generatedDocuments, which is restored from storage and can hold
@@ -4918,7 +5067,9 @@ class ATSTailor {
 
         const escapedKw = this.escapeHtml(kw);
         const state = isMatched ? 'matched' : 'missing';
-        return `<span class="keyword-chip ${state}" title="${isMatched ? 'On your CV' : 'Not on your CV'}">`
+        const where = isMatched ? 'On your CV' : 'Not on your CV';
+        return `<span class="keyword-chip ${state}" role="button" tabindex="0" `
+          + `title="${where}. Click to exclude it from this and future tailoring.">`
           + `<span class="chip-text">${escapedKw}</span>`
           + `<span class="chip-icon">${isMatched ? '✓' : '✗'}</span></span>`;
       }).join('');
@@ -4933,6 +5084,12 @@ class ATSTailor {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  // innerHTML escapes & < > but leaves quotes alone, which is safe in a
+  // text node and not safe inside an attribute.
+  escapeAttr(text) {
+    return this.escapeHtml(text).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   compactCoverageReport(report) {
@@ -5109,9 +5266,13 @@ class ATSTailor {
       };
       
       await this.saveSession();
+      // The account's exclusions before the first tailoring of the
+      // session, not after it: signing in is how a fresh install gets
+      // back the decisions the last one had.
+      try { await this.loadKeywordExclusions(); } catch (e) { console.error('[ATS Tailor] loadKeywordExclusions error:', e); }
       this.showToast('Logged in successfully!', 'success');
       this.updateUI();
-      
+
       const found = await this.detectCurrentJob();
       if (found && this.currentJob) {
         this.tailorDocuments().catch(() => {});   // see tailorBtn above
@@ -5531,9 +5692,19 @@ class ATSTailor {
   sweepKnownRequirements(jobDescription, keywords) {
     const TX = window.KeywordTaxonomy;
     const JDR = window.JDRequirements;
-    const base = keywords && Array.isArray(keywords.all) ? keywords : {
+    const given = keywords && Array.isArray(keywords.all) ? keywords : {
       all: [], highPriority: [], mediumPriority: [], lowPriority: [],
     };
+    // A struck-off requirement is dropped on the way IN as well as on the
+    // way out. This list is what gets sent for injection, so a term
+    // filtered only at render time would be missing from the panel and
+    // written into the document anyway.
+    const base = Object.assign({}, given, {
+      all: ATSTailor.dropExcluded(given.all),
+      highPriority: ATSTailor.dropExcluded(given.highPriority),
+      mediumPriority: ATSTailor.dropExcluded(given.mediumPriority),
+      lowPriority: ATSTailor.dropExcluded(given.lowPriority),
+    });
     // The taxonomy is a plain script with no network and no failure mode,
     // but this runs on the path that produces every tailoring, so it
     // returns what it was given rather than taking the run down with it.
@@ -5581,6 +5752,9 @@ class ATSTailor {
     for (const { label, hits } of swept) {
       const key = TX.keyOf(label);
       if (!key || held.has(key)) continue;
+      // The sweep reads the posting, not the panel, so it would put an
+      // excluded requirement straight back.
+      if (!ATSTailor.dropExcluded([label]).length) continue;
       held.add(key);
       added.push({ label, hits });
     }

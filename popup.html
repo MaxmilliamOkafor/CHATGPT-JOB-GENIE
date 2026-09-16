@@ -715,6 +715,20 @@
               <div class="keyword-chips" id="lowPriorityChips"></div>
             </div>
 
+            <div class="keyword-section exclusions is-empty" id="exclusionsSection">
+              <div class="keyword-section-header">
+                <span class="section-title">Excluded</span>
+                <span class="section-count" id="excludedCount">0</span>
+              </div>
+              <div class="exclusion-add">
+                <input type="text" id="excludeInput" class="exclusion-input" maxlength="60"
+                       placeholder="Keyword you never want tailored in" aria-label="Keyword to exclude">
+                <button type="button" id="excludeAddBtn" class="exclusion-btn">Exclude</button>
+              </div>
+              <div class="keyword-chips" id="excludedChips"></div>
+              <p class="keyword-description" id="exclusionsHint">Kept on this device. Sign in to keep them if the extension is removed.</p>
+            </div>
+
           </div>
 
           <!-- Keyword Coverage Report -->
@@ -1233,6 +1247,7 @@
   <script src="city-dataset.js"></script>
   <script src="universal-location-strategy.js"></script>
   <script src="keyword-taxonomy.js"></script>
+  <script src="keyword-exclusions.js"></script>
   <script src="jd-requirements.js"></script>
   <script src="docx-verify.js"></script>
   <script src="dynamic-score.js"></script>
