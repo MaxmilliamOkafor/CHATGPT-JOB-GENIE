@@ -5869,7 +5869,7 @@ class ATSTailor {
    * Includes retry logic with exponential backoff for transient failures
    * @returns {Promise<Object>} Keywords object with all, highPriority, mediumPriority, lowPriority
    */
-  async performAIKeywordExtraction() {
+  async performAIKeywordExtraction(onAttempt) {
     // Ensure we have job info
     if (!this.currentJob?.description) {
       await this.detectCurrentJob();
@@ -5879,14 +5879,36 @@ class ATSTailor {
       throw new Error('No job description detected');
     }
     
-    // Retry configuration for keyword extraction
+    // A STALL WITH NO END AND NOTHING ON SCREEN IS THE WORST OF BOTH.
+    //
+    // Five attempts, each with a 2.5s pre-call throttle, a 25s timeout
+    // and a 2s post-call throttle, plus backoff between them, is about
+    // 153 seconds of "Step 1/3: AI Extracting keywords..." while the bar
+    // sits still. Nothing says it is retrying, so it reads as frozen --
+    // and the honest answer, that the service is not responding, is the
+    // one thing the screen never shows.
+    //
+    // Two changes. A whole-operation deadline, because the local
+    // extractor is fast and now good: it reads the same sections, uses
+    // the same table and applies the same disambiguation, so waiting two
+    // minutes for the service to maybe answer buys very little. And an
+    // attempt callback, so the step text can say which attempt this is.
     const MAX_RETRIES = 4;
     const BASE_DELAY_MS = 500;
     const MAX_DELAY_MS = 5000;
-    
+    const DEADLINE_MS = 40000;
+    const startedAt = Date.now();
+    const notify = typeof onAttempt === 'function' ? onAttempt : () => {};
+
     let lastError = null;
     
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      if (attempt > 0 && Date.now() - startedAt > DEADLINE_MS) {
+        console.warn('[ATS Tailor] AI extraction gave up after '
+          + Math.round((Date.now() - startedAt) / 1000) + 's; using local extraction');
+        break;
+      }
+      notify(attempt + 1, MAX_RETRIES + 1);
       try {
         // OPENAI THROTTLE: Pre-call delay to reduce API usage (only on first attempt)
         if (attempt === 0) {
@@ -5901,7 +5923,9 @@ class ATSTailor {
         
         // Create abort controller for timeout
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 25000); // 25s timeout (increased)
+        // 15s, not 25s. A request still running after fifteen seconds is
+        // not about to succeed, and the fallback costs milliseconds.
+        const timeout = setTimeout(() => controller.abort(), 15000);
         
         const response = await fetch(`${SUPABASE_URL}/functions/v1/extract-keywords-ai`, {
           method: 'POST',
@@ -7404,7 +7428,13 @@ class ATSTailor {
       let keywords = null;
       let aiFailure = '';
       try {
-        keywords = await this.performAIKeywordExtraction();
+        keywords = await this.performAIKeywordExtraction((attempt, total) => {
+          // So a slow service reads as a slow service rather than a freeze.
+          updateProgress(attempt === 1 ? 10 : 10 + attempt * 2,
+            attempt === 1
+              ? 'Step 1/3: Extracting keywords from job description...'
+              : 'Step 1/3: Service slow, retrying (' + attempt + ' of ' + total + ')...');
+        });
         console.log('[ATS Tailor] Step 1 - AI Extracted keywords:', keywords?.all?.length || 0);
       } catch (aiError) {
         aiFailure = (aiError && aiError.message) || String(aiError);

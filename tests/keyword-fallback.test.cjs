@@ -30,7 +30,7 @@ t('and says local extraction was tried too',
   /Local extraction found none either/.test(step1), 'looks like the fallback never ran');
 
 // ---- 2. an empty result must be retried, not returned as an answer ----
-const ai=(/  async performAIKeywordExtraction\(\)[\s\S]*?\n  \}/m.exec(src)||[''])[0];
+const ai=(/  async performAIKeywordExtraction\([^)]*\)[\s\S]*?\n  \}/m.exec(src)||[''])[0];
 t('AI extraction was found', ai.length>500);
 t('an empty response is retried while attempts remain',
   /!keywords\.all\.length && attempt < MAX_RETRIES/.test(ai), 'a transient empty became a hard failure');
@@ -58,6 +58,37 @@ t('an earlier empty entry is dropped rather than left to be replayed',
   /keywordCache\.delete\(jobUrl\)/.test(local), 'a poisoned entry would survive');
 t('the short-description guard still returns empty without caching',
   /jobDescription\.length < 50[\s\S]{0,120}return \{ all: \[\]/.test(local));
+
+// ── A STALL WITH NO END AND NOTHING ON SCREEN ────────────────────────
+//
+// Five attempts, each with a 2.5s pre-call throttle, a 25s timeout and a
+// 2s post-call throttle, plus backoff, is about 153 seconds of "Step 1/3"
+// while the bar sits still. Nothing said it was retrying, so it read as
+// frozen -- and the honest answer, that the service was not responding,
+// was the one thing the screen never showed.
+console.log('\nTHE WAIT IS BOUNDED, AND IT SAYS SO');
+{
+  const ai = (/  async performAIKeywordExtraction\([\s\S]*?\n  \}/m.exec(src) || [''])[0];
+  t('  the whole operation has a deadline', /const DEADLINE_MS = \d+/.test(ai),
+    'the retry loop can still run for minutes');
+  t('  ...checked before each retry',
+    /Date\.now\(\) - startedAt > DEADLINE_MS/.test(ai), 'the deadline is never consulted');
+  t('  ...and it falls through to local extraction rather than failing',
+    /break;/.test(ai), 'it would throw instead of using the fallback');
+  const deadline = Number((/const DEADLINE_MS = (\d+)/.exec(ai) || [])[1]);
+  t('  the deadline is a wait a person will tolerate',
+    deadline > 0 && deadline <= 60000, deadline + 'ms');
+  const timeout = Number((/controller\.abort\(\), (\d+)\)/.exec(ai) || [])[1]);
+  t('  and one request cannot hold the run for half a minute',
+    timeout > 0 && timeout <= 20000, timeout + 'ms');
+
+  t('  the caller is told which attempt is running',
+    /performAIKeywordExtraction\(\(attempt, total\) =>/.test(src),
+    'the step text cannot report progress');
+  t('  ...and the step text says it is retrying, not that it is working',
+    /Service slow, retrying/.test(src), 'a retry still reads as a freeze');
+}
+
 
 console.log('\n'+PASS+' passed, '+FAIL+' failed');
 process.exit(FAIL?1:0);
