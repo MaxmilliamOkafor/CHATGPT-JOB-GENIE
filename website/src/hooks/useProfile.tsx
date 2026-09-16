@@ -4,6 +4,7 @@ import { useAuth } from './useAuth';
 import { toast } from 'sonner';
 
 import { normalizeWorkExperience } from '@/lib/workExperienceNormalization';
+import { mergeConcurrentSkills } from '@/lib/skillsMerge';
 
 export interface Profile {
   id: string;
@@ -57,6 +58,8 @@ export interface Profile {
   preferred_ai_provider: string | null;
   openai_enabled: boolean;
   kimi_enabled: boolean;
+  /** Stored exactly as written by this site and the extension: never reordered or deduplicated. */
+  excluded_keywords: any[];
 }
 
 export function useProfile() {
@@ -101,7 +104,9 @@ export function useProfile() {
         setProfile({
           ...data,
           authorized_countries: (data.authorized_countries as string[]) || [],
-          work_authorized_countries: ((data as any).work_authorized_countries as string[]) || ['IE'],
+          // No seeded default: an empty picker means "not stated", and Citizenship
+          // carries any EU/EEA claim on its own.
+          work_authorized_countries: ((data as any).work_authorized_countries as string[]) || [],
           professional_experience: normalizedWorkExp,
           relevant_projects: Array.isArray((data as any).relevant_projects) ? (data as any).relevant_projects : [],
           education: Array.isArray(data.education) ? data.education : [],
@@ -122,6 +127,9 @@ export function useProfile() {
           preferred_ai_provider: (data as any).preferred_ai_provider || 'openai',
           openai_enabled: (data as any).openai_enabled ?? true,
           kimi_enabled: (data as any).kimi_enabled ?? true,
+          excluded_keywords: Array.isArray((data as any).excluded_keywords)
+            ? ((data as any).excluded_keywords as any[])
+            : [],
         });
       }
     } catch (error) {
@@ -139,6 +147,26 @@ export function useProfile() {
         ...updates,
         ...(updates.professional_experience ? { professional_experience: normalizeWorkExperience(updates.professional_experience as any) } : {}),
       };
+
+      // Skills are written from two places: this page and the browser extension.
+      // A blind write from a page loaded before the extension added a skill would
+      // silently delete it, so anything present in the database but absent from
+      // the copy this page started with is merged back in. Skills the user
+      // removed in this session stay removed.
+      if (Array.isArray(safeUpdates.skills)) {
+        const { data: fresh, error: readError } = await supabase
+          .from('profiles')
+          .select('skills')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        if (readError) throw readError;
+
+        const remote = Array.isArray((fresh as any)?.skills) ? ((fresh as any).skills as any[]) : [];
+        const local = safeUpdates.skills as any[];
+        safeUpdates.skills = mergeConcurrentSkills(profile.skills || [], local, remote);
+      }
+
+
 
       const { error } = await supabase
         .from('profiles')

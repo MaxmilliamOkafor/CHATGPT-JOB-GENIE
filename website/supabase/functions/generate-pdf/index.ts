@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { normaliseLocation } from "../_shared/location.ts";
 import {
   PDFDocument,
   rgb,
@@ -82,6 +83,26 @@ interface ResumeData {
   customFileName?: string;
   candidateName?: string;
 }
+
+const normaliseSkillGroups = (groups: Array<{ label: string; items: string[] }>) => {
+  const byLabel = new Map<string, { label: string; items: string[] }>();
+  const seenItems = new Set<string>();
+  for (const group of groups) {
+    const label = String(group?.label || "").trim();
+    if (!label) continue;
+    const key = label.toLowerCase();
+    const current = byLabel.get(key) || { label, items: [] };
+    for (const raw of Array.isArray(group?.items) ? group.items : []) {
+      const item = String(raw || "").trim();
+      const itemKey = item.toLowerCase().replace(/\s*\(.*\)$/, "").trim();
+      if (!item || seenItems.has(itemKey) || current.items.length >= 10) continue;
+      current.items.push(item);
+      seenItems.add(itemKey);
+    }
+    byLabel.set(key, current);
+  }
+  return [...byLabel.values()].filter((group) => group.items.length > 0);
+};
 
 // ============================================================
 // SANITIZATION / DATE-STRIP HELPERS (preserved verbatim)
@@ -770,9 +791,10 @@ function renderResume(
   if (data.skills?.secondary?.length)
     skillGroups.push({ label: "Additional", items: data.skills.secondary });
 
-  if (skillGroups.length > 0) {
+  const groupedSkills = normaliseSkillGroups(skillGroups);
+  if (groupedSkills.length > 0) {
     r.drawSectionHeader("Technical Skills");
-    r.drawSkillsBlock(skillGroups);
+    r.drawSkillsBlock(groupedSkills);
   }
 
   if (data.projects && data.projects.length > 0) {
@@ -985,7 +1007,7 @@ serve(async (req) => {
     let docxBytes: Uint8Array;
     if (sanitizedData.type === "resume") {
       const contact: ContactInfo = {
-        location: cleanLocation(sanitizedData.personalInfo.location) || "Dublin, IE",
+        location: normaliseLocation(cleanLocation(sanitizedData.personalInfo.location)),
         phone: sanitizedData.personalInfo.phone,
         email: sanitizedData.personalInfo.email,
         linkedin: sanitizedData.personalInfo.linkedin,
@@ -1014,7 +1036,7 @@ serve(async (req) => {
       docxBytes = await buildResumeDocxBytes(norm);
     } else if (sanitizedData.type === "cover_letter" && sanitizedData.coverLetter) {
       const contact: ContactInfo = {
-        location: cleanLocation(sanitizedData.personalInfo.location) || "Dublin, IE",
+        location: normaliseLocation(cleanLocation(sanitizedData.personalInfo.location)),
         phone: sanitizedData.personalInfo.phone,
         email: sanitizedData.personalInfo.email,
         linkedin: sanitizedData.personalInfo.linkedin,
@@ -1112,6 +1134,7 @@ function profileToResumeData(profile: Record<string, unknown>): ResumeData {
     ? (profile.education as Array<Record<string, unknown>>).map((edu) => ({
         degree: (edu.degree as string) || "",
         school: (edu.institution as string) || (edu.school as string) || "",
+        // Education dates are stored for application forms, never printed on CVs.
         dates: "",
         gpa: (edu.gpa as string) || "",
       }))
@@ -1191,7 +1214,7 @@ async function handleStructuredCvRequest(body: StructuredCvRequest): Promise<Res
 
     if (type === "resume" && structuredCv) {
       const locationHeader = buildLocationHeaderFromStructuredCv(pInfo);
-      const loc = cleanLocation(locationHeader || pInfo.location || "") || "Dublin, IE";
+      const loc = normaliseLocation(cleanLocation(locationHeader || pInfo.location || ""));
       const contact: ContactInfo = {
         location: loc, phone: pInfo.phone, email: pInfo.email,
         linkedin: pInfo.linkedin, github: pInfo.github, portfolio: pInfo.portfolio,
@@ -1225,7 +1248,7 @@ async function handleStructuredCvRequest(body: StructuredCvRequest): Promise<Res
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
-      const loc = cleanLocation(pInfo.location || "") || "Dublin, IE";
+      const loc = normaliseLocation(cleanLocation(pInfo.location || ""));
       const contact: ContactInfo = {
         location: loc, phone: pInfo.phone, email: pInfo.email,
         linkedin: pInfo.linkedin, github: pInfo.github, portfolio: pInfo.portfolio,
@@ -1273,7 +1296,7 @@ async function handleRawContentRequest(body: {
 }): Promise<Response> {
   const {
     content,
-    type = "cv",
+    type: rawType = "cv",
     tailoredLocation,
     jobTitle,
     fileName,
@@ -1281,6 +1304,14 @@ async function handleRawContentRequest(body: {
     lastName,
     summary: passedSummary,
   } = body;
+
+  // A CV ASKED FOR BY ANOTHER NAME IS STILL A CV.
+  // Only the literal "cv" reached the resume renderer, so a caller sending
+  // "resume" (the extension's own wording) had a full CV rendered through the
+  // cover-letter path: letterhead, "Dear Hiring Manager" and every section
+  // flattened into paragraphs. Type names are normalised instead.
+  const t = String(rawType).toLowerCase().replace(/[^a-z]/g, "");
+  const type = t === "coverletter" || t === "letter" ? "coverletter" : "cv";
 
   console.log(
     "[generate-pdf] Raw content request, tailoredLocation:",
@@ -1455,13 +1486,19 @@ async function handleRawContentRequest(body: {
         }
       }
     }
-    if (tailoredLocation) {
-      const cleanTL = tailoredLocation
+    // THE DOCUMENT'S OWN CONTACT LINE WINS.
+    // The reviewed text already carries the candidate's saved location, while
+    // tailoredLocation has arrived from callers holding the posting's city
+    // (a header reading "Boston, US" for a Dublin-based candidate). It is now
+    // only a fallback for text that carries no location at all, and there is
+    // no hardcoded default: an absent location prints nothing rather than a
+    // guess.
+    if (!contactLoc && tailoredLocation) {
+      contactLoc = tailoredLocation
         .replace(/\s*\|?\s*open\s+to\s+relocation\s*/gi, "")
         .trim();
-      if (cleanTL) contactLoc = cleanTL;
     }
-    if (!contactLoc) contactLoc = "Dublin, IE";
+    contactLoc = normaliseLocation(contactLoc);
 
     // ---- Parse links line ----
     let liUrl = "", ghUrl = "", portUrl = "";
@@ -1690,7 +1727,13 @@ async function handleRawContentRequest(body: {
 
       if (section.type.includes("EDUCATION")) {
         const edus: EducationEntry[] = [];
-        for (const line of section.content) {
+        const content = section.content.filter((line) => {
+          const text = line.trim();
+          return !/^(?:class\s+of\s+)?(?:19|20)\d{2}(?:\s*[-–—]\s*(?:19|20)\d{2})?$/i.test(text) &&
+            !/^(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(?:19|20)\d{2}(?:\s*[-–—]\s*(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(?:19|20)\d{2})?$/i.test(text);
+        });
+        for (let i = 0; i < content.length; i++) {
+          const line = content[i];
           if (line.includes("|")) {
             const parts = line.split("|").map((p) => p.trim());
             edus.push({
@@ -1699,7 +1742,9 @@ async function handleRawContentRequest(body: {
               dates: "",
             });
           } else {
-            edus.push({ degree: line, school: "", dates: "" });
+            const school = content[i + 1] && !content[i + 1].includes("|") ? content[i + 1] : "";
+            edus.push({ degree: line, school, dates: "" });
+            if (school) i++;
           }
         }
         norm.education = edus;
@@ -2129,10 +2174,11 @@ async function buildResumeDocxBytes(data: NormalisedResume): Promise<Uint8Array>
   if (data.skillGroups?.length) skillGroups.push(...data.skillGroups);
   if (data.skills?.primary?.length) skillGroups.push({ label: "Technical", items: data.skills.primary });
   if (data.skills?.secondary?.length) skillGroups.push({ label: "Additional", items: data.skills.secondary });
-  if (skillGroups.length) {
+  const groupedSkills = normaliseSkillGroups(skillGroups);
+  if (groupedSkills.length) {
 
     children.push(...docxSectionHeader("Technical Skills"));
-    children.push(...docxSkills(skillGroups));
+    children.push(...docxSkills(groupedSkills));
   }
 
   if (data.projects?.length) {
