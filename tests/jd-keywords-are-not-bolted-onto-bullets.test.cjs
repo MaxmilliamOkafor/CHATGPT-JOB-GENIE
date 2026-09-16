@@ -201,13 +201,13 @@ console.log('\nA GROUPED SKILLS SECTION KEEPS ITS GROUPS');
       o.tailoredCV.indexOf(g) !== -1, 'a group line was rewritten or flattened');
   }
   t('  the new keywords arrive on ONE new labelled line',
-    /\nAdditional Skills: /.test(o.tailoredCV), 'no Additional Skills line');
-  const aline = (o.tailoredCV.match(/^Additional Skills: (.*)$/m) || [])[1] || '';
+    /\n(?:Additional Skills|Core Competencies): /.test(o.tailoredCV), 'no line for the uncategorised terms');
+  const aline = (o.tailoredCV.match(/^(?:Additional Skills|Core Competencies): (.*)$/m) || [])[1] || '';
   t('  ...carrying the evidenced keywords',
     REAL.every((k) => aline.toLowerCase().indexOf(k) !== -1), aline);
   t('  and a keyword already in a group is not added again',
-    !/Additional Skills: .*\bSQL\b/i.test(o.tailoredCV)
-      && !/Additional Skills: .*Python/i.test(o.tailoredCV), aline);
+    !/(?:Additional Skills|Core Competencies): .*\bSQL\b/i.test(o.tailoredCV)
+      && !/(?:Additional Skills|Core Competencies): .*Python/i.test(o.tailoredCV), aline);
 }
 
 console.log('\nWITH NO PROFILE TO CHECK AGAINST, THE POSTING IS STILL THE SOURCE');

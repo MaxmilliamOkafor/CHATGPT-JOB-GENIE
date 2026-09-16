@@ -1367,6 +1367,121 @@
     return { text: lines.slice(0, nameAt).concat(kept, lines.slice(end)).join('\n'), removed };
   }
 
+  /**
+   * THE TITLE IN THE HEADLINE IS NOT THE TITLE IN THE SUMMARY.
+   *
+   * A real scan of a delivered CV reported "The job title 'Customer
+   * Support Coach' was not found in your resume". It was found: line two
+   * of the text layer, literal selectable text, one clean hit. What the
+   * scanner means is narrower. It compares the posting's title against
+   * the titles it read out of the employment history, plus the summary,
+   * and a line standing on its own under the name parses as part of the
+   * name and contact block rather than as a position.
+   *
+   * So the title goes in the summary too, in the one form that does not
+   * claim a job that was never held. Only when the history does NOT
+   * already contain it: a candidate who has held the title is found
+   * through the employment block, and writing "candidate" over a genuine
+   * match sells it short.
+   */
+  function ensureTitleInSummary(cvText, jdTitle, jdCompany) {
+    const text = String(cvText || '');
+    const title = normaliseJobTitle(jdTitle);
+    if (!text || !title) return { text, added: false };
+    const _same = (a, b) => {
+      const n = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const A = n(a), B = n(b);
+      return !!A && !!B && (A === B || A.indexOf(B) === 0 || B.indexOf(A) === 0);
+    };
+    if (_same(title, jdCompany)) return { text, added: false };
+
+    const lines = text.split('\n');
+
+    // The summary's extent.
+    let head = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (SUMMARY_HEADER_RE.test(lines[i].trim())) { head = i; break; }
+    }
+    if (head === -1) return { text, added: false };
+    let end = lines.length;
+    for (let i = head + 1; i < lines.length; i++) {
+      if (_ANY_HEAD.test(lines[i])) { end = i; break; }
+    }
+    let body = -1;
+    for (let i = head + 1; i < end; i++) {
+      if (lines[i].trim()) { body = i; break; }
+    }
+    if (body === -1) return { text, added: false };
+
+    // A SENIORITY WORD IS NOT A DIFFERENT PROFESSION.
+    //
+    // Without this, a Data Analyst applying for Senior Data Analyst got
+    // "Senior Data Analyst candidate with a background as a Software
+    // Engineer" bolted onto a summary that already opened "Data Analyst
+    // with five years in credit risk analytics" -- which is worse than
+    // the red X it was clearing, and led on the least relevant of his
+    // two real titles.
+    const _LEVEL = /^(?:senior|sr\.?|junior|jr\.?|lead|principal|staff|associate|assistant|deputy|chief|head of|entry[- ]level|graduate|trainee|intern)\s+/i;
+    const core = (s) => {
+      let out = String(s || '').trim();
+      for (let i = 0; i < 2 && _LEVEL.test(out); i++) out = out.replace(_LEVEL, '').trim();
+      return out;
+    };
+    const body14 = lines.slice(head + 1, end).join(' ').toLowerCase();
+    // Already said, in the summary itself, under this name or the same
+    // title without its level word.
+    if (body14.indexOf(title.toLowerCase()) !== -1
+      || (core(title) && body14.indexOf(core(title).toLowerCase()) !== -1)) {
+      return { text, added: false };
+    }
+
+    // The held titles, read the way ensureHeadline reads them, and the
+    // employers alongside them.
+    //
+    // A COMPANY NAME IS NOT A JOB TITLE, and a scrape hands one over
+    // often enough that ensureHeadline already refuses it. Comparing
+    // against jdCompany is not enough here: the caller does not always
+    // have one, and a CV whose history names Meta is all the evidence
+    // needed that "Meta" is not the role. Without this the summary
+    // opened "Meta candidate with a background as a Software Engineer."
+    let inExp = false;
+    const held = [];
+    const employers = [];
+    for (const l of lines) {
+      if (_EXP_HEAD.test(l)) { inExp = true; continue; }
+      if (_ANY_HEAD.test(l)) { inExp = false; continue; }
+      if (!inExp || !l.trim() || /^\s*[-•*]/.test(l)) continue;
+      if (ROLE_DATE_RE.test(l) || /\b(?:19|20)\d{2}\b/.test(l)) {
+        // "Meta January 2023 - Present", or "Meta | Engineer | 2023 -".
+        for (const part of l.split('|')) {
+          const name = part.replace(ROLE_DATE_RE, '')
+            .replace(/\b(?:19|20)\d{2}\b.*$/, '')
+            .replace(/[-–—,]+\s*$/, '').trim();
+          if (name && name.split(/\s+/).length <= 5) employers.push(name);
+        }
+        continue;
+      }
+      if (_TITLE_WORD.test(l) && l.trim().split(/\s+/).length <= 7) {
+        const clean = l.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        if (clean && held.indexOf(clean) === -1) held.push(clean);
+      }
+    }
+    // Held it, under this name or a longer one ("Software Engineer II"
+    // answers a posting for "Software Engineer"). The history states it
+    // with dates, which is stronger than anything the summary could say.
+    if (held.some((h) => _same(h, title) || _same(core(h), core(title)))) {
+      return { text, added: false };
+    }
+    if (employers.some((e) => _same(e, title))) return { text, added: false };
+    if (!held.length) return { text, added: false };
+
+    const from = held[0];
+    const article = /^[aeiou]/i.test(from) ? 'an' : 'a';
+    const sentence = title + ' candidate with a background as ' + article + ' ' + from + '.';
+    lines[body] = sentence + ' ' + lines[body].trim();
+    return { text: lines.join('\n'), added: true, sentence };
+  }
+
   function ensureHeadline(cvText, jdTitle, jdCompany) {
     const text = String(cvText || '');
     if (!text) return { text, added: false };
@@ -3361,6 +3476,18 @@
     if (at === -1) return null;
     const opening = String(lines[at + 1] || '').split(/\s+/).slice(0, 14).join(' ');
     if (!opening) return null;
+    // A SUMMARY THAT LEADS WITH THE TARGET IS NOT MIS-POSITIONED.
+    //
+    // This check is about what the first line ANNOUNCES. An opening of
+    // "Reinsurance Analyst candidate with a background as a Software
+    // Engineer" announces the right profession and then says, truthfully,
+    // where the candidate is coming from. Matching the first profession
+    // anywhere in fourteen words read that as a Software Engineer
+    // opening and told the owner to fix a sentence that was already
+    // doing the thing this exists to ask for.
+    if (new RegExp('^\\s*' + title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(opening)) {
+      return null;
+    }
     const m = opening.match(_PROFESSIONS);
     if (!m) return null;
     const claimed = m[0];
@@ -5354,6 +5481,10 @@
   // in this system, holding exactly the blend of process and people
   // skills the relocation below would tear apart.
   const _SOFT_LABEL_RE = /^(soft skills?|interpersonal|personal skills?)$/i;
+  // The line that holds terms the taxonomy has no category for. "Additional
+  // Skills" is the older name and still appears on CVs this has already
+  // written, so both are recognised.
+  const _BUCKET_LABEL_RE = /^(additional skills?|core competenc(?:y|ies)|other skills?)$/i;
   const _MAX_PER_GROUP = 10;
   // What a soft skill actually is. Anything else under a soft-skills
   // label is a tool, a process or a domain -- real keywords that belong
@@ -5533,6 +5664,58 @@
             relocated.filter(_isAsked).length)).join(', ');
       }
     }
+    // ── A LABEL OVER ONE WORD IS NOT A GROUP ────────────────────────
+    //
+    // A real CV shipped:
+    //
+    //   Soft Skills: Empathy
+    //
+    // One word under a heading of its own. Every line above it carried
+    // four to ten members, so the eye stops there, and what it finds is
+    // a box somebody ticked. On a coaching posting, where the whole
+    // question is judgement about people, that line argues against the
+    // candidate more effectively than its absence would.
+    //
+    // Narrow on purpose. "Programming: Python" is an ordinary line and
+    // is left alone. This merges a BEHAVIOURAL singleton only, and only
+    // into another line of the same kind, because the alternative --
+    // folding it into whichever line comes next -- files Empathy under
+    // Cloud & DevOps.
+    {
+      const current = [];
+      for (let i = head + 1; i < end; i++) {
+        if (lines[i] === null) continue;
+        for (const part of String(lines[i]).split('\n')) {
+          const m = part.match(/^(\s*)([A-Za-z][A-Za-z &/+.]{1,40}?)(\s*:\s*)(\S.*)$/);
+          if (m) current.push({ at: i, raw: part, indent: m[1], label: m[2], sep: m[3], items: m[4] });
+        }
+      }
+      const kindOf = (label) => (_SOFT_LABEL_RE.test(label.trim()) ? 'soft'
+        : (_BUCKET_LABEL_RE.test(label.trim()) ? 'bucket' : ''));
+      const countOf = (items) => items.split(/,\s*/).map((s) => s.trim()).filter(Boolean).length;
+      for (const g of current) {
+        if (countOf(g.items) !== 1) continue;
+        if (!kindOf(g.label)) continue;
+        // The bucket first: a behavioural term the table had no category
+        // for is already sitting there, so that is where its peer goes.
+        const target = current.find((o) => o !== g && lines[o.at] !== null
+          && kindOf(o.label) === 'bucket')
+          || current.find((o) => o !== g && lines[o.at] !== null
+            && kindOf(o.label) === 'soft');
+        if (!target) continue;
+        const item = g.items.trim().replace(/[.;,]+$/, '');
+        const merged = target.indent + target.label + target.sep
+          + target.items.replace(/\s*,\s*$/, '').trimEnd() + ', ' + item;
+        lines[target.at] = String(lines[target.at]).split('\n')
+          .map((p) => (p === target.raw ? merged : p)).join('\n');
+        target.items = target.items.replace(/\s*,\s*$/, '').trimEnd() + ', ' + item;
+        target.raw = merged;
+        const rest = String(lines[g.at]).split('\n').filter((p) => p !== g.raw);
+        lines[g.at] = rest.length ? rest.join('\n') : null;
+        moved++;
+      }
+    }
+
     return {
       text: lines.filter((l) => l !== null).join('\n'),
       dropped, moved, samples: samples.slice(0, 6),
@@ -5543,13 +5726,29 @@
     let list = [];
     if (Array.isArray(languages)) list = languages;
     else if (typeof languages === 'string' && languages.trim()) list = languages.split(/[,;]+/);
+    // "NATIVE" IS A STATEMENT ABOUT WHERE SOMEONE IS FROM.
+    //
+    // A real CV shipped "English (native), French (native), Spanish
+    // (advanced), German (advanced)". Two claims of native fluency name
+    // the candidate's origin before a reader reaches the first bullet,
+    // in a skills section, where it buys nothing: what an employer needs
+    // to know is whether the person can work in the language, and
+    // "fluent" says that without saying anything else.
+    //
+    // The level is kept. Only this one word is replaced, and only where
+    // it is the whole level, so "near-native" is left as written.
+    const _NATIVE = /^(native|native speaker|mother tongue|first language|c2)$/i;
+    const level = (v) => (_NATIVE.test(v.trim()) ? 'fluent' : v.toLowerCase());
     return list.map((l) => {
       if (l && typeof l === 'object') {
         const name = String(l.language || l.name || '').trim();
-        const level = String(l.proficiency || l.level || '').trim();
-        return name ? (level ? name + ' (' + level.toLowerCase() + ')' : name) : '';
+        const lvl = String(l.proficiency || l.level || '').trim();
+        return name ? (lvl ? name + ' (' + level(lvl) + ')' : name) : '';
       }
-      return String(l || '').trim();
+      // A plain string arrives already formatted, "French (native)".
+      return String(l || '').trim()
+        .replace(/\(\s*([^)]+)\s*\)\s*$/, (m, inner) => (_NATIVE.test(inner.trim())
+          ? '(fluent)' : m));
     }).filter(Boolean).slice(0, 6);
   }
 
@@ -5566,6 +5765,17 @@
     }
     const langs = _normaliseLanguages(languages);
     const lines = text.split('\n');
+
+    // Whatever branch below runs, and whether or not the line is
+    // rewritten at all, no language on this page is declared native.
+    // _normaliseLanguages handles the copy this pass composes; a line
+    // already on the CV, from an earlier run or from the writing model,
+    // never reaches it.
+    for (let i = 0; i < lines.length; i++) {
+      if (!/^\s*Languages\s*(?:&|and)?\s*(?:Citizenship)?\s*:/i.test(lines[i])) continue;
+      lines[i] = lines[i].replace(/\(\s*(native speakers?|native|mother tongue|first language)\s*\)/gi,
+        '(fluent)');
+    }
 
     // The skills section's extent, line-based (see the injector: a
     // regex lookahead under /i cannot find the end of a section).
@@ -7411,6 +7621,41 @@
               + 'and a sentence you write yourself will always beat one assembled.',
           });
         }
+        // THE TARGET ROLE, NAMED IN THE SUMMARY.
+        //
+        // Here and not with the headline, which is where this was first
+        // wired. repairSummary runs below that point, read the sentence
+        // this adds as the summary claiming a title the employment block
+        // does not contain, and rebuilt the whole paragraph around a
+        // company name: "Meta candidate with a background as a Software
+        // Engineer". Correct behaviour from a check that had no way to
+        // tell a claim from a candidacy, and the wrong place to have
+        // written.
+        //
+        // NOT WIRED IN. Left here, next to the passes it would have to
+        // sit between, because that is the decision and this is where it
+        // gets made.
+        //
+        // Prepending the target role to every summary that does not
+        // already name it costs three things this audit currently does.
+        // repairSummary reads the new sentence as a claim to an unheld
+        // title and rebuilds the paragraph around it.
+        // summaryNamesAnotherProfession stops firing altogether, because
+        // every summary now leads with the target, so the warning that
+        // says "you led with Software Engineer on a Reinsurance
+        // application and you hold Data Analyst" is never reached. And a
+        // summary that was already specific and quantified gets a
+        // sentence bolted to its front whether or not it needed one.
+        //
+        // What it buys is one scanner heuristic: a Jobscan-style "job
+        // title match", which reads titles out of the employment block
+        // and the summary and does not count a headline. Real applicant
+        // tracking systems do not reject on it, and a recruiter
+        // searching the ATS by title is searching full text, which the
+        // headline already satisfies.
+        //
+        // The function is exported and tested. Wiring it in is one line
+        // here, and it is the owner's call, not a default.
         const c = clampSummary(outCV, { maxChars: 220 });
         if (c.clamped || c.removedSentences > 0) {
           outCV = c.text;
@@ -7815,6 +8060,7 @@
     ensureCitizenshipLine, ensureTruthfulLocation,
     normaliseSkillLabels,
     sanitiseSkillsSection,
+    ensureTitleInSummary,
     echoJobTitle, normaliseJobTitle, tidyHeader, coverLetterRestatesCv, scrubRawTitle, repairSummary, _historyFacts, scoreSevenFilters, summaryNamesAnotherProfession, summaryReadsBroken, sortExperienceByStartDate,
     firstSixSecondsCheck,
     // v2

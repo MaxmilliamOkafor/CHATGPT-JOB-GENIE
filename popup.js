@@ -6293,6 +6293,25 @@ class ATSTailor {
         'humble', 'curious', 'curiosity', 'resilient', 'resilience',
         'adaptable', 'adaptability', 'personable', 'hard-working', 'hardworking',
         'ambitious', 'entrepreneurial', 'pragmatic', 'hungry', 'bias for action',
+        // EQUIPMENT IS NOT A CAPABILITY.
+        //
+        // A real CV shipped a skills line ending "... Learning Agility,
+        // Internet". The posting did ask for it, in the sense that
+        // remote roles say "reliable internet connection required", and
+        // nothing downstream could tell that apart from a tool the
+        // candidate knows. So it was placed, in a list, beside
+        // Kubernetes.
+        //
+        // These describe what the job needs present in a room, not what
+        // the person can do, and a skills section is the one place they
+        // can never belong. Same family as "office" and "remote work",
+        // already above.
+        'internet', 'internet connection', 'reliable internet', 'high-speed internet',
+        'high speed internet', 'stable internet', 'broadband', 'wifi', 'wi-fi',
+        'laptop', 'computer', 'desktop', 'webcam', 'web cam', 'headset',
+        'smartphone', 'mobile phone', 'cell phone', 'landline',
+        'quiet workspace', 'dedicated workspace', 'home office', 'workspace',
+        'reliable transportation', 'own transport', 'own vehicle',
       ]);
       // "Reliability" used to sit in this list, read as the soft sense a
       // posting means when it calls a person reliable. On a platform or
@@ -7341,7 +7360,7 @@ class ATSTailor {
               // fault a reader sees immediately.
               let existing = -1;
               for (let i = head + 1; i < end; i++) {
-                if (/^Additional Skills\s*:/i.test(String(cvLines[i] || '').trim())) {
+                if (/^(?:Additional Skills|Core Competencies)\s*:/i.test(String(cvLines[i] || '').trim())) {
                   existing = i;
                   break;
                 }
@@ -7352,7 +7371,7 @@ class ATSTailor {
               } else {
                 // A NEW LINE IS NAMED FOR WHAT IS ON IT.
                 //
-                // "Additional Skills" announces that the terms below it
+                // "Additional Skills" announced that the terms below it
                 // were added afterwards, which is the one thing a
                 // skills line should not say. The taxonomy already
                 // knows each term's category, so a term with no
@@ -7365,7 +7384,13 @@ class ATSTailor {
                 const byCategory = new Map();
                 for (const term of leftover) {
                   const cat = (TXC && typeof TXC.categoryOf === 'function'
-                    && TXC.categoryOf(term)) || 'Additional Skills';
+                    // "Core Competencies" is the last resort, for a term
+                    // the table has no category for at all. It is a
+                    // heading a reader has seen on a hundred CVs, which
+                    // "Additional Skills" is not: that one says the
+                    // terms under it were an afterthought, and a
+                    // recruiter reads it exactly that way.
+                    && TXC.categoryOf(term)) || 'Core Competencies';
                   if (!byCategory.has(cat)) byCategory.set(cat, []);
                   byCategory.get(cat).push(term);
                 }

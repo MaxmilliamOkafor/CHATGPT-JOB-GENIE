@@ -30,7 +30,11 @@ for (const f of ['docx-generator.js', 'content-quality-engine.js', 'recruiter-au
 }
 const RA = global.RecruiterAudit;
 
-const LANGS = 'English (native), French (native), Spanish (advanced), German (advanced)';
+// The profile says native; the page never does. "Native" in two
+// languages names where someone is from, in a skills section, where
+// what an employer needs is whether they can work in the language.
+const LANGS_IN = 'English (native), French (native), Spanish (advanced), German (advanced)';
+const LANGS = 'English (fluent), French (fluent), Spanish (advanced), German (advanced)';
 const cvWith = (skillsLines) => ['Maxmilliam Okafor', 'Data Analyst',
   'Dublin, IE | maxokafordev@gmail.com', '',
   'PROFESSIONAL SUMMARY', 'Analyst with five years in data analysis.', '',
@@ -52,7 +56,7 @@ console.log('THE MISLABELLED LINE IS RELABELLED, AND THE REAL ONE IS BUILT');
   const lines = o.cvText.split('\n');
   const at = lines.findIndex((l) => l.trim() === 'TECHNICAL SKILLS');
   t('  the first skills line is the real Languages & Citizenship',
-    /^Languages & Citizenship: English \(native\), French \(native\), Spanish \(advanced\), German \(advanced\) - EU Citizen$/.test(lines[at + 1]),
+    /^Languages & Citizenship: English \(fluent\), French \(fluent\), Spanish \(advanced\), German \(advanced\) - EU Citizen$/.test(lines[at + 1]),
     JSON.stringify(lines[at + 1]));
   t('  the programming list is relabelled Programming',
     lines.slice(at, at + 5).some((l) => /^Programming: Python, SQL, Java, TypeScript, C\+\+$/.test(l)),
@@ -120,7 +124,7 @@ console.log('\nA THIN GENUINE LINE IS UPGRADED TO THE FULL SET');
     'Programming: Python, SQL']);
   const line = o.cvText.split('\n').find((l) => /^Languages & Citizenship:/.test(l)) || '';
   t('  all four languages arrive',
-    /French \(native\)/.test(line) && /Spanish \(advanced\)/.test(line)
+    /French \(fluent\)/.test(line) && /Spanish \(advanced\)/.test(line)
       && /German \(advanced\)/.test(line), JSON.stringify(line));
   t('  the claim survives the upgrade', / - EU Citizen$/.test(line), JSON.stringify(line));
   t('  and there is still exactly one line',

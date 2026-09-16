@@ -105,7 +105,7 @@ test('the existing group lines survive byte for byte', () => {
   const out = popup.fastKeywordInjection(CV, {all: ['invoicing', 'payouts']}, ['invoicing', 'payouts']);
   assert.ok(out.tailoredCV.includes('Programming: Python, TypeScript, Go'));
   assert.ok(out.tailoredCV.includes('Cloud & DevOps: AWS, Docker'));
-  assert.match(out.tailoredCV, /Additional Skills: .*invoicing/);
+  assert.match(out.tailoredCV, /(?:Additional Skills|Core Competencies): .*invoicing/);
   // and only the skills section changed
   assert.ok(out.tailoredCV.includes('- Designed payment APIs across three regions.'));
   assert.ok(out.tailoredCV.endsWith('EDUCATION\nTrinity College Dublin'));
