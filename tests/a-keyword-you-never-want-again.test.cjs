@@ -135,6 +135,85 @@ console.log('AN EXCLUSION COVERS THE REQUIREMENT, NOT THE SPELLING');
       (DISK[X.STORAGE_KEY] || []).length === 1, JSON.stringify(DISK));
   }
 
+  console.log('\nAND A TERM EXCLUDED ON THE WEBSITE STILL COVERS ITS SYNONYMS');
+  {
+    // The site has no copy of the 918-group table, so its editor stores a
+    // slug for an id and only the spelling that was typed. Neither is
+    // what this extension would have written, and both have to work.
+    fresh();
+    const s = server([{ id: 'machine-learning', term: 'Machine Learning',
+      covers: [], at: '2026-09-16T19:44:00Z' }]);
+    CONNECT(s);
+    await X.load();
+    t('  the term is excluded despite an id this extension never wrote',
+      X.isExcluded('Machine Learning'), JSON.stringify(X.all()));
+    t('  ...and so is the synonym the site never recorded', X.isExcluded('ML'),
+      'the identity was taken from the stored id instead of the term');
+    t('  ...so the filter drops both',
+      X.filter(['Python', 'ML', 'Machine Learning', 'AWS']).join(',') === 'Python,AWS',
+      X.filter(['Python', 'ML', 'Machine Learning', 'AWS']).join(','));
+  }
+
+  console.log('\nAND THE GROUP IS WRITTEN BACK, SO THE SITE STOPS COUNTING IT');
+  {
+    // The gap this closes: the site matches on the stored covers, so
+    // until the group is written back it goes on counting "ML" against
+    // someone who struck off "Machine Learning". The table lives in one
+    // place; the answer has to reach both.
+    fresh();
+    const s = server([{ id: 'machine-learning', term: 'Machine Learning',
+      covers: [], at: '2026-09-16T19:44:00Z' }]);
+    CONNECT(s);
+    await X.load();
+    t('  the synonyms are pushed back to the account',
+      (s.column[0].covers || []).length > 1, JSON.stringify(s.column[0]));
+    t('  ...including the one the site was missing',
+      (s.column[0].covers || []).some((c) => String(c).toLowerCase() === 'ml'),
+      JSON.stringify(s.column[0].covers));
+    t('  ...and the term itself is still in there',
+      (s.column[0].covers || []).some((c) => /machine learning/i.test(c)),
+      JSON.stringify(s.column[0].covers));
+
+    // Idempotent, or it writes to the account on every popup open for
+    // the rest of the account's life.
+    const writes = s.calls.filter((c) => c.method === 'PATCH').length;
+    X._setCache(null);
+    await X.load({ force: true });
+    t('  a list that already carries its groups is not written again',
+      s.calls.filter((c) => c.method === 'PATCH').length === writes,
+      'every open would PATCH');
+  }
+
+  console.log('\nAND A COVER THE OWNER TYPED BY HAND IS NEVER DROPPED');
+  {
+    fresh();
+    const s = server([{ id: 'machine-learning', term: 'Machine Learning',
+      covers: ['our internal name for it'], at: '2026-09-16T19:44:00Z' }]);
+    CONNECT(s);
+    await X.load();
+    const covers = s.column[0].covers || [];
+    t('  what was typed comes first', covers[0] === 'our internal name for it',
+      JSON.stringify(covers));
+    t('  ...and the table\'s group is added after it', covers.length > 1, JSON.stringify(covers));
+    t('  ...with no duplicates',
+      new Set(covers.map((c) => c.toLowerCase())).size === covers.length, JSON.stringify(covers));
+  }
+
+  console.log('\nAND A TERM THE TABLE DOES NOT KNOW IS LEFT EXACTLY AS WRITTEN');
+  {
+    fresh();
+    const s = server([{ id: 'acme-internal-tool', term: 'Acme Internal Tool',
+      covers: ['AIT'], at: '2026-09-16T19:44:00Z' }]);
+    CONNECT(s);
+    await X.load();
+    t('  it is still excluded', X.isExcluded('Acme Internal Tool'), JSON.stringify(X.all()));
+    t('  ...its covers are untouched',
+      JSON.stringify(s.column[0].covers) === JSON.stringify(['AIT']), JSON.stringify(s.column[0]));
+    t('  ...and nothing was written back for it',
+      s.calls.filter((c) => c.method === 'PATCH').length === 0,
+      'an unknown term would PATCH on every open');
+  }
+
   console.log('\nAND A DECISION MADE OFFLINE IS NOT ERASED BY ONE MADE ONLINE');
   {
     fresh();

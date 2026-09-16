@@ -181,6 +181,57 @@
   }
 
   /**
+   * Fill in the synonyms an entry was stored without.
+   *
+   * The website has no copy of the 918-group table, so a term excluded
+   * there arrives with covers holding only the spelling that was typed.
+   * That costs nothing here -- the identity is recomputed from the term,
+   * so the extension already excludes the whole group -- but the site
+   * matches on the stored covers, and so goes on counting "ML" against
+   * someone who struck off "Machine Learning".
+   *
+   * So the extension writes the group back. The table lives in one place
+   * and the answer reaches both. What the owner typed by hand comes
+   * first and is never dropped: this adds, it does not replace.
+   */
+  function _enrich(list) {
+    const tx = TX();
+    if (!tx || typeof tx.variantsOf !== 'function' || typeof tx.groupOf !== 'function') {
+      return { list, changed: false };
+    }
+    let changed = false;
+    const out = list.map((entry) => {
+      let known = [];
+      try {
+        // ONLY FOR A TERM THE TABLE ACTUALLY KNOWS. variantsOf is happy
+        // to invent a plural for anything, so an in-house tool name would
+        // otherwise be written back to the account decorated with a guess
+        // at what else it might be called.
+        if (!tx.groupOf(entry.term)) return entry;
+        known = tx.variantsOf(entry.term) || [];
+      } catch (e) { return entry; }
+      if (!known.length) return entry;
+      const held = Array.isArray(entry.covers) ? entry.covers : [];
+      const seen = new Set();
+      const merged = [];
+      for (const c of held.concat(known)) {
+        const text = String(c == null ? '' : c).trim();
+        const k = text.toLowerCase();
+        if (!text || seen.has(k)) continue;
+        seen.add(k);
+        merged.push(text);
+      }
+      const covers = merged.slice(0, 12);
+      // Compared as written, so an entry already carrying its group is
+      // left alone and this cannot push on every single load.
+      if (covers.join(' ') === held.join(' ')) return entry;
+      changed = true;
+      return Object.assign({}, entry, { covers });
+    });
+    return { list: out, changed };
+  }
+
+  /**
    * Read the stored list, newest first.
    *
    * Local and account copies are UNIONED rather than one replacing the
@@ -196,7 +247,7 @@
     const remote = await _pull();
     if (remote === null) {
       _lastSync = _remote ? 'error' : 'local';
-      _cache = local;
+      _cache = _enrich(local).list;
       return _cache;
     }
     _lastSync = 'account';
@@ -205,9 +256,11 @@
     for (const e of local) if (!byId.has(e.id)) byId.set(e.id, e);
     const merged = _clean(Array.from(byId.values())
       .sort((a, b) => String(b.at).localeCompare(String(a.at))));
-    _cache = merged;
-    await _writeLocal(merged);
-    if (merged.length !== remote.length) await _push(merged);
+    const grew = merged.length !== remote.length;
+    const { list, changed } = _enrich(merged);
+    _cache = list;
+    await _writeLocal(list);
+    if (grew || changed) await _push(list);
     return _cache;
   }
 
