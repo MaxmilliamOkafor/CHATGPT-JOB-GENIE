@@ -149,8 +149,16 @@ console.log('\nAND THE SKILLS LINE IS NOT EVIDENCE OF DOING THE WORK');
     'Manager, Payroll Operations - Sub Saharan', ['payroll', 'people leadership']);
   const lines = out.cvText.split('\n');
   const summary = lines[lines.findIndex((l) => /PROFESSIONAL SUMMARY/.test(l)) + 1];
+  // CLAIM, not mention. The closing line names the role being applied
+  // for -- "Now applying that experience to the Manager, Payroll
+  // Operations - Sub Saharan role" -- which claims no title, no level
+  // and no years. What must not appear is payroll as something the
+  // candidate has DONE, which is what the rebuilt prose would be
+  // asserting.
+  const closing = / Now applying that experience to the .*? role\.$/.exec(summary);
+  const prose = closing ? summary.slice(0, closing.index) : summary;
   t('  the rebuilt summary does not claim payroll',
-    !/payroll/i.test(summary), JSON.stringify(summary));
+    !/payroll/i.test(prose), JSON.stringify(prose));
   t('  ...though the skills section still carries the keyword',
     /Payroll/.test(out.cvText), 'the coverage term was lost from the skills section');
 }
@@ -238,7 +246,14 @@ for (const good of [
     'Manager, Payroll Operations - Sub Saharan', ['payroll']);
   const lines = out.cvText.split('\n');
   const summary = lines[lines.findIndex((l) => /PROFESSIONAL SUMMARY/.test(l)) + 1];
-  t('  "' + good.slice(0, 46) + '..." survives', summary === good, JSON.stringify(summary));
+  // Byte-identical, plus the closing line that names the target role.
+  // A sentence appended after the writer's prose is not the rebuild
+  // this guards against: nothing they wrote is touched.
+  t('  "' + good.slice(0, 46) + '..." survives', summary.indexOf(good) === 0, JSON.stringify(summary));
+  t('  ...and gains only the closing line',
+    / Now applying that experience to the .*? role\.$/
+      .test(summary.slice(good.length)) || summary === good,
+    JSON.stringify(summary.slice(good.length)));
 }
 
 console.log('\nAND A REBUILD IS NEVER WORSE THAN WHAT IT REPLACES');

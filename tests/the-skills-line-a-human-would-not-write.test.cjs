@@ -149,12 +149,19 @@ console.log('\nA HEADLINE IS NOT READ AS A JOB TITLE');
   const out = RA.ensureTitleInSummary(CV, 'Customer Support Coach', 'Acme');
   t('  the summary now names the target role', out.added, 'nothing was added');
   const summary = out.text.split('\n')[out.text.split('\n').indexOf('PROFESSIONAL SUMMARY') + 1];
-  t('  ...as the first thing in it',
-    /^Customer Support Coach candidate/.test(summary), summary);
-  t('  ...naming the background it comes from',
-    /background as a Software Engineer\./.test(summary), summary);
-  t('  ...without claiming the role was held',
-    !/Customer Support Coach (?:with \d|at |, January)/.test(out.text), summary);
+  // AT THE END. Two passes downstream read the OPENING of a summary to
+  // decide what profession it announces. A leading "Customer Support
+  // Coach candidate" was taken for a claim to an unheld job and the
+  // paragraph was rebuilt around it -- measured output, on a payroll
+  // application: "Meta candidate with a background as a Software
+  // Engineer". A closing line leaves the opening saying what it said.
+  t('  ...at the end, not the front',
+    /Now applying that experience to the Customer Support Coach role\.$/.test(summary),
+    summary);
+  t('  ...and the opening still names the real profession',
+    /^Software Engineer working across/.test(summary), summary);
+  t('  it claims no title', !/Customer Support Coach (?:with|at |, January)/.test(out.text), summary);
+  t('  ...and no number of years', !/applying.*\b(?:\d+|eight|ten|five)\b.*years/i.test(summary), summary);
   t('  and the summary that was there is kept',
     /Cut the overnight run from six hours to under one\./.test(summary), summary);
   t('  the employment history is untouched',
@@ -195,35 +202,37 @@ console.log('\nAND THE AWKWARD SHAPES DO NOT BREAK IT');
     'it would be named twice');
 }
 
-console.log('\nAND IT IS DELIBERATELY NOT WIRED INTO THE AUDIT');
+console.log('\nAND THE AUDIT RUNS IT, IN THE ONE PLACE IT CAN');
 {
-  // Wiring it in costs three things the audit currently does, all of
-  // them decisions already made in this project:
-  //
-  //   repairSummary reads the added sentence as a claim to an unheld
-  //   title and rebuilds the paragraph around it. Measured: a payroll
-  //   application came back "Meta candidate with a background as a
-  //   Software Engineer".
-  //
-  //   summaryNamesAnotherProfession never fires again, because every
-  //   summary now leads with the target role, so the warning that says
-  //   "you led with Software Engineer on a Reinsurance application and
-  //   you hold Data Analyst" is unreachable.
-  //
-  //   A summary that was already specific and quantified gets a
-  //   sentence bolted to its front whether it needed one or not.
-  //
-  // What it buys is one scanner heuristic. So the function exists,
-  // works, and is the owner's switch to throw rather than a default.
   const src = fs.readFileSync(path.join(DIR, 'recruiter-audit.js'), 'utf8');
   t('  the module exports it', typeof RA.ensureTitleInSummary === 'function', 'not exported');
-  t('  ...and the audit does not call it',
-    !/^\s*(?:const \w+ = )?ensureTitleInSummary\(/m.test(
-      src.replace(/function ensureTitleInSummary[\s\S]*?\n  \}/, '')),
-    'it was wired in without the three costs above being accepted');
-  t('  ...with the reason recorded where the wiring would go',
-    /NOT WIRED IN\./.test(src), 'the next reader re-derives the whole problem');
+  t('  the audit calls it', /const st = ensureTitleInSummary\(outCV, jdTitle, jdCompany\);/.test(src),
+    'the pass exists but nothing runs it');
+  // AFTER repairSummary, which rebuilds a summary whose opening claims
+  // an unheld title, and BEFORE the clamp, so the paragraph is still
+  // cut to the two lines a recruiter reads.
+  t('  ...after the summary rebuild',
+    src.indexOf('const sr = repairSummary(') < src.indexOf('ensureTitleInSummary(outCV'),
+    'the rebuild would read the closing line and rewrite the paragraph');
+  t('  ...before the clamp', src.indexOf('ensureTitleInSummary(outCV') < src.indexOf('clampSummary(st.added'),
+    'the summary would go out longer than two lines');
+  t('  ...and the clamp is given room for it, so it is not what gets cut',
+    /maxChars: 220 \+ \(st\.added \? st\.sentence\.length \+ 1 : 0\)/.test(src),
+    'the sentence carrying the title would be the first thing trimmed');
+  t('  the text comes back whether or not the clamp did anything',
+    /if \(st\.added\) \{\s*\n\s*outCV = c\.text;/.test(src),
+    'the closing line would be dropped on every summary short enough not to need clamping');
+  t('  ...and it is reported, saying what it does and does not claim',
+    /Summary: named the target role at the end/.test(src), 'invisible in the report');
 }
+
+// WHAT THIS DOES NOT DO. It puts the posting's exact title in the
+// summary, which is where a title-match heuristic reads one. It does
+// not improve a Jobscan score, satisfy any particular applicant
+// tracking system, or make a recruiter more likely to reply, and
+// nothing here should be read as measuring any of those. What is
+// measured below is that the sentence is added where intended, claims
+// no title and no years, and leaves the rest of the page alone.
 
 console.log('\n' + PASS + ' passed, ' + FAIL + ' failed');
 process.exit(FAIL ? 1 : 0);

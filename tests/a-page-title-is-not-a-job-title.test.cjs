@@ -101,8 +101,13 @@ console.log('\nAND THE MODEL\'S OWN COPY OF THE DIRTY TITLE IS SCRUBBED');
     jdTitle: RAW, jobKeywords: ['SQL'], experience: [],
   });
   const head = o.cvText.split('\n').filter((l) => l.trim());
-  t('  the headline appears exactly once',
-    head.filter((l) => /GTM Strategy\/Operations Associate/.test(l)).length === 1,
+  // Once IN THE HEADER. The summary's closing line names the target role
+  // too, on purpose, because a headline is not read as a job title by
+  // anything that scores one. What this guards against is the header
+  // itself carrying the line twice.
+  const beforeSummary = head.slice(0, head.findIndex((l) => /PROFESSIONAL SUMMARY/.test(l)));
+  t('  the headline appears exactly once in the header',
+    beforeSummary.filter((l) => /GTM Strategy\/Operations Associate/.test(l)).length === 1,
     JSON.stringify(head.slice(0, 4)));
   t('  ...clean', head[1] === 'GTM Strategy/Operations Associate', JSON.stringify(head[1]));
   t('  the contact line still follows it',

@@ -1475,10 +1475,30 @@
     if (employers.some((e) => _same(e, title))) return { text, added: false };
     if (!held.length) return { text, added: false };
 
-    const from = held[0];
-    const article = /^[aeiou]/i.test(from) ? 'an' : 'a';
-    const sentence = title + ' candidate with a background as ' + article + ' ' + from + '.';
-    lines[body] = sentence + ' ' + lines[body].trim();
+    // AT THE END, NOT THE FRONT.
+    //
+    // A first version opened the summary with the title: "Customer
+    // Support Coach candidate with a background as a Software
+    // Engineer." Two passes downstream read the OPENING of a summary to
+    // decide what profession it announces, and both were right to.
+    // repairSummary took it for a claim to an unheld job and rebuilt the
+    // paragraph around it, producing "Meta candidate with a background
+    // as a Software Engineer" on a payroll application.
+    // summaryNamesAnotherProfession went permanently silent, because
+    // every summary now led with the target.
+    //
+    // A closing line leaves the opening saying what it said -- the real
+    // profession, which is what those two passes need to see -- and
+    // still puts the exact title in the summary.
+    //
+    // It claims nothing. Not the title, not a number of years, not a
+    // level. "Applying that experience to X" is true of anyone who
+    // pressed send.
+    let last = body;
+    for (let i = body; i < end; i++) if (lines[i].trim()) last = i;
+    const sentence = 'Now applying that experience to the ' + title + ' role.';
+    lines[last] = lines[last].replace(/\s+$/, '').replace(/([^.!?])$/, '$1.')
+      + ' ' + sentence;
     return { text: lines.join('\n'), added: true, sentence };
   }
 
@@ -7632,31 +7652,26 @@
         // tell a claim from a candidacy, and the wrong place to have
         // written.
         //
-        // NOT WIRED IN. Left here, next to the passes it would have to
-        // sit between, because that is the decision and this is where it
-        // gets made.
+        // THE TARGET ROLE, NAMED AT THE END OF THE SUMMARY.
         //
-        // Prepending the target role to every summary that does not
-        // already name it costs three things this audit currently does.
-        // repairSummary reads the new sentence as a claim to an unheld
-        // title and rebuilds the paragraph around it.
-        // summaryNamesAnotherProfession stops firing altogether, because
-        // every summary now leads with the target, so the warning that
-        // says "you led with Software Engineer on a Reinsurance
-        // application and you hold Data Analyst" is never reached. And a
-        // summary that was already specific and quantified gets a
-        // sentence bolted to its front whether or not it needed one.
-        //
-        // What it buys is one scanner heuristic: a Jobscan-style "job
-        // title match", which reads titles out of the employment block
-        // and the summary and does not count a headline. Real applicant
-        // tracking systems do not reject on it, and a recruiter
-        // searching the ATS by title is searching full text, which the
-        // headline already satisfies.
-        //
-        // The function is exported and tested. Wiring it in is one line
-        // here, and it is the owner's call, not a default.
-        const c = clampSummary(outCV, { maxChars: 220 });
+        // After repairSummary, so it is not read as a claim and rebuilt.
+        // Before the clamp, so the paragraph is still cut to the two
+        // lines a recruiter reads -- and the clamp's budget is reduced
+        // by what the closing line costs, so the sentence carrying the
+        // title is not the one the clamp throws away.
+        const st = ensureTitleInSummary(outCV, jdTitle, jdCompany);
+        const c = clampSummary(st.added ? st.text : outCV, {
+          maxChars: 220 + (st.added ? st.sentence.length + 1 : 0),
+        });
+        // THE TEXT COMES BACK WHETHER OR NOT THE CLAMP DID ANYTHING.
+        // Taking c.text only inside this branch threw away the closing
+        // line on every summary short enough not to need clamping,
+        // which is most of them.
+        if (st.added) {
+          outCV = c.text;
+          report.fixes.push('Summary: named the target role at the end ("'
+            + st.sentence + '"), which claims no title and no number of years');
+        }
         if (c.clamped || c.removedSentences > 0) {
           outCV = c.text;
           const parts = [];

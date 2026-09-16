@@ -44,8 +44,13 @@ console.log('THE CAP IS TWO RENDERED LINES');
     /function clampSummary\(text, \{ maxChars = 220 \} = \{\}\)/
       .test(fs.readFileSync(path.join(DIR, 'recruiter-audit.js'), 'utf8')),
     'the two-line cap was lost again');
-  t('  ...and the pipeline passes the same number',
-    /clampSummary\(outCV, \{ maxChars: 220 \}\)/
+  // The call site passes 220 plus exactly the closing line that names
+  // the target role, when one was added. Without the allowance that
+  // sentence is the last thing in the paragraph and so the first thing
+  // the clamp throws away, which would leave the title nowhere a
+  // title-match heuristic reads it.
+  t('  ...and the pipeline passes the same number, plus the closing line it just added',
+    /clampSummary\(st\.added \? st\.text : outCV, \{\s*\n\s*maxChars: 220 \+ \(st\.added \? st\.sentence\.length \+ 1 : 0\),/
       .test(fs.readFileSync(path.join(DIR, 'recruiter-audit.js'), 'utf8')),
     'the call site disagrees with the default');
 }
@@ -141,9 +146,16 @@ console.log('\nAND THE REST OF THE CV IS NEVER TOUCHED');
   }
   const summaryLine = o.cvText.split('\n')[o.cvText.split('\n')
     .findIndex((l) => l.trim() === 'PROFESSIONAL SUMMARY') + 1];
+  // The prose is held to the cap; the closing line naming the target
+  // role is measured separately, because it is added after the writing
+  // and the clamp is given room for it on purpose.
+  const closing = / Now applying that experience to the .*? role\.$/.exec(summaryLine);
+  const prose = closing ? summaryLine.slice(0, closing.index) : summaryLine;
   t('  and the summary itself is a real summary',
-    summaryLine.length > CAP * 0.45 && summaryLine.length <= CAP,
-    summaryLine.length + ' chars: ' + JSON.stringify(summaryLine));
+    prose.length > CAP * 0.45 && prose.length <= CAP,
+    prose.length + ' chars: ' + JSON.stringify(prose));
+  t('  ...with the target role named at the end of it',
+    !!closing, JSON.stringify(summaryLine));
 }
 
 console.log('\n' + PASS + ' passed, ' + FAIL + ' failed');
