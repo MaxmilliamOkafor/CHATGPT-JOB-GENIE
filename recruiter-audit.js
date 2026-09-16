@@ -1219,6 +1219,77 @@
   // Nothing is invented, and the slot is never left empty when a real
   // title exists to fill it.
   // ===================================================================
+  // A COVER LETTER THAT READS OUT THE CV IS A WASTED PAGE
+  // -------------------------------------------------------------------
+  // Measured on a real pair of documents, both substantive paragraphs of
+  // the letter were restatements of CV bullets:
+  //
+  //   55%  "I led the migration of a UK retail client's legacy
+  //         application to AWS microservices, delivering all 47 services
+  //         in 11 months"
+  //   vs   "Architected a UK retail client's migration from a legacy
+  //         application to AWS microservices on EKS, delivering all 47
+  //         services in 11 months"
+  //
+  // The recruiter reads the letter, then the CV, and gets the same two
+  // stories twice. The CV answers what the candidate has done. The
+  // letter is the only document that can say what they would do HERE,
+  // and spending it on repetition throws that away.
+  //
+  // This reports rather than rewrites. Rewriting a paragraph well needs
+  // the source material and a judgement about what the work involved,
+  // which is the writing model's job with the profile in hand. What was
+  // missing was anyone noticing.
+  const _CONTENT_WORD = /[a-z0-9][a-z0-9+#.-]{3,}/g;
+  const _LETTER_STOP = new Set(['that', 'this', 'with', 'from', 'have', 'been', 'were',
+    'which', 'their', 'there', 'would', 'could', 'about', 'into', 'your', 'they',
+    'them', 'then', 'than', 'when', 'what', 'where', 'while', 'also', 'more', 'most',
+    'over', 'under', 'across', 'through', 'role', 'team', 'work', 'working', 'experience']);
+
+  function _contentWords(s) {
+    const out = new Set();
+    for (const w of String(s || '').toLowerCase().match(_CONTENT_WORD) || []) {
+      if (!_LETTER_STOP.has(w)) out.add(w);
+    }
+    return out;
+  }
+
+  /**
+   * Cover-letter paragraphs that restate a CV bullet.
+   *
+   * Overlap is measured against the SMALLER of the two word sets, so a
+   * short paragraph lifted from a long bullet still scores high. Forty
+   * per cent is the line: below it two texts about the same job share
+   * ordinary vocabulary, above it they are the same sentence rewritten.
+   */
+  function coverLetterRestatesCv(cvText, coverText, threshold) {
+    const limit = typeof threshold === 'number' ? threshold : 0.4;
+    const bullets = String(cvText || '').split('\n')
+      .filter((l) => /^\s*[\u2022\-*]/.test(l) && l.trim().split(/\s+/).length > 6);
+    const paras = String(coverText || '').split(/\n+/)
+      .filter((l) => l.trim().split(/\s+/).length > 12);
+    if (!bullets.length || !paras.length) return [];
+    const found = [];
+    for (const para of paras) {
+      const A = _contentWords(para);
+      if (A.size < 5) continue;
+      let best = null, bestScore = 0;
+      for (const bullet of bullets) {
+        const B = _contentWords(bullet);
+        if (!B.size) continue;
+        let shared = 0;
+        for (const w of A) if (B.has(w)) shared += 1;
+        const score = shared / Math.min(A.size, B.size);
+        if (score > bestScore) { bestScore = score; best = bullet.trim(); }
+      }
+      if (bestScore >= limit) {
+        found.push({ paragraph: para.trim(), bullet: best, overlap: Math.round(bestScore * 100) });
+      }
+    }
+    return found;
+  }
+
+  // ===================================================================
   // THE HEADER IS FIVE LINES AND NONE OF THEM REPEATS
   // -------------------------------------------------------------------
   // A real CV went out reading
@@ -7708,6 +7779,22 @@
       }
     } catch (e) {}
 
+    // THE LETTER IS THE ONE DOCUMENT THAT CAN SAY SOMETHING NEW.
+    try {
+      const echoes = coverLetterRestatesCv(outCV, outCL);
+      if (echoes.length) {
+        report.warnings.push({
+          kind: 'cover-letter-restates-cv',
+          count: echoes.length,
+          samples: echoes.map((e) => e.overlap + '% "' + e.paragraph.slice(0, 60) + '"'),
+          note: echoes.length + ' paragraph(s) of the cover letter restate a CV bullet ('
+            + echoes.map((e) => e.overlap + '%').join(', ') + '). The recruiter reads both, '
+            + 'so this spends the one document that can say what you would do HERE on '
+            + 'repeating what the CV already says.',
+        });
+      }
+    } catch (e) {}
+
     report.timingMs = Date.now() - t0;
     return { cvText: outCV, coverLetterText: outCL, report };
   }
@@ -7728,7 +7815,7 @@
     ensureCitizenshipLine, ensureTruthfulLocation,
     normaliseSkillLabels,
     sanitiseSkillsSection,
-    echoJobTitle, normaliseJobTitle, tidyHeader, scrubRawTitle, repairSummary, _historyFacts, scoreSevenFilters, summaryNamesAnotherProfession, summaryReadsBroken, sortExperienceByStartDate,
+    echoJobTitle, normaliseJobTitle, tidyHeader, coverLetterRestatesCv, scrubRawTitle, repairSummary, _historyFacts, scoreSevenFilters, summaryNamesAnotherProfession, summaryReadsBroken, sortExperienceByStartDate,
     firstSixSecondsCheck,
     // v2
     stripFillers,
