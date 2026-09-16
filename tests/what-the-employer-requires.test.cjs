@@ -340,6 +340,107 @@ console.log('\nAND THE AWKWARD SHAPES DO NOT BREAK IT');
     JSON.stringify(JDR.extract(negated).requirements.map((r) => r.label)));
 }
 
+console.log('\nA COMBINED HEADING KEEPS THE HALF THAT IS THE JOB');
+{
+  // First hit wins, and BENEFITS used to sit above REQUIRED. So a heading
+  // naming both resolved to the half that is NOT the job and every
+  // requirement under it vanished. A leaked keyword is visible on screen;
+  // a deleted section is not, which makes this the worse direction.
+  const req = (jd) => JDR.extract(jd).requirements.map((r) => r.label);
+  for (const [heading, want] of [
+    ['Skills and Benefits', 'Python'],
+    ['Your experience and what we offer', 'Python'],
+    ['Compensation and Qualifications', 'Python'],
+    ['Who we are looking for', 'Python'],
+    ['Your profile', 'Python'],
+    ['The ideal candidate', 'Python'],
+    ['What success looks like', 'Python'],
+    ['Position Summary', 'Python'],
+  ]) {
+    const jd = 'Role\n\n' + heading + '\n- Strong Python and SQL experience.\n';
+    t('  "' + heading + '" is read', req(jd).includes(want), req(jd).join(', '));
+  }
+  // And the ones that really are not the job stay out.
+  for (const heading of ['Benefits', 'Perks', 'What we offer', 'Our offer',
+    'Why you should apply', 'About us', 'Our values', 'Life at Acme',
+    'Equal Opportunity', 'How to apply']) {
+    const jd = 'Role\n\nRequirements\n- Airflow experience.\n\n' + heading
+      + '\n- Strong Python and SQL experience.\n';
+    t('  "' + heading + '" is not', !req(jd).includes('Python'), req(jd).join(', '));
+  }
+  // "Travel requirements" contains the word and is still a fact about the
+  // job, not a skill.
+  const travel = 'Role\n\nTravel requirements\n- Python is used on client sites.\n';
+  t('  "Travel requirements" is a condition, not a skill list',
+    !req(travel).includes('Python'), req(travel).join(', '));
+}
+
+console.log('\nAND WHEN SCOPING FINDS NOTHING, IT IS ABANDONED FOR THAT POSTING');
+{
+  // The rule that covers the classification bugs not found yet. Scoping
+  // fails in two directions: a section wrongly READ leaks a keyword,
+  // which is visible; a section wrongly SKIPPED deletes requirements
+  // silently. A posting in an unreadable language, an unparsed ATS
+  // layout, a heading nobody anticipated -- all fail the second way.
+  for (const [name, jd] of [
+    ['a Spanish posting', 'Ingeniero\n\nRequisitos\n- Experiencia con Python, SQL y Airflow.\n'],
+    ['a German posting', 'Entwickler\n\nIhr Profil\n- Erfahrung mit Java, Kubernetes und Docker.\n'],
+  ]) {
+    const got = JDR.extract(jd).requirements.map((r) => r.label);
+    t('  ' + name + ' still yields its tools', got.length > 0, got.join(', '));
+  }
+
+  // A SUBSTANTIAL posting whose every heading was misread. An
+  // unrecognised heading already fails open to "unknown", which IS
+  // covered, so the only way to swallow a posting is for its headings to
+  // match the non-covered patterns. That makes this rare, which is the
+  // point: it is insurance against the classification bug not yet found,
+  // not a path the common case takes.
+  const swallowed = ['Engineer', '', 'Benefits',
+    '- Experience with Kubernetes and Terraform.',
+    '- Strong Python and SQL.',
+    '- Docker in production.',
+    '- Airflow and Snowflake.',
+    '- Comfortable on the command line.'].join('\n');
+  const out = JDR.extract(swallowed);
+  t('  a substantial posting whose headings were all misread falls back',
+    out.scopingAbandoned === true, JSON.stringify(out.requirements.map((r) => r.label)));
+  t('  ...and recovers its requirements',
+    ['Kubernetes', 'Terraform', 'Python'].every((k) =>
+      out.requirements.some((r) => r.label === k)),
+    out.requirements.map((r) => r.label).join(', '));
+  t('  ...and says so, so the leak can be recognised for what it is',
+    out.excluded.some((e) => /section scoping/.test(e.term)), JSON.stringify(out.excluded));
+  t('  ...and the records are marked unscoped',
+    out.requirements.every((r) => r.unscoped === true), 'a fallback record looks scoped');
+
+  // An unrecognised heading needs no backstop: unknown is covered, so a
+  // posting in a language this table cannot read is still read.
+  for (const [name, jd] of [
+    ['Spanish', 'Ingeniero\n\nBeneficios y requisitos\n- Experiencia con Kubernetes y Python.\n'],
+    ['German', 'Entwickler\n\nIhr Profil\n- Erfahrung mit Java, Kubernetes und Docker.\n'],
+  ]) {
+    const got = JDR.extract(jd);
+    t('  a ' + name + ' posting is read without needing the fallback',
+      got.requirements.length > 0 && !got.scopingAbandoned,
+      got.requirements.map((r) => r.label).join(', '));
+  }
+
+  // But a short posting that genuinely states no requirements gets the
+  // honest answer, which is nothing.
+  const boilerplate = 'About us\nWe are a warm team.\n\nBenefits\nWe offer equity ownership.\n';
+  t('  a stub that really has no requirements returns none',
+    JDR.extract(boilerplate).requirements.length === 0,
+    JSON.stringify(JDR.extract(boilerplate).requirements.map((r) => r.label)));
+
+  // It must NOT fire when scoping worked, or it would undo the whole file.
+  const good = JDR.extract(WEBFLOW);
+  t('  it does not fire on a posting scoping handled', !good.scopingAbandoned,
+    'scoping was abandoned on a posting it read correctly');
+  t('  ...and an empty posting still yields nothing at all',
+    JDR.extract('').requirements.length === 0 && !JDR.extract('').scopingAbandoned, 'invented');
+}
+
 console.log('\nAND THE MODULE IS ACTUALLY LOADED BY THE EXTENSION');
 {
   // BOTH LOADERS, BECAUSE THEY ARE DIFFERENT PLACES.

@@ -66,16 +66,35 @@
 
   // Matched against a heading. Order matters: the first hit wins, so the
   // narrow patterns come before the broad ones.
+  // ORDER IS THE WHOLE RULE, AND IT USED TO BE THE WRONG WAY ROUND.
+  //
+  // First hit wins, and BENEFITS sat above REQUIRED. So a combined
+  // heading resolved to the half that is NOT the job, and every
+  // requirement under it vanished without a trace:
+  //
+  //   "Skills and Benefits"                -> benefits, nothing read
+  //   "Your experience and what we offer"  -> benefits, nothing read
+  //   "Compensation and Qualifications"    -> benefits, nothing read
+  //   "Who we are looking for"             -> company,  nothing read
+  //
+  // A leaked keyword is visible on screen. A deleted section is not: the
+  // chip list is simply short and nothing looks wrong. So where a
+  // heading names both, the half that carries requirements wins now.
+  //
+  // LEGAL, APPLICATION and CONDITIONS stay above REQUIRED deliberately.
+  // "Travel requirements" and "Physical requirements" are facts about
+  // the job, and the word "requirements" in them is not an invitation to
+  // read them as skills.
   const HEADINGS = [
     [SECTION.LEGAL, /equal opportunit|\beeo\b|legal|privacy|data protection|gdpr|disclosure|accommodation|e-verify|pay transparency/i],
     [SECTION.APPLICATION, /how to apply|application (?:process|instructions)|our process|interview process|what to expect|hiring process|job alert/i],
-    [SECTION.BENEFITS, /benefit|perks?|what we offer|compensation|salary|the package|pay and|why (?:join|work)|rewards?|wellbeing|well-being/i],
-    [SECTION.COMPANY, /^about\b(?!\s+(?:the\s+)?(?:role|job|position|opportunity|team|work))|who we are|our (?:story|values|mission|culture|team|purpose)|core values|company (?:overview|profile)|life at|meet the team/i],
     [SECTION.CONDITIONS, /working (?:conditions|arrangements|hours)|physical (?:requirements|demands)|travel|location|eligibility|work authoriz|right to work|visa|sponsorship|shift/i],
     [SECTION.SOFT, /soft skills|interpersonal|behavio(?:u)?ral|competenc/i],
     [SECTION.PREFERRED, /nice to have|preferred|bonus|desirable|a plus|ideally|good to have|pluses/i],
-    [SECTION.REQUIRED, /non[- ]negotiable|requirement|qualification|what you(?:'| a|'l| wi)?l*l? (?:need|bring|have)|what we(?:'| a)?re looking for|who you are|about you|skills|experience|we(?:'| a)?re looking for|must have|you have|your background|you(?:'| wi)?ll bring/i],
-    [SECTION.RESPONSIBILITY, /responsibilit|what you(?:'| wi)?ll do|the role|day to day|day-to-day|duties|your impact|what you will be doing|in this role|why this role exists|what you(?:'| wi)?ll own/i],
+    [SECTION.REQUIRED, /non[- ]negotiable|requirement|qualification|what you(?:'| a|'l| wi)?l*l? (?:need|bring|have)|what we(?:'| a)?re looking for|who you are|about you\b|skills|experience|we(?:'| a)?re looking for|must[- ]have|you have|your background|your profile|the ideal candidate|candidate profile|what you bring/i],
+    [SECTION.RESPONSIBILITY, /responsibilit|what you(?:'| wi)?ll do|the role|day to day|day-to-day|duties|your impact|what you will be doing|in this role|why this role exists|what you(?:'| wi)?ll own|what success looks like|position summary|job description|scope of|the opportunity|your mission/i],
+    [SECTION.BENEFITS, /benefit|perks?|what we offer|compensation|salary|the package|pay and|why (?:join|work)|rewards?|wellbeing|well-being|our offer|why you should apply|what.s in it for you/i],
+    [SECTION.COMPANY, /^about\b(?!\s+(?:the\s+)?(?:role|job|position|opportunity|team|work))|who we are\b(?!\s+looking)|our (?:story|values|mission|culture|team|purpose)|core values|company (?:overview|profile)|life at|meet the team/i],
   ];
 
   // A section is often introduced by prose with no heading at all, and
@@ -545,6 +564,71 @@
     const weight = { required: 3, soft: 2, responsibility: 1, preferred: 0 };
     verified.sort((a, b) => (weight[b.status] - weight[a.status])
       || (b.mentions - a.mentions) || a.label.localeCompare(b.label));
+
+    // ── THE BACKSTOP ───────────────────────────────────────────────────
+    //
+    // This is not a fix for the classification bugs found so far. It is a
+    // fix for the ones not found yet, and it is the most important rule
+    // in the file.
+    //
+    // Section scoping fails in two directions and they are not equally
+    // bad. A section wrongly READ leaks a keyword, which is visible on
+    // screen and can be reported. A section wrongly SKIPPED deletes
+    // requirements silently: the chip list is short and nothing looks
+    // wrong. A posting in a language this table cannot read, an ATS
+    // layout it cannot parse, a heading nobody anticipated -- all of
+    // them fail the second way.
+    //
+    // So if scoping found nothing and reading the whole posting would
+    // have found something, the scoping was wrong about this posting and
+    // is abandoned for it. Every future classification failure degrades
+    // into the visible direction instead of the silent one.
+    //
+    // It fires on ONE condition: no statement in the whole posting landed
+    // in a section that states requirements. That is classification
+    // having swallowed the document, which is the failure worth
+    // overriding. A posting that HAS requirements sections and simply
+    // states no requirements in them has been read correctly, and the
+    // honest answer there is nothing -- firing on that would undo the
+    // term-level rules and put "lighthouse project" back on the CV.
+    //
+    // And even then only the SECTION gate is abandoned. Ambiguous terms
+    // still resolve against the text, adjectives and working conditions
+    // still go. Those rules were never the thing in doubt.
+    // A SUBSTANTIAL posting, because that is what makes zero requirements
+    // sections implausible. A two-line travel note or a stub with nothing
+    // but an About paragraph really does state no requirements, and
+    // reading it whole would put "Python is used on client sites" on a CV
+    // from a section about where the job is. Five statements is the line:
+    // below it, absence is ordinary; above it, absence means the headings
+    // were not understood.
+    const anyCovered = statements.some((st) => COVERED.has(st.section));
+    if (!verified.length && !anyCovered && statements.length >= 5) {
+      const body = String(jdText == null ? '' : jdText);
+      const whole = (tx ? tx.sweep(body, 40) : [])
+        .map((hit) => ({ hit, resolved: resolve(hit.label, body) }))
+        .filter((x) => x.resolved && !VAGUE.test(x.resolved) && !CONDITION.test(x.resolved))
+        .map((x) => ({ label: x.resolved, hits: x.hit.hits }));
+      if (whole.length) {
+        const fallback = whole.map((hit) => ({
+          id: tx.keyOf(hit.label),
+          label: hit.label,
+          category: (typeof tx.categoryOf === 'function' && tx.categoryOf(hit.label)) || null,
+          status: 'required',
+          section: SECTION.UNKNOWN,
+          evidence: '',
+          start: -1,
+          end: -1,
+          mentions: hit.hits,
+          coverage: true,
+          unscoped: true,
+        }));
+        excluded.push({ term: '(section scoping)', reason: 'found nothing on this posting, '
+          + 'so the whole text was read instead' });
+        return { requirements: fallback, excluded, conditions, statements,
+          scopingAbandoned: true, version: VERSION };
+      }
+    }
     return { requirements: verified, excluded, conditions, statements, version: VERSION };
   }
 
