@@ -499,5 +499,42 @@ console.log('\nAND IT IS FAST ENOUGH TO RUN ON THE POPUP\'S MAIN THREAD');
   t('  ...and under 150ms once warm', each < 150, each.toFixed(0) + 'ms each');
 }
 
+console.log('\n"MAKE" IS A VERB BEFORE IT IS A BUILD TOOL');
+{
+  // Read off a real scan. A Customer Support Coach posting said
+  // "Troubleshoot and make outbound calls for escalated issues", and GNU
+  // Make went onto the CV. The rule existed, with a reject list that did
+  // not happen to contain "outbound" -- but the list was never going to
+  // work, because "make" is one of the commonest verbs in English and
+  // enumerating what may follow it is hopeless.
+  //
+  // The real fault was siblings:true. Escalation Management is a genuine
+  // requirement in that same sentence, and an unambiguous one, so Make
+  // rode in beside it. Every posting naming any tool near the word
+  // "make" was claiming the build tool.
+  const support = JDR.extract(['Requirements:', '',
+    '* Troubleshoot and make outbound calls for escalated issues.',
+    '* Make sure customers are happy and make an impact on retention.'].join('\n'));
+  t('  a support posting does not ask for GNU Make',
+    !support.requirements.some((r) => r.label === 'Make'),
+    JSON.stringify(support.requirements.map((r) => r.label)));
+  t('  ...and the real requirement beside it survives',
+    support.requirements.some((r) => r.label === 'Escalation Management'),
+    JSON.stringify(support.requirements.map((r) => r.label)));
+
+  const build = JDR.extract(['Requirements:', '',
+    '* Experience with Makefiles and GNU Make for our C++ build system.',
+    '* Strong C++ and Python.'].join('\n'));
+  t('  a posting that means the build tool still asks for it',
+    build.requirements.some((r) => r.label === 'Make'),
+    JSON.stringify(build.requirements.map((r) => r.label)));
+
+  // The cue has to be the only way in, so no sibling can carry it.
+  t('  it cannot ride in beside another tool',
+    JDR.resolve('Make', 'Build dashboards in Python and make them available to the team',
+      ['Python', 'Make']) === null,
+    'siblings would admit it beside any unambiguous tool');
+}
+
 console.log('\n' + PASS + ' passed, ' + FAIL + ' failed');
 process.exit(FAIL ? 1 : 0);

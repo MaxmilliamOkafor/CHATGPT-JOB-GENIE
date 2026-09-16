@@ -148,8 +148,20 @@
     'Workday': { siblings: true, need: /\bworkday\s*(?:hcm|financials?|studio|extend|adaptive|reports?)\b|\bin workday\b|\bworkday\b\s*[,)]/i,
       reject: /\b(?:a|the|each|per|every|average|normal|typical|busy|long)\s+work\s?day\b|\bworkday\s+(?:begins|starts|ends)\b/i },
     'ServiceNow': { siblings: true, need: /\bservicenow\b/i, reject: null },
-    'Make': { siblings: true, need: /\bmake\.com\b|\bmake\s*\(automation\)|\bgnu make\b|\bmakefile/i,
-      reject: /\bmake\s+(?:sure|a|an|the|it|them|us|your|decisions?|recommendations?|improvements?|changes?)\b|\bmaking\b/i },
+    // siblings was true here, and that is what put GNU Make on a customer
+    // support CV. "Troubleshoot and make outbound calls for escalated
+    // issues" names Escalation Management, which is a genuine
+    // requirement and an unambiguous one, so Make rode in beside it.
+    //
+    // Not a rare shape. "make" is one of the commonest verbs in English
+    // and every careers page uses it, so a sibling rule admits the build
+    // tool on a large share of all postings. The reject list cannot
+    // carry this either: enumerating what the verb may be followed by is
+    // hopeless, and the list below missed "outbound" for exactly that
+    // reason. The cue has to be explicit and it has to be the only way in.
+    'Make': { siblings: false,
+      need: /\bmake\.com\b|\bmake\s*\(automation\)|\bgnu\s+make\b|\bmakefiles?\b|\bautomake\b|\bmake\s+(?:targets?|recipes?)\b|\b(?:built?|compiled?|compiling|building)\s+with\s+make\b|\b(?:zapier|integromat|n8n|workato|tray\.io|power\s*automate)\b[\s\S]{0,60}\bmake\b|\bmake\b[\s\S]{0,60}\b(?:zapier|integromat|n8n|workato|tray\.io|power\s*automate)\b/i,
+      reject: /\bmakes?\s+(?:sure|certain|a|an|the|it|them|us|you|your|outbound|inbound|contact|decisions?|recommendations?|improvements?|changes?|progress|time|sense|use)\b|\bmaking\b/i },
     'Chef': { siblings: true, need: /\bchef\s*(?:cookbooks?|recipes?|infra|automation|server)\b|\b(?:puppet|ansible|salt|terraform)\b/i,
       reject: /\b(?:head|sous|executive|pastry)\s+chef\b|\bchefs?\s+(?:cook|prepare|kitchen)\b/i },
     'Puppet': { siblings: true, need: /\bpuppet\s*(?:manifests?|modules?|enterprise|agent)\b|\b(?:chef|ansible|salt|terraform)\b/i,
