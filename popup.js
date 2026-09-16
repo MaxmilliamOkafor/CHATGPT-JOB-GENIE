@@ -1232,6 +1232,15 @@ class ATSTailor {
           this.generatedDocuments.cvDocx = result.base64;
           this.generatedDocuments.cvDocxFileName = result.filename || `${baseName}.docx`;
           console.log('[ATS Tailor] CV DOCX ready:', this.generatedDocuments.cvDocxFileName);
+          // THE SCORE HAS TO DESCRIBE THE FILE THAT IS SENT.
+          //
+          // Every coverage number in this extension has been measured
+          // against a string held in memory -- the text we MEANT to
+          // write. This reads the .docx back the way a parser reads it,
+          // out of word/document.xml, and measures the requirements
+          // against THAT. It is the only number that describes the
+          // attachment.
+          this.verifyDeliveredCv();
         }
       }
     } catch (e) {
@@ -5404,6 +5413,56 @@ class ATSTailor {
    * "PostgreSQL", because the posting's own wording is what an applicant
    * tracking system searches for.
    */
+  /**
+   * Read the generated .docx back and check what an applicant tracking
+   * system would actually find in it.
+   *
+   * This closes the oldest gap in the project. A second scorer once
+   * reported a number for a document nobody sent; the PDF fallback
+   * silently dropped every injected keyword; the recruiter audit rewrote
+   * the CV after coverage had measured it. Each time the number
+   * described one document and the employer received another, and each
+   * time it took a real application to notice.
+   *
+   * Never throws and never blocks the run: a verifier that breaks
+   * tailoring would be worse than the bug it looks for. It reports.
+   */
+  verifyDeliveredCv() {
+    const V = (typeof window !== 'undefined' && window.DocxVerify) || null;
+    const docx = this.generatedDocuments && this.generatedDocuments.cvDocx;
+    if (!V || !docx) return null;
+    try {
+      const report = V.verify(docx, {
+        name: this._cachedProfile && (this._cachedProfile.full_name || this._cachedProfile.name),
+        email: (this.session && this.session.user && this.session.user.email) || '',
+        keywords: this.generatedDocuments.keywords || null,
+      });
+      this.generatedDocuments.deliveredReport = report;
+      for (const problem of report.problems) {
+        console.error('[ATS Tailor] The attachment will not read correctly: ' + problem);
+      }
+      for (const warning of report.warnings) {
+        console.warn('[ATS Tailor] Delivered file: ' + warning);
+      }
+      if (report.coverage) {
+        // The number measured on the FILE, beside the one measured on the
+        // string. A gap between them is a pass losing work on its way out.
+        const inMemory = this.generatedDocuments.matchScore;
+        console.log('[ATS Tailor] Coverage on the delivered .docx: '
+          + report.coverage.score + '% (panel reports ' + inMemory + '%)');
+        if (typeof inMemory === 'number' && Math.abs(inMemory - report.coverage.score) > 5) {
+          console.warn('[ATS Tailor] The panel and the attachment disagree by '
+            + Math.abs(inMemory - report.coverage.score) + ' points. The attachment is the '
+            + 'one the employer reads: ' + (report.coverage.missing.join(', ') || ''));
+        }
+      }
+      return report;
+    } catch (e) {
+      console.warn('[ATS Tailor] delivered-file check failed:', e && e.message);
+      return null;
+    }
+  }
+
   /**
    * A JOB POSTING IS DATA, NEVER INSTRUCTIONS.
    *
