@@ -4909,6 +4909,82 @@ class ATSTailor {
   // damning verdict on a CV nobody looked at. "data", "analysis",
   // "process" and "management" cannot all be absent from a real CV; a
   // zero that total is a missing input, not a result.
+  // ============ WHAT THE POSTING ACTUALLY SAYS ============
+  //
+  // A separate question from the one the rest of this file answers.
+  //
+  // The tailoring path asks "does the CV cover this requirement?" and
+  // answers it through the taxonomy, generously and correctly: a CV
+  // saying Postgres covers a posting saying PostgreSQL.
+  //
+  // This asks "what does the posting SAY, and can each answer be quoted
+  // back to it?" Nothing is resolved, stemmed or expanded. Every record
+  // carries a character-for-character quotation, checked here rather
+  // than taken on the model's word, and a record that fails the check is
+  // returned with its reason instead of quietly vanishing.
+  //
+  // It does not produce a score. It is not a match percentage, an ATS
+  // verdict or a Jobscan result, and a count against the CV is literal
+  // presence of a phrase -- "No SQL experience" contains SQL.
+
+  /**
+   * @param {string} jobDescription  the posting, as the extension holds it
+   * @param {string} [resumeText]    optional; compared locally, never sent
+   */
+  async extractSkillsWithEvidence(jobDescription, resumeText) {
+    const SE = window.SkillEvidence;
+    if (!SE) throw new Error('Skill extraction is unavailable in this build.');
+    const jd = String(jobDescription == null ? '' : jobDescription);
+    if (!jd.trim()) throw new Error('The job description is empty.');
+    if (!this.session?.access_token) {
+      throw new Error('Sign in to run skill extraction.');
+    }
+
+    // ONE STRING, SENT AND CHECKED AGAINST.
+    //
+    // The posting is sanitised before it leaves, as on every other model
+    // call here: instruction-shaped lines are stripped, because a job
+    // advert is data. That removes text, so a quotation taken from what
+    // the model was given need not appear in the raw scrape. Validating
+    // against the raw scrape would therefore reject genuine records as
+    // fabrications. The sanitised text is what is sent and what every
+    // quotation is checked against.
+    const safe = ATSTailor.sanitiseJobText(jd).text;
+    if (!safe.trim()) throw new Error('Nothing in this posting could be read as a description.');
+
+    const res = await fetch(`${SUPABASE_URL}/functions/v1/extract-skills-evidence`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.session.access_token}`,
+        apikey: SUPABASE_ANON_KEY,
+      },
+      body: JSON.stringify({ jobDescription: safe }),
+    });
+
+    if (!res.ok) {
+      let code = '';
+      let message = '';
+      try {
+        const body = await res.json();
+        code = body && body.error ? String(body.error) : '';
+        message = body && body.message ? String(body.message) : '';
+      } catch (e) { /* a non-JSON error body says nothing useful */ }
+      // "No credentials" is a setup problem and "provider error" is a
+      // service problem. Collapsing them into "extraction failed" sends
+      // someone to look at the posting, which is the one thing that is
+      // not wrong.
+      throw new Error(message || `Skill extraction failed (HTTP ${res.status}${code ? ', ' + code : ''}).`);
+    }
+
+    const { response } = await res.json();
+    const data = SE.parseResponse(response);
+    // VALIDATED AGAINST THE POSTING THIS SIDE HOLDS, not against
+    // whatever the server echoed back. A validator that trusts the
+    // service it is validating is not a validator.
+    return SE.buildReport(data, safe, resumeText == null ? undefined : String(resumeText));
+  }
+
   // ============ KEYWORDS THE OWNER HAS STRUCK OFF ============
   //
   // Extraction can be right about the posting and wrong about the
