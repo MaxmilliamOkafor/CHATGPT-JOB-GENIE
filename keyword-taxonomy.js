@@ -350,6 +350,55 @@
     ['Remote-first', 'Remote First', 'Remote-first Teams', 'Distributed Teams',
       'Remote Teams', 'Fully Remote'],
     ['Languages', 'Additional Languages', 'Multilingual', 'Language Skills'],
+    // ── IT OPERATIONS AND END-USER COMPUTING ──────────────────────────
+    //
+    // The table had none of this. An IT-support posting naming help desk
+    // ticketing, macOS troubleshooting, device provisioning and asset
+    // inventory produced almost no requirements, so the extractor fell
+    // back on whatever prose it could find and the panel filled up with
+    // culture words. A whole profession was invisible.
+    ['Help Desk', 'Helpdesk', 'Service Desk', 'IT Support', 'Technical Support',
+      'Desktop Support', 'End User Support', 'IT Helpdesk'],
+    ['Ticketing', 'Ticketing System', 'Help Desk Ticketing', 'Ticket Management',
+      'Ticket Triage', 'Ticket Resolution'],
+    ['macOS', 'Mac OS', 'OSX', 'Mac OS X', 'Apple macOS'],
+    ['Windows', 'Microsoft Windows', 'Windows 10', 'Windows 11', 'Windows Desktop'],
+    ['Google Workspace', 'G Suite', 'Google Apps'],
+    ['Microsoft 365', 'Office 365', 'M365', 'O365'],
+    // NOT a bare 'AD': it matched "ad-hoc data analysis" and put Active
+    // Directory on a data analyst's CV. Two letters that are also an
+    // English prefix are not a safe alias, unlike AI, ML, QA and UX.
+    ['Active Directory', 'Azure AD', 'Entra ID', 'Microsoft Entra'],
+    ['Okta'], ['JumpCloud'], ['OneLogin'], ['Duo'], ['LastPass'], ['1Password'],
+    ['Single Sign-On', 'SSO', 'SAML', 'OIDC', 'OAuth'],
+    ['Multi-factor Authentication', 'MFA', '2FA', 'Two-factor Authentication'],
+    ['Jamf', 'Jamf Pro'], ['Intune', 'Microsoft Intune'], ['Kandji'], ['Mosyle'],
+    ['Workspace ONE', 'AirWatch'], ['Autopilot', 'Windows Autopilot'],
+    ['Device Management', 'MDM', 'Mobile Device Management', 'Endpoint Management',
+      'Unified Endpoint Management', 'UEM'],
+    ['Provisioning', 'Device Provisioning', 'Equipment Provisioning',
+      'Account Provisioning', 'User Provisioning'],
+    ['Deprovisioning', 'Offboarding Access', 'Access Revocation'],
+    ['Inventory Management', 'Asset Management', 'IT Asset Management', 'ITAM',
+      'Hardware Inventory', 'Software Inventory', 'Asset Tracking'],
+    ['Equipment Lifecycle', 'Device Lifecycle', 'Hardware Lifecycle', 'Refresh Cycle'],
+    ['Hardware Troubleshooting', 'Hardware Diagnostics', 'Hardware Repair'],
+    ['Software Troubleshooting', 'Application Support', 'Software Diagnostics'],
+    ['Audiovisual', 'AV Support', 'Audio Visual', 'AV Equipment', 'Conference Room Technology'],
+    ['Zoom'], ['Zoom Rooms'], ['Microsoft Teams Rooms'], ['Slack'],
+    ['Group Policy', 'GPO'], ['BitLocker'], ['FileVault'],
+    ['Software Packaging', 'Application Deployment', 'Software Deployment'],
+    ['Licence Management', 'License Management', 'Software Licensing'],
+    ['CMDB', 'Configuration Management Database'],
+    ['ITIL', 'Service Management', 'IT Service Management', 'ITSM'],
+    ['Request Fulfilment', 'Request Fulfillment', 'Service Requests'],
+    ['Major Incident Management', 'Incident Triage'],
+    ['Password Reset', 'Password Resets', 'Account Recovery'],
+    ['IT Procurement', 'Hardware Procurement', 'Vendor Procurement'],
+    ['Remote Desktop', 'RDP', 'Remote Support', 'Remote Troubleshooting'],
+    ['VPN'], ['DNS'], ['DHCP'], ['TCP/IP'], ['VLAN'], ['Firewall'],
+    ['Printer Support', 'Print Management'],
+    ['Zapier'], ['Workato'], ['Boomi'], ['n8n'], ['MuleSoft'], ['Make'],
     ['Zendesk'], ['ServiceNow'], ['Deel'], ['Remote.com'], ['ADP'], ['Ceridian'],
     ['Payroll Software', 'Payroll Systems', 'Payroll Platform'],
     ['Onboarding'], ['Offboarding'], ['Employee Relations'],
@@ -591,10 +640,18 @@
         // Scope negative experience statements, not unrelated results such as
         // "without downtime using Docker" or "not only Python".
         const scope = clause.split(/\b(?:but|however|although)\b/i).pop();
-        const negativeExperience = /\b(?:no|without|zero|lacking)\s+(?:(?:prior|direct|professional|hands-on)\s+)?(?:experience|knowledge|exposure|proficiency|familiarity)\b[^.!?;]{0,100}$/i;
+        // "No experience with Kafka" and "No previous Kafka experience"
+        // are the same sentence with the noun on the other side, and only
+        // the first was being caught.
+        const negativeExperience = /\b(?:no|without|zero|lacking)\s+(?:(?:prior|previous|direct|professional|hands-on|formal)\s+)?(?:experience|knowledge|exposure|proficiency|familiarity)\b[^.!?;]{0,100}$/i;
+        const negativeBefore = /\b(?:no|without|zero|lacking)\s+(?:(?:prior|previous|direct|professional|hands-on|formal)\s+)?[\w\s.+#/-]{0,40}$/i;
         const negativeUse = /\b(?:not|never)\s+(?:(?:directly|previously|personally|yet)\s+)*(?:worked|used|implemented|built|learned|worked with)\b[^.!?;]{0,100}$/i;
         const directNegation = /\b(?:no|neither|nor|without)\s*$/i;
-        if (!negativeExperience.test(scope) && !negativeUse.test(scope) && !directNegation.test(scope)) return true;
+        const after = haystack.slice(match.index + match[0].length, match.index + match[0].length + 60);
+        const negatedNoun = negativeBefore.test(scope)
+          && /^\s*(?:experience|knowledge|exposure|proficiency|familiarity|background)\b/i.test(after);
+        if (!negativeExperience.test(scope) && !negativeUse.test(scope)
+          && !directNegation.test(scope) && !negatedNoun) return true;
       }
     }
     return false;
@@ -1088,7 +1145,21 @@
       'pandas', 'NumPy']),
     'Analytics & Reporting': CATEGORIES['Analytics & Reporting'].concat(['Qlik',
       'Audit', 'Reconciliation', 'Budgeting']),
-    'Tools & Platforms': CATEGORIES['Tools & Platforms'].concat(['HubSpot', 'Remote.com']),
+    'Tools & Platforms': CATEGORIES['Tools & Platforms'].concat(['HubSpot', 'Remote.com',
+      'Zapier', 'Workato', 'Boomi', 'n8n', 'MuleSoft', 'Make',
+      // IT operations and end-user computing: products.
+      'Google Workspace', 'Microsoft 365', 'Okta', 'JumpCloud', 'OneLogin', 'Duo',
+      'LastPass', '1Password', 'Jamf', 'Intune', 'Kandji', 'Mosyle', 'Workspace ONE',
+      'Autopilot', 'Zoom', 'Zoom Rooms', 'Microsoft Teams Rooms', 'Slack',
+      'Active Directory', 'CMDB']),
+    // The practices, which belong with the other infrastructure work.
+    'IT Operations': ['Help Desk', 'Ticketing', 'macOS', 'Windows', 'Single Sign-On',
+      'Multi-factor Authentication', 'Device Management', 'Provisioning', 'Deprovisioning',
+      'Inventory Management', 'Equipment Lifecycle', 'Hardware Troubleshooting',
+      'Software Troubleshooting', 'Audiovisual', 'Group Policy', 'BitLocker', 'FileVault',
+      'Software Packaging', 'Licence Management', 'ITIL', 'Request Fulfilment',
+      'Major Incident Management', 'Password Reset', 'IT Procurement', 'Remote Desktop',
+      'VPN', 'DNS', 'DHCP', 'TCP/IP', 'VLAN', 'Firewall', 'Printer Support'],
     'Soft Skills': CATEGORIES['Soft Skills'].concat(['Scrappy', 'Bias for Action',
       'Stakeholder Communication', 'Accuracy', 'Conflict Resolution', 'Languages',
       'Tradeoffs']),

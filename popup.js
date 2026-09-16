@@ -5470,6 +5470,7 @@ class ATSTailor {
 
   sweepKnownRequirements(jobDescription, keywords) {
     const TX = window.KeywordTaxonomy;
+    const JDR = window.JDRequirements;
     const base = keywords && Array.isArray(keywords.all) ? keywords : {
       all: [], highPriority: [], mediumPriority: [], lowPriority: [],
     };
@@ -5478,28 +5479,61 @@ class ATSTailor {
     // returns what it was given rather than taking the run down with it.
     if (!TX || typeof TX.sweep !== 'function' || !jobDescription) return base;
 
+    // FIRST, WHAT THE POSTING DOES NOT ACTUALLY ASK FOR.
+    //
+    // The model reads the whole page, so it returns the benefits section
+    // and the culture paragraph alongside the job: "Benefits
+    // Administration", "warmth", "physical office work", "Training" from
+    // a training budget. Every one of those reached the skills section of
+    // a real CV. They are checked against the posting's own statements,
+    // in the sections that state requirements, under the reading each
+    // term actually has there.
+    let vetted = base;
+    if (JDR && typeof JDR.filterAgainstPosting === 'function') {
+      const { kept, dropped } = JDR.filterAgainstPosting(base.all, jobDescription);
+      if (dropped.length) {
+        console.log('[ATS Tailor] Not requirements of this posting:',
+          dropped.map((d) => d.term + ' (' + d.reason + ')').join(', '));
+      }
+      const keptKeys = new Set(kept.map((k) => TX.keyOf(k)));
+      const tier = (list) => (Array.isArray(list) ? list : [])
+        .map((k) => kept.find((x) => TX.keyOf(x) === TX.keyOf(k)) || k)
+        .filter((k) => keptKeys.has(TX.keyOf(k)));
+      vetted = Object.assign({}, base, {
+        all: kept,
+        highPriority: tier(base.highPriority),
+        mediumPriority: tier(base.mediumPriority),
+        lowPriority: tier(base.lowPriority),
+      });
+    }
+
     // The taxonomy's own identity for a requirement, so a group already
     // represented is not added a second time under its canonical name,
     // and "AI-driven" counts as the AI the extractor already returned.
-    const held = new Set(base.all.map((t) => TX.keyOf(t)).filter(Boolean));
+    const held = new Set(vetted.all.map((t) => TX.keyOf(t)).filter(Boolean));
 
     const added = [];
-    for (const { label, hits } of TX.sweep(jobDescription, 60)) {
+    // Section-aware where the module is available: a requirement is only
+    // added from a statement that states requirements.
+    const swept = (JDR && typeof JDR.extract === 'function')
+      ? JDR.extract(jobDescription).requirements.map((r) => ({ label: r.label, hits: r.mentions }))
+      : TX.sweep(jobDescription, 60);
+    for (const { label, hits } of swept) {
       const key = TX.keyOf(label);
       if (!key || held.has(key)) continue;
       held.add(key);
       added.push({ label, hits });
     }
-    if (!added.length) return base;
+    if (!added.length) return vetted;
 
     // Spread first, so anything the caller carried that this pass knows
     // nothing about -- the AI path's `structured` breakdown, above all --
     // survives rather than being silently dropped on the way through.
-    const out = Object.assign({}, base, {
-      all: base.all.concat(added.map((a) => a.label)),
-      highPriority: (base.highPriority || []).slice(),
-      mediumPriority: (base.mediumPriority || []).slice(),
-      lowPriority: (base.lowPriority || []).slice(),
+    const out = Object.assign({}, vetted, {
+      all: vetted.all.concat(added.map((a) => a.label)),
+      highPriority: (vetted.highPriority || []).slice(),
+      mediumPriority: (vetted.mediumPriority || []).slice(),
+      lowPriority: (vetted.lowPriority || []).slice(),
     });
     for (const { label, hits } of added) {
       // Named more than once is the posting emphasising it; named once is
