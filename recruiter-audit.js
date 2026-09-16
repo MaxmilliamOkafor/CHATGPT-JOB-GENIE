@@ -1583,7 +1583,13 @@
       // unqualified, so the number is the whole of it.
       const covered = !want.length || want.some((w) => mine.indexOf(w) !== -1);
       if (covered && facts.years >= asked.years) {
-        sentence = 'Seeking to apply this background to the ' + title + ' role, bringing '
+        // "Interested in", not "Seeking to". The writing prompt bans
+        // "seeking" from a summary outright as objective-statement
+        // language, and a pass that appends what the prompt forbids is
+        // two rules pulling against each other inside one paragraph.
+        // Both branches open identically now, so the clause about years
+        // is the only thing that differs between them.
+        sentence = 'Interested in applying this experience to the ' + title + ' role, bringing '
           + facts.years + ' years of relevant experience that meets the position’s '
           + 'stated experience requirement.';
       }
