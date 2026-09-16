@@ -150,8 +150,14 @@ console.log('\nAND THE FLOW RUNS IT LAST, ON THE FINISHED SKILLS BLOCK');
   t('  the tailoring flow calls it',
     /this\.alignToPostingWording\(this\.generatedDocuments\.cv, keywords\)/.test(src),
     'the pass exists but nothing runs it');
+  // Measured between the two calls in the TAILORING FLOW, not the first
+  // textual occurrence anywhere in the file. fastKeywordInjection is also
+  // called from an earlier helper, so indexOf found that one and the
+  // assertion passed for as long as the flow had them the wrong way round.
+  const flow = src.slice(src.indexOf('async tailorDocuments('));
   t('  ...after the coverage pass has added what it is going to add',
-    src.indexOf('this.fastKeywordInjection(') < src.indexOf('this.alignToPostingWording('),
+    flow.indexOf('this.fastKeywordInjection(') !== -1
+      && flow.indexOf('this.fastKeywordInjection(') < flow.indexOf('this.alignToPostingWording('),
     'it would run over a half-built skills block');
 }
 

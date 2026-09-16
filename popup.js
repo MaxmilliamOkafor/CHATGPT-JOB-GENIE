@@ -4673,7 +4673,8 @@ class ATSTailor {
       // the raw tiers, so benefits lines and screening criteria appeared
       // as chips that the gauge had already discarded. Nineteen chips
       // over a badge reading "10 of 10" is that disagreement on screen.
-      const asked = ATSTailor.requirementsOnly(Array.isArray(list) ? list : []);
+      const asked = ATSTailor.requirementsOnly(
+        ATSTailor.collapseDecoratedPhrases(Array.isArray(list) ? list : []));
       for (const entry of TX.dedupe(asked)) {
         if (claimed.has(entry.key)) continue;      // already shown, higher up
         claimed.add(entry.key);
@@ -6141,6 +6142,33 @@ class ATSTailor {
         // products" against the CV, and in this industry shipping means
         // getting software in front of users rather than moving boxes.
         // The table maps both onto Delivery.
+
+        // THE GENERIC BUSINESS NOUNS A RESPONSIBILITIES LIST IS MADE OF.
+        //
+        // Every one of these arrived as its own chip from a real posting,
+        // inside a phrase no CV could ever match: "sales performance",
+        // "custom reports", "data-driven recommendations", "ad-hoc data
+        // analysis", "independence". A phrase built only from words like
+        // these names nothing a candidate can evidence, so it sat in the
+        // denominator permanently red -- which is most of what "still a
+        // lot of red chips after a full tailoring run" turned out to be.
+        //
+        // None is a skill on its own, and a phrase pairing one with a
+        // real requirement still keeps the requirement: the table is
+        // consulted before this list is.
+        'models', 'model', 'reports', 'report', 'reporting', 'analysis',
+        'performance', 'sales', 'custom', 'recommendations', 'recommendation',
+        'independence', 'independent', 'solutions', 'solution', 'opportunities',
+        'opportunity', 'insights', 'insight', 'trends', 'trend', 'patterns',
+        'pattern', 'anomalies', 'needs', 'audiences', 'audience', 'members',
+        'member', 'processes', 'process', 'tools', 'tool', 'techniques',
+        'technique', 'initiatives', 'initiative', 'improvements', 'improvement',
+        'results', 'result', 'outcomes', 'outcome', 'deliverables',
+        'responsibilities', 'responsibility', 'sets', 'areas', 'area',
+        'sources', 'source', 'complex', 'comprehensive', 'effective',
+        'effectively', 'clearly', 'concisely', 'accurate', 'complete',
+        'potential', 'future', 'current', 'specific', 'diverse', 'key',
+        'driven', 'led', 'based', 'oriented', 'focused', 'hoc', 'ad',
       ]);
     }
     return this.__ordinaryWords;
@@ -6161,7 +6189,63 @@ class ATSTailor {
         const known = TX && typeof TX.groupOf === 'function' && TX.groupOf(k);
         if (!known) return false;
       }
+      // AND A PHRASE OF ORDINARY WORDS IS PROSE, HOWEVER LONG IT IS.
+      //
+      // The single-word rule above never reached "sales performance",
+      // "custom reports" or "data-driven recommendations", so a clause
+      // lifted from the responsibilities list arrived as a chip that no
+      // CV could ever match. They sat in the denominator permanently
+      // red, which is most of what "still a lot of red chips after a
+      // full tailoring run" turned out to be.
+      //
+      // Both halves are required, exactly as for one word: every word
+      // ordinary AND no requirement named anywhere in the phrase. "Data
+      // Engineering" and "Machine Learning" are built from ordinary
+      // words and survive on the table's say-so.
+      if (/[\s-]/.test(k)) {
+        const words = k.split(/[^a-z0-9+#.]+/).filter(Boolean);
+        if (words.length && words.every((w) => ordinary.has(w))) {
+          const known = TX && typeof TX.groupOf === 'function' && TX.groupOf(k);
+          const names = TX && typeof TX.sweep === 'function' && TX.sweep(k, 3).length > 0;
+          if (!known && !names) return false;
+        }
+      }
       return true;
+    });
+  }
+
+  /**
+   * THE SAME REQUIREMENT, DECORATED, IS NOT A SECOND REQUIREMENT.
+   *
+   * An extractor returns both "Forecasting" and "forecasting models",
+   * both "Data Analysis" and "ad-hoc data analysis". Each pair is one
+   * requirement, but only the bare form carries a taxonomy group, so
+   * dedupe kept both and the panel showed the same requirement twice --
+   * routinely once green and once red, which is the chips disagreeing
+   * with themselves rather than with the CV.
+   *
+   * A phrase that names exactly one known requirement and otherwise adds
+   * only ordinary words IS that requirement, and is replaced by it. A
+   * phrase naming two ("Python and SQL experience") is left alone, since
+   * collapsing it would silently drop one. A phrase naming none is left
+   * alone too. So this can only ever merge, never discard.
+   */
+  static collapseDecoratedPhrases(list) {
+    const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
+    const items = Array.isArray(list) ? list : [];
+    if (!TX || typeof TX.sweep !== 'function') return items;
+    return items.map((kw) => {
+      const raw = String(kw == null ? '' : kw).trim();
+      if (!raw || !/[\s-]/.test(raw)) return kw;
+      if (TX.groupOf(raw)) return kw;              // already a requirement itself
+      const named = TX.sweep(raw, 4);
+      // Exactly one requirement named is the whole test. Whatever else
+      // the phrase contains is, by the table's own account, not a
+      // requirement -- so "models" in "forecasting models" is decoration
+      // and nothing is lost by collapsing to Forecasting. Requiring the
+      // leftovers to be in an ordinary-word list as well only meant the
+      // collapse never fired, because "models" was not in it.
+      return named.length === 1 ? named[0].label : kw;
     });
   }
 
@@ -6230,6 +6314,25 @@ class ATSTailor {
       push(p.professional_experience || p.professionalExperience);
       push(p.relevant_projects || p.relevantProjects);
       push(p.education); push(p.ats_strategy); push(p.cover_letter);
+      // THE CANDIDATE'S OWN CV IS EVIDENCE OF WHAT THE CANDIDATE HAS DONE.
+      //
+      // The gate was reading the structured profile fields alone, which
+      // are a summary of a CV rather than the CV. On a real profile that
+      // is about two thousand characters against a seven thousand
+      // character document, so work the candidate genuinely did was
+      // invisible to the gate and the keyword was withheld: a CV saying
+      // "presenting proposed solutions to client CTOs" could not
+      // evidence Presentation, and the chip stayed red through a full
+      // tailoring run with the proof sitting in the uploaded file.
+      //
+      // This is the UPLOADED base CV, not the generated one. That
+      // distinction is the whole point: the candidate wrote it and
+      // stands behind it, so it proves things. Reading back the CV this
+      // tool just wrote would prove only that the tool wrote it.
+      try {
+        const own = typeof this.getOriginalCVText === 'function' ? this.getOriginalCVText() : '';
+        if (own && typeof own === 'string') parts.push(own);
+      } catch (e) { /* the profile fields above still stand on their own */ }
       return parts.join(' \n ').toLowerCase();
     } catch (e) {
       return '';
@@ -7625,16 +7728,6 @@ class ATSTailor {
       // profile, which is where the degrees actually live.
       this.generatedDocuments.cv = this.ensureEducationSection(this.generatedDocuments.cv, p);
 
-      // THE POSTING'S OWN WORDING, ON WHAT THE CV ALREADY HAS.
-      //
-      // Last, so it sees the finished skills block: everything the
-      // coverage pass was going to add is already in place, and the
-      // pairing runs over the whole of it.
-      if (keywords.all?.length && this.generatedDocuments.cv) {
-        const aligned = this.alignToPostingWording(this.generatedDocuments.cv, keywords);
-        if (aligned.paired.length) this.generatedDocuments.cv = aligned.text;
-      }
-
       // And whichever door the section came in through, it leaves
       // without graduation years. They stay in the profile, where
       // autofill reads them for forms that demand one.
@@ -7667,6 +7760,19 @@ class ATSTailor {
           console.warn('[ATS Tailor] The skills section ran out of room before these '
             + 'profile-evidenced terms: ' + closed.overflowKeywords.join(', '));
         }
+      }
+
+      // THE POSTING'S OWN WORDING, ON WHAT THE CV ALREADY HAS.
+      //
+      // Genuinely last, so it sees the FINISHED skills block. It used to
+      // sit above the coverage pass while its own comment claimed it ran
+      // last, so everything that pass added was never considered for
+      // pairing. (The test that was meant to hold the order matched the
+      // first textual occurrence of fastKeywordInjection in the file,
+      // which is a different call site, so it passed throughout.)
+      if (keywords.all?.length && this.generatedDocuments.cv) {
+        const aligned = this.alignToPostingWording(this.generatedDocuments.cv, keywords);
+        if (aligned.paired.length) this.generatedDocuments.cv = aligned.text;
       }
 
       // Review actual coverage after the evidence-backed recovery.
