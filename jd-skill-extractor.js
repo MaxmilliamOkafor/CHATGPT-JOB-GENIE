@@ -274,6 +274,7 @@
    * resolve to the term they belong to.
    */
   function extractSoftSkills(jdText) {
+    jdText = global.UniversalJDParser ? global.UniversalJDParser.processAnyJobDescription(jdText).text : jdText;
     const hay = ' ' + _norm(jdText) + ' ';
     const out = [];
     const seen = new Set();
@@ -302,6 +303,7 @@
    * matched against a list of skills.
    */
   function extractHardSkills(jdText, opts) {
+    jdText = global.UniversalJDParser ? global.UniversalJDParser.processAnyJobDescription(jdText).text : jdText;
     const o = opts || {};
     const limit = o.limit || 40;
     const text = String(jdText || '');

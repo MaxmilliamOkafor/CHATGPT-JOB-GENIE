@@ -134,17 +134,66 @@
   // shortening risks losing important content.
   // ===================================================================
 
+  // A LETTER THAT BEGINS "ADDITIONALLY" LOST ITS FIRST PARAGRAPH.
+  //
+  // Measured on a real delivered .docx. The whole body was:
+  //
+  //   Dear Hiring Manager,
+  //   Additionally, I mentored two junior engineers, facilitating their
+  //   transition to permanent roles, ...
+  //
+  // "Additionally" refers back to something, and there is nothing behind
+  // it. The opening paragraph -- the one that says what the application
+  // is and why -- was never written or was cut, and every pass after
+  // that tidied the remains without noticing the hole. The letter went
+  // out at 85 words of body: four sentences, no opening, no argument.
+  //
+  // The connective is the tell, and it is cheap to look for. So is the
+  // length: a body this short is a fragment, whatever it says.
+  const _SALUTATION = /^\s*(?:dear|hello|hi|to whom)\b/i;
+  const _SIGNOFF = /^\s*(?:sincerely|kind regards|best regards|warm regards|regards|yours (?:sincerely|faithfully|truly)|best|thank you)\s*,?\s*$/i;
+  const _ORPHAN_CONNECTIVE = /^(?:additionally|furthermore|moreover|in addition|also|secondly|second|similarly|likewise|besides|what(?:'s| is) more|on top of that|as well)\b/i;
+
+  function coverLetterBody(coverText) {
+    const lines = String(coverText || '').split('\n');
+    let from = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (_SALUTATION.test(lines[i])) { from = i + 1; break; }
+    }
+    let to = lines.length;
+    for (let i = from; i < lines.length; i++) {
+      if (_SIGNOFF.test(lines[i])) { to = i; break; }
+    }
+    return lines.slice(from, to).filter((l) => l.trim());
+  }
+
   function coverLetterHealth(coverText) {
-    if (!coverText) return { wordCount: 0, tooLong: false, iCount: 0, youCount: 0, selfHeavy: false };
-    const wordCount = coverText.split(/\s+/).filter(Boolean).length;
-    const iCount = (coverText.match(/\bI\b/g) || []).length;
-    const youCount = (coverText.match(/\b(you|your|we|our)\b/gi) || []).length;
+    if (!coverText) {
+      return { wordCount: 0, tooLong: false, iCount: 0, youCount: 0, selfHeavy: false,
+        bodyWords: 0, tooShort: false, opensOnConnective: false, opening: '' };
+    }
+    const text = String(coverText);
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+    const iCount = (text.match(/\bI\b/g) || []).length;
+    const youCount = (text.match(/\b(you|your|we|our)\b/gi) || []).length;
+    const body = coverLetterBody(text);
+    const bodyWords = body.join(' ').split(/\s+/).filter(Boolean).length;
+    const opening = (body[0] || '').trim();
     return {
       wordCount,
       tooLong: wordCount > 350,
       iCount,
       youCount,
       selfHeavy: iCount > 0 && youCount > 0 && iCount / (iCount + youCount) > 0.65,
+      bodyWords,
+      // 120, not 150. The line being drawn is "structurally incomplete",
+      // not "could be longer": three tight paragraphs come to about 130
+      // words and are a whole letter, while the one that prompted this
+      // was 85 with no opening at all. A floor that flags a complete
+      // letter for being brief is a warning nobody thanks you for.
+      tooShort: bodyWords > 0 && bodyWords < 120,
+      opensOnConnective: !!opening && _ORPHAN_CONNECTIVE.test(opening),
+      opening: opening.slice(0, 120),
     };
   }
 
@@ -1218,7 +1267,388 @@
   // candidate's own most recent title is used, which is always true.
   // Nothing is invented, and the slot is never left empty when a real
   // title exists to fill it.
-  function ensureHeadline(cvText, jdTitle) {
+  // ===================================================================
+  // A COVER LETTER THAT READS OUT THE CV IS A WASTED PAGE
+  // -------------------------------------------------------------------
+  // Measured on a real pair of documents, both substantive paragraphs of
+  // the letter were restatements of CV bullets:
+  //
+  //   55%  "I led the migration of a UK retail client's legacy
+  //         application to AWS microservices, delivering all 47 services
+  //         in 11 months"
+  //   vs   "Architected a UK retail client's migration from a legacy
+  //         application to AWS microservices on EKS, delivering all 47
+  //         services in 11 months"
+  //
+  // The recruiter reads the letter, then the CV, and gets the same two
+  // stories twice. The CV answers what the candidate has done. The
+  // letter is the only document that can say what they would do HERE,
+  // and spending it on repetition throws that away.
+  //
+  // This reports rather than rewrites. Rewriting a paragraph well needs
+  // the source material and a judgement about what the work involved,
+  // which is the writing model's job with the profile in hand. What was
+  // missing was anyone noticing.
+  const _CONTENT_WORD = /[a-z0-9][a-z0-9+#.-]{3,}/g;
+  const _LETTER_STOP = new Set(['that', 'this', 'with', 'from', 'have', 'been', 'were',
+    'which', 'their', 'there', 'would', 'could', 'about', 'into', 'your', 'they',
+    'them', 'then', 'than', 'when', 'what', 'where', 'while', 'also', 'more', 'most',
+    'over', 'under', 'across', 'through', 'role', 'team', 'work', 'working', 'experience']);
+
+  function _contentWords(s) {
+    const out = new Set();
+    for (const w of String(s || '').toLowerCase().match(_CONTENT_WORD) || []) {
+      if (!_LETTER_STOP.has(w)) out.add(w);
+    }
+    return out;
+  }
+
+  /**
+   * Cover-letter paragraphs that restate a CV bullet.
+   *
+   * Overlap is measured against the SMALLER of the two word sets, so a
+   * short paragraph lifted from a long bullet still scores high. Forty
+   * per cent is the line: below it two texts about the same job share
+   * ordinary vocabulary, above it they are the same sentence rewritten.
+   */
+  function coverLetterRestatesCv(cvText, coverText, threshold) {
+    const limit = typeof threshold === 'number' ? threshold : 0.4;
+    const bullets = String(cvText || '').split('\n')
+      .filter((l) => /^\s*[\u2022\-*]/.test(l) && l.trim().split(/\s+/).length > 6);
+    const paras = String(coverText || '').split(/\n+/)
+      .filter((l) => l.trim().split(/\s+/).length > 12);
+    if (!bullets.length || !paras.length) return [];
+    const found = [];
+    for (const para of paras) {
+      const A = _contentWords(para);
+      if (A.size < 5) continue;
+      let best = null, bestScore = 0;
+      for (const bullet of bullets) {
+        const B = _contentWords(bullet);
+        if (!B.size) continue;
+        let shared = 0;
+        for (const w of A) if (B.has(w)) shared += 1;
+        const score = shared / Math.min(A.size, B.size);
+        if (score > bestScore) { bestScore = score; best = bullet.trim(); }
+      }
+      if (bestScore >= limit) {
+        found.push({ paragraph: para.trim(), bullet: best, overlap: Math.round(bestScore * 100) });
+      }
+    }
+    return found;
+  }
+
+  // ===================================================================
+  // THE HEADER IS FIVE LINES AND NONE OF THEM REPEATS
+  // -------------------------------------------------------------------
+  // A real CV went out reading
+  //
+  //   Maxmilliam Okafor
+  //   Grupo QuintoAndar
+  //   Grupo QuintoAndar
+  //   Dublin, IE (open to relocation) | +353 ... | Email: max@...
+  //   Dublin, Ireland | +353 ... | Email: max@...
+  //
+  // The employer's name where the role belongs, twice, above two contact
+  // lines. Several passes write into this block -- the model writes a
+  // headline, the extension inserts one, the location pass rewrites the
+  // contact line -- and each checked only the one line it cared about,
+  // so no pass ever saw the block as a whole.
+  //
+  // This is that missing pass. It looks only at the header, only
+  // removes, and leaves the first of anything it keeps.
+  function tidyHeader(cvText, jdCompany) {
+    const text = String(cvText || '');
+    if (!text) return { text, removed: [] };
+    const lines = text.split('\n');
+
+    let nameAt = -1;
+    for (let i = 0; i < lines.length; i += 1) {
+      if (lines[i].trim()) { nameAt = i; break; }
+    }
+    if (nameAt === -1) return { text, removed: [] };
+
+    // The header runs to the first section heading or the first blank
+    // line after real content, whichever comes first. Eight lines is a
+    // ceiling, not a target: no CV header is longer than that.
+    let end = nameAt + 1;
+    while (end < lines.length && end < nameAt + 9) {
+      const l = lines[end];
+      if (!l.trim()) break;
+      if (_ANY_HEAD.test(l)) break;
+      end += 1;
+    }
+    const block = lines.slice(nameAt, end);
+    if (block.length < 2) return { text, removed: [] };
+
+    const norm = (x) => String(x || '').trim().toLowerCase().replace(/\s+/g, ' ');
+    const company = norm(jdCompany);
+    const removed = [];
+    const kept = [];
+    const seen = new Set();
+    // Among contact lines, the fullest one wins: the location pass adds
+    // "(open to relocation)" to its copy, and dropping that copy would
+    // undo a correction another pass deliberately made.
+    // AN EMAIL ADDRESS, not "anything that looks contact-ish". A header
+    // legitimately carries a phone-and-email line AND a separate links
+    // line, and treating both as the same kind made the longer links
+    // line evict the phone number. Only lines bearing an address compete
+    // with each other, which is exactly the duplication seen live.
+    const isContact = (l) => l.indexOf('@') !== -1;
+    const contacts = block.filter(isContact);
+    const bestContact = contacts.slice().sort((a, b) => b.length - a.length)[0];
+    let contactKept = false;
+
+    for (let i = 0; i < block.length; i += 1) {
+      const line = block[i];
+      const key = norm(line);
+      if (i > 0 && key && seen.has(key)) { removed.push(line.trim()); continue; }
+      // The employer's name is not part of the candidate's header.
+      if (i > 0 && company && key === company) { removed.push(line.trim()); continue; }
+      if (i > 0 && isContact(line)) {
+        if (contactKept || line !== bestContact) { removed.push(line.trim()); continue; }
+        contactKept = true;
+      }
+      seen.add(key);
+      kept.push(line);
+    }
+    if (!removed.length) return { text, removed: [] };
+    return { text: lines.slice(0, nameAt).concat(kept, lines.slice(end)).join('\n'), removed };
+  }
+
+  /**
+   * THE TITLE IN THE HEADLINE IS NOT THE TITLE IN THE SUMMARY.
+   *
+   * A real scan of a delivered CV reported "The job title 'Customer
+   * Support Coach' was not found in your resume". It was found: line two
+   * of the text layer, literal selectable text, one clean hit. What the
+   * scanner means is narrower. It compares the posting's title against
+   * the titles it read out of the employment history, plus the summary,
+   * and a line standing on its own under the name parses as part of the
+   * name and contact block rather than as a position.
+   *
+   * So the title goes in the summary too, in the one form that does not
+   * claim a job that was never held. Only when the history does NOT
+   * already contain it: a candidate who has held the title is found
+   * through the employment block, and writing "candidate" over a genuine
+   * match sells it short.
+   */
+  function ensureTitleInSummary(cvText, jdTitle, jdCompany, jobText) {
+    const text = String(cvText || '');
+    const title = normaliseJobTitle(jdTitle);
+    if (!text || !title) return { text, added: false };
+    const _same = (a, b) => {
+      const n = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const A = n(a), B = n(b);
+      return !!A && !!B && (A === B || A.indexOf(B) === 0 || B.indexOf(A) === 0);
+    };
+    if (_same(title, jdCompany)) return { text, added: false };
+
+    const lines = text.split('\n');
+
+    // The summary's extent.
+    let head = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (SUMMARY_HEADER_RE.test(lines[i].trim())) { head = i; break; }
+    }
+    if (head === -1) return { text, added: false };
+    let end = lines.length;
+    for (let i = head + 1; i < lines.length; i++) {
+      if (_ANY_HEAD.test(lines[i])) { end = i; break; }
+    }
+    let body = -1;
+    for (let i = head + 1; i < end; i++) {
+      if (lines[i].trim()) { body = i; break; }
+    }
+    if (body === -1) return { text, added: false };
+
+    // A SENIORITY WORD IS NOT A DIFFERENT PROFESSION.
+    //
+    // Without this, a Data Analyst applying for Senior Data Analyst got
+    // "Senior Data Analyst candidate with a background as a Software
+    // Engineer" bolted onto a summary that already opened "Data Analyst
+    // with five years in credit risk analytics" -- which is worse than
+    // the red X it was clearing, and led on the least relevant of his
+    // two real titles.
+    const _LEVEL = /^(?:senior|sr\.?|junior|jr\.?|lead|principal|staff|associate|assistant|deputy|chief|head of|entry[- ]level|graduate|trainee|intern)\s+/i;
+    const core = (s) => {
+      let out = String(s || '').trim();
+      for (let i = 0; i < 2 && _LEVEL.test(out); i++) out = out.replace(_LEVEL, '').trim();
+      return out;
+    };
+    const body14 = lines.slice(head + 1, end).join(' ').toLowerCase();
+    // Already said, in the summary itself, under this name or the same
+    // title without its level word.
+    // The level-stripped form is only usable as an "already said" test
+    // while it still names a profession. core("Principal Engineer") is
+    // "Engineer", which appears in most engineering summaries ever
+    // written, and matching on it silenced this pass on nearly every
+    // application. Two words or more, or the full title only.
+    const coreTitle = core(title);
+    const coreUsable = /\s/.test(coreTitle);
+    if (body14.indexOf(title.toLowerCase()) !== -1
+      || (coreUsable && body14.indexOf(coreTitle.toLowerCase()) !== -1)) {
+      return { text, added: false };
+    }
+
+    // The held titles, read the way ensureHeadline reads them, and the
+    // employers alongside them.
+    //
+    // A COMPANY NAME IS NOT A JOB TITLE, and a scrape hands one over
+    // often enough that ensureHeadline already refuses it. Comparing
+    // against jdCompany is not enough here: the caller does not always
+    // have one, and a CV whose history names Meta is all the evidence
+    // needed that "Meta" is not the role. Without this the summary
+    // opened "Meta candidate with a background as a Software Engineer."
+    let inExp = false;
+    const held = [];
+    const employers = [];
+    for (const l of lines) {
+      if (_EXP_HEAD.test(l)) { inExp = true; continue; }
+      if (_ANY_HEAD.test(l)) { inExp = false; continue; }
+      if (!inExp || !l.trim() || /^\s*[-•*]/.test(l)) continue;
+      if (ROLE_DATE_RE.test(l) || /\b(?:19|20)\d{2}\b/.test(l)) {
+        // "Meta January 2023 - Present", or "Meta | Engineer | 2023 -".
+        for (const part of l.split('|')) {
+          const name = part.replace(ROLE_DATE_RE, '')
+            .replace(/\b(?:19|20)\d{2}\b.*$/, '')
+            .replace(/[-–—,]+\s*$/, '').trim();
+          if (name && name.split(/\s+/).length <= 5) employers.push(name);
+        }
+        continue;
+      }
+      if (_TITLE_WORD.test(l) && l.trim().split(/\s+/).length <= 7) {
+        const clean = l.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        if (clean && held.indexOf(clean) === -1) held.push(clean);
+      }
+    }
+    // Held it, under this name or a longer one ("Software Engineer II"
+    // answers a posting for "Software Engineer"). The history states it
+    // with dates, which is stronger than anything the summary could say.
+    if (held.some((h) => _same(h, title) || _same(core(h), core(title)))) {
+      return { text, added: false };
+    }
+    if (employers.some((e) => _same(e, title))) return { text, added: false };
+    if (!held.length) return { text, added: false };
+
+    // ── THE YEARS CLAUSE, AND WHEN IT IS TRUE ────────────────────────
+    //
+    // "bringing 8 years of relevant experience that meets the position's
+    // stated experience requirement" is an assertion about eligibility,
+    // not a description. It is worth making when it is true and it is a
+    // false statement on an application when it is not.
+    //
+    // A posting stating a number is NOT enough to license it. Almost
+    // every such requirement is domain-qualified, and the domain is the
+    // whole of it. The posting that produced this rule reads:
+    //
+    //   1+ years of hands-on, front-of-house hospitality operations
+    //   experience at a hotel or resort ... (Airline, event, or food &
+    //   beverage-only experience does not meet this requirement.)
+    //
+    // A software engineer of eight years satisfies the number and none
+    // of the requirement. On the trigger "the posting mentions years"
+    // alone, that CV goes out asserting it meets a bar it fails, under a
+    // history that says otherwise three lines down.
+    //
+    // So the domain is checked too. Not through the evidence machinery:
+    // this compares the qualifying words of the posting's own sentence
+    // against the titles the employment block states. No overlap, no
+    // claim, and the plain closing line is used instead.
+    const _yearsAsked = (text) => {
+      const src = String(text || '');
+      const re = /(\d{1,2})\s*\+?\s*years?[^.\n]{0,90}/gi;
+      let m;
+      while ((m = re.exec(src)) !== null) {
+        const clause = m[0];
+        // A sentence about years that is not about the candidate's:
+        // "delivering 47 services in 11 months" shapes, and the
+        // employer's own age.
+        if (!/experience|background|working|worked|hands[- ]on|track record/i.test(clause)) continue;
+        return { years: parseInt(m[1], 10), clause };
+      }
+      return null;
+    };
+
+    // The words that qualify the requirement, minus the furniture. What
+    // is left is the domain: for the posting above, hospitality,
+    // operations, hotel, resort, desk.
+    const _STOP = new Set(['years', 'year', 'experience', 'of', 'in', 'the', 'a', 'an',
+      'and', 'or', 'with', 'at', 'to', 'for', 'on', 'plus', 'minimum', 'least',
+      'proven', 'relevant', 'related', 'similar', 'working', 'worked', 'hands',
+      'track', 'record', 'previous', 'prior', 'strong', 'solid', 'demonstrable',
+      'progressive', 'professional', 'full', 'time', 'role', 'roles', 'position',
+      // "Minimum 3 years of experience required" qualifies no domain. Left
+      // in, "required" became the domain and the clause never fired on the
+      // one shape where the number genuinely is the whole requirement.
+      'required', 'requirement', 'requirements', 'preferred', 'desirable',
+      'must', 'have', 'ideally', 'equivalent', 'combined', 'total', 'least']);
+    const _domainWords = (clause) => String(clause || '').toLowerCase()
+      .split(/[^a-z]+/).filter((w) => w.length > 3 && !_STOP.has(w));
+
+    // AT THE END, NOT THE FRONT.
+    //
+    // A first version opened the summary with the title: "Customer
+    // Support Coach candidate with a background as a Software
+    // Engineer." Two passes downstream read the OPENING of a summary to
+    // decide what profession it announces, and both were right to.
+    // repairSummary took it for a claim to an unheld job and rebuilt the
+    // paragraph around it, producing "Meta candidate with a background
+    // as a Software Engineer" on a payroll application.
+    // summaryNamesAnotherProfession went permanently silent, because
+    // every summary now led with the target.
+    //
+    // A closing line leaves the opening saying what it said -- the real
+    // profession, which is what those two passes need to see -- and
+    // still puts the exact title in the summary.
+    //
+    // It claims nothing. Not the title, not a number of years, not a
+    // level. "Applying that experience to X" is true of anyone who
+    // pressed send.
+    let last = body;
+    for (let i = body; i < end; i++) if (lines[i].trim()) last = i;
+
+    // THREE OUTCOMES, AND ONLY ONE OF THEM MENTIONS YEARS.
+    //
+    //   The posting states a number, the domain is one this history
+    //   covers, and the span clears the bar: the claim is made, with a
+    //   digit, because "8" is what a reader and a parser both scan for
+    //   and "eight" is what neither does.
+    //
+    //   The posting states a number and the domain is somebody else's:
+    //   NO number. The plain line. This is the branch that keeps a
+    //   software engineer from telling a hotel he meets their bar.
+    //
+    //   The posting states no number: the plain line, because there is
+    //   no requirement to say anything about.
+    const asked = _yearsAsked(jobText);
+    let sentence = 'Interested in applying this experience to the ' + title + ' role.';
+    if (asked) {
+      const facts = _historyFacts(text);
+      const want = _domainWords(asked.clause);
+      const mine = (facts.titles || []).join(' ').toLowerCase();
+      // Overlap on the posting's own qualifying words. A requirement
+      // with no domain words at all ("5+ years of experience") is
+      // unqualified, so the number is the whole of it.
+      const covered = !want.length || want.some((w) => mine.indexOf(w) !== -1);
+      if (covered && facts.years >= asked.years) {
+        // "Interested in", not "Seeking to". The writing prompt bans
+        // "seeking" from a summary outright as objective-statement
+        // language, and a pass that appends what the prompt forbids is
+        // two rules pulling against each other inside one paragraph.
+        // Both branches open identically now, so the clause about years
+        // is the only thing that differs between them.
+        sentence = 'Interested in applying this experience to the ' + title + ' role, bringing '
+          + facts.years + ' years of relevant experience that meets the position’s '
+          + 'stated experience requirement.';
+      }
+    }
+    lines[last] = lines[last].replace(/\s+$/, '').replace(/([^.!?])$/, '$1.')
+      + ' ' + sentence;
+    return { text: lines.join('\n'), added: true, sentence };
+  }
+
+  function ensureHeadline(cvText, jdTitle, jdCompany) {
     const text = String(cvText || '');
     if (!text) return { text, added: false };
     const lines = text.split('\n');
@@ -1259,9 +1689,38 @@
     // every real title with its dates, and the posting's own words in
     // the first line the screener reads is worth more than the
     // distinction.
-    if (title) {
+    // A COMPANY NAME IS NOT A JOB TITLE.
+    //
+    // A real CV went out reading
+    //
+    //   Maxmilliam Okafor
+    //   Grupo QuintoAndar
+    //   Grupo QuintoAndar
+    //
+    // because the scrape of that posting produced the employer's name
+    // where the role should be, and this accepted whatever it was given.
+    // The first line a screener reads named their own company as the
+    // candidate's job title, twice.
+    //
+    // Comparing against the company is the precise test, and it costs
+    // nothing: a genuine title is never the employer's name. Falling
+    // through picks the closest held title instead, which is what the
+    // branch below already does when there is no posting title at all.
+    const _sameAsCompany = (a, b) => {
+      const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+      const A = norm(a), B = norm(b);
+      return !!A && !!B && (A === B || A.indexOf(B) === 0 || B.indexOf(A) === 0);
+    };
+    const titleIsCompany = _sameAsCompany(title, jdCompany);
+    if (titleIsCompany) {
+      try {
+        console.warn('[RecruiterAudit] The posting title scraped as the company name ('
+          + title + '); using a held title for the headline instead.');
+      } catch (e) { /* console is optional */ }
+    }
+    if (title && !titleIsCompany) {
       headline = title;
-    } else if (title && blob.indexOf(title.toLowerCase()) !== -1) {
+    } else if (title && !titleIsCompany && blob.indexOf(title.toLowerCase()) !== -1) {
       headline = title;
     } else {
       // ALL the held titles, then the one CLOSEST to the posting's
@@ -1287,7 +1746,8 @@
         }
       }
       if (held.length) {
-        const want = title.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+        const want = (titleIsCompany ? '' : title)
+          .toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
         let best = held[0], bestScore = 0;
         for (const h of held) {
           const hw = h.toLowerCase().split(/[^a-z0-9]+/);
@@ -1299,10 +1759,54 @@
     }
     if (!headline) return { text, added: false };
 
+    // TWO WRITERS, TWO SPELLINGS, TWO LINES.
+    //
+    // A live CV went out reading
+    //
+    //   Maxmilliam Okafor
+    //   Manager, Payroll Operations - Sub Saharan
+    //   Manager, Payroll Operations
+    //
+    // because the tailoring model writes the target title on the line
+    // under the name (the prompt tells it to) AND the extension inserts
+    // its own copy above it. The two cleaned the scraped title
+    // differently, so neither recognised the other, and every check
+    // here only ever looked at ONE line -- nameAt + 1 -- so the second
+    // copy was never examined.
+    //
+    // The line after the headline is swept for a restatement of it: a
+    // short title-ish line that is a prefix of the headline, or that
+    // the headline is a prefix of. A contact line, a summary heading
+    // and an unrelated title are all left exactly where they are.
+    const _dropEcho = () => {
+      const settled = (lines[nameAt + 1] || '').trim().toLowerCase();
+      const after = (lines[nameAt + 2] || '').trim();
+      if (!settled || !after) return;
+      const a = after.toLowerCase();
+      if (after.indexOf('|') !== -1 || after.indexOf('@') !== -1) return;   // contact line
+      if (_ANY_HEAD.test(after)) return;                                    // a section heading
+      if (after.split(/\s+/).length > 8) return;
+      // NOT ONLY AN ECHO THAT LOOKS LIKE A TITLE.
+      //
+      // This required the repeated line to contain a word like
+      // "engineer" or "manager", so when the headline was a company name
+      // the duplicate underneath it was never examined and both shipped.
+      // An exact repeat of the line above is a duplicate whatever it
+      // says; the title-word test still guards the looser prefix match
+      // below, where a false positive would delete a real line.
+      if (a !== settled && !_TITLE_WORD.test(after)) return;
+      if (a === settled || settled.indexOf(a) === 0 || a.indexOf(settled) === 0) {
+        lines.splice(nameAt + 2, 1);
+      }
+    };
+
     // Already there, in any form? Adding a second one would read as a
     // stutter directly under the name.
     const next = (lines[nameAt + 1] || '').trim();
-    if (next && next.toLowerCase() === headline.toLowerCase()) return { text, added: false };
+    if (next && next.toLowerCase() === headline.toLowerCase()) {
+      _dropEcho();
+      return { text: lines.join('\n'), added: false };
+    }
     // A DIRTY COPY OF THE SAME HEADLINE IS A HEADLINE, NOT A CONTACT
     // LINE. The model writes the raw scraped title ("... | Datadog
     // Careers"); the branch below rejects any line containing a pipe as
@@ -1310,6 +1814,7 @@
     // dirty one and the CV carried both. Same role, so replace.
     if (next && headline && next.toLowerCase().indexOf(headline.toLowerCase()) === 0) {
       lines[nameAt + 1] = headline;
+      _dropEcho();
       return { text: lines.join('\n'), added: false, replaced: true, headline, was: next };
     }
     if (next && _TITLE_WORD.test(next) && next.indexOf('|') === -1
@@ -1349,11 +1854,13 @@
       // none, an existing line the history contains is left alone.
       if (!title && blob.indexOf(next.toLowerCase()) !== -1) return { text, added: false };
       lines[nameAt + 1] = headline;
+      _dropEcho();
       return { text: lines.join('\n'), added: false, replaced: true,
         headline, was: next };
     }
 
     lines.splice(nameAt + 1, 0, headline);
+    _dropEcho();
     return { text: lines.join('\n'), added: true, headline };
   }
 
@@ -1389,7 +1896,7 @@
   // back this does nothing at all, because guessing is what produced
   // the problem.
   const _CONTACT_LINE = /[|·•]/;
-  function ensureTruthfulLocation(cvText, profileLocation, jobLocation) {
+  function ensureTruthfulLocation(cvText, profileLocation, jobLocation, citizenship) {
     const text = String(cvText || '');
     const real = String(profileLocation || '').replace(/\s+/g, ' ').trim();
     if (!text || !real) return { text, changed: false };
@@ -1421,10 +1928,16 @@
     if (seg === -1) return { text, changed: false };
 
     const shown = parts[seg];
-    // Already the truth? A city match is enough: "Dublin, IE" and
-    // "Dublin, Ireland" are the same claim.
+    // A CORRECT CITY IS NOT THE END OF THE JOB.
+    //
+    // This returned here whenever the header already named the right
+    // city, which meant the relocation note could only ever appear on a
+    // run that was fixing a WRONG header. On a CV that already said
+    // "Dublin, Ireland" -- every run after the first -- a posting in
+    // Berlin got no note at all. The whole line is composed below and
+    // compared against what is there, so the only early exit is "what
+    // is there is already exactly right".
     const city = (s) => String(s).split(',')[0].trim().toLowerCase();
-    if (city(shown) === city(real)) return { text, changed: false };
 
     // ── WHEN "(open to relocation)" IS WORTH SAYING ──────────────────
     //
@@ -1456,15 +1969,58 @@
       nl: 'netherlands', es: 'spain', it: 'italy', pt: 'portugal', br: 'brazil',
       ca: 'canada', au: 'australia', in: 'india', sg: 'singapore', ch: 'switzerland' };
     const norm = (c) => ISO[c] || c;
+    // Where an EU citizenship is an actual right to work. The UK is
+    // deliberately absent.
+    const _IN_EU = new Set(['ireland', 'germany', 'france', 'netherlands', 'spain',
+      'italy', 'portugal', 'belgium', 'austria', 'sweden', 'denmark', 'finland',
+      'poland', 'czechia', 'czech republic', 'greece', 'hungary', 'romania',
+      'bulgaria', 'croatia', 'slovakia', 'slovenia', 'estonia', 'latvia',
+      'lithuania', 'luxembourg', 'malta', 'cyprus']);
     const jobCountry = norm(countryOf(job));
     const realCountry = norm(countryOf(real));
     // Abroad only when BOTH countries are known and they differ. An
     // unknown country is not evidence of anything, so it says nothing.
     const abroad = !!job && !REMOTE.test(job)
       && !!jobCountry && !!realCountry && jobCountry !== realCountry;
-    parts[seg] = abroad ? real + ' (open to relocation)' : real;
+
+    // A REGION IS A PLACE TOO.
+    //
+    // "Europe", "EMEA" and "EU" name no country, so the test above said
+    // nothing and the header stayed silent -- on exactly the postings
+    // where a recruiter is choosing between candidates in several
+    // countries and wants to know who can start without a visa.
+    const REGION = /\b(europe|european|emea|eu[- ]wide|benelux|nordics|dach)\b/i;
+    const regional = !!job && !REMOTE.test(job) && !jobCountry && REGION.test(job);
+
+    // THE ADVANTAGE IS ONLY CLAIMED WHEN THE PROFILE STATES IT.
+    //
+    // "EU citizen" answers the question a European posting actually has
+    // -- can this person work here, and what does it cost us -- and it
+    // is worth more than a willingness to move. It is also a legal
+    // status, so it is never inferred from living in an EU country:
+    // residence is not citizenship, and a wrong claim here is a false
+    // statement on an application rather than an overreach.
+    const EU_CITIZEN = /\b(eu|european union)\s+citizen(ship)?\b/i;
+    const euCitizen = EU_CITIZEN.test(String(citizenship || ''));
+
+    let suffix = '';
+    if (abroad || regional) {
+      suffix = euCitizen && (regional || _IN_EU.has(jobCountry))
+        ? ' (EU citizen, open to relocation)'
+        : ' (open to relocation)';
+    }
+    const want = real + suffix;
+    if (shown === want) return { text, changed: false };
+    parts[seg] = want;
     lines[at] = parts.join('  |  ');
-    return { text: lines.join('\n'), changed: true, was: shown, now: parts[seg] };
+    return {
+      text: lines.join('\n'), changed: true, was: shown, now: want,
+      // A header that named the wrong city is a correction; one that
+      // named the right city and gained a relocation note is not, and
+      // the report should not accuse the document of the first when it
+      // did the second.
+      corrected: city(shown) !== city(real),
+    };
   }
 
   // ===================================================================
@@ -3086,6 +3642,18 @@
     if (at === -1) return null;
     const opening = String(lines[at + 1] || '').split(/\s+/).slice(0, 14).join(' ');
     if (!opening) return null;
+    // A SUMMARY THAT LEADS WITH THE TARGET IS NOT MIS-POSITIONED.
+    //
+    // This check is about what the first line ANNOUNCES. An opening of
+    // "Reinsurance Analyst candidate with a background as a Software
+    // Engineer" announces the right profession and then says, truthfully,
+    // where the candidate is coming from. Matching the first profession
+    // anywhere in fourteen words read that as a Software Engineer
+    // opening and told the owner to fix a sentence that was already
+    // doing the thing this exists to ask for.
+    if (new RegExp('^\\s*' + title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(opening)) {
+      return null;
+    }
     const m = opening.match(_PROFESSIONS);
     if (!m) return null;
     const claimed = m[0];
@@ -3115,6 +3683,635 @@
     }
     if (!better) return null;                   // nothing closer to suggest
     return { claimed, title, better };
+  }
+
+
+  // ===================================================================
+  // A SUMMARY THAT IS TRUE, SPECIFIC, AND ABOUT THIS APPLICATION
+  // -------------------------------------------------------------------
+  // A generated CV opened:
+  //
+  //   "Manager of Payroll Operations with a strong background in team
+  //    leadership and operational excellence, ensuring compliance and
+  //    accuracy in payroll delivery across multi-country environments."
+  //
+  // Two separate faults in twenty-eight words.
+  //
+  // IT IS NOT TRUE. The employment block underneath reads Software
+  // Engineer, AI Product Manager, Solutions Architect, Data Analyst.
+  // The candidate has never managed payroll operations. Every resume
+  // parser reads the first line of a summary as a claim about the
+  // person, and a recruiter who reads both sees someone describing a
+  // job they have not held.
+  //
+  // AND IT SAYS NOTHING. "Strong background", "operational excellence",
+  // "ensuring compliance and accuracy" -- no employer, no number, no
+  // year, nothing a screener can check or remember. It is the shape of
+  // a summary with the content removed, and it reads as generated,
+  // which is its own penalty.
+  //
+  // So the summary is judged on both, and rebuilt from FACTS when it
+  // fails either: the titles the history contains, the years it spans,
+  // the employers in it, the requirements of this posting the CV
+  // genuinely satisfies, and the strongest quantified thing the
+  // candidate has actually done. Nothing in the rebuilt sentence comes
+  // from anywhere but the document it is summarising.
+  // ===================================================================
+
+  // A profession named in an opening clause, e.g. "Manager of Payroll
+  // Operations with...", "Accomplished Software Engineer who...".
+  function _openingProfession(sentence) {
+    const opening = String(sentence || '').split(/\s+/).slice(0, 14).join(' ');
+    const known = opening.match(_PROFESSIONS);
+    if (known) return known[0];
+    // A CLOSED LIST CANNOT CATCH THE TITLE THAT WAS ACTUALLY INVENTED.
+    //
+    // _PROFESSIONS names twenty-odd disciplines, and the fabrication
+    // that prompted all of this -- "Manager of Payroll Operations" --
+    // is in none of them. So the check that exists to catch an unheld
+    // title did not fire on the clearest example of one, and it was
+    // only the separate "says nothing checkable" test that caught the
+    // sentence at all. Give the same summary one figure and it would
+    // have shipped.
+    //
+    // The generic reading takes whatever sits before the first "with",
+    // "working", "who" or comma, provided it contains a title noun --
+    // the same detector used to read titles out of the employment
+    // block, so both halves of the comparison are found the same way.
+    const head = opening.split(/\s+(?:with|working|who|that|bringing|delivering|specialis|specializ)/i)[0]
+      .replace(/[,.;:].*$/, '')
+      .replace(/^(?:an?|the|accomplished|experienced|seasoned|senior|highly|proven|results[- ]driven|dynamic|motivated)\s+/i, '')
+      .trim();
+    if (!head || head.split(/\s+/).length > 6) return '';
+    return _TITLE_WORD.test(head) ? head : '';
+  }
+
+
+  // ── A SUMMARY THAT IS TRUE, CHECKABLE, AND STILL NOT ENGLISH ────────
+  //
+  // The two tests in repairSummary judge CONTENT: does it claim a
+  // profession the history does not hold, and does it say anything a
+  // screener can check. A sentence can pass both and still be
+  // unreadable, and one did, on a live application:
+  //
+  //   "AI Product Manager working across compliance and end-to-end.
+  //    Impression reporting, cutting the overnight run from six hours
+  //    to under one hour; replaced a 40-tab Excel reporting pack with
+  //    a Power BI and Tableau suite."
+  //
+  // Every fact in it is true and it carries three figures, so neither
+  // test fired. It is still the first thing a recruiter reads, and
+  // "working across compliance and end-to-end" has no object while
+  // "Impression reporting, cutting the overnight run" has no verb.
+  //
+  // The checks below are deliberately narrow, because the accepted CV
+  // voice IS elliptical. "Software engineer with nine years across
+  // three employers." has no finite verb and is correct. "Trained 24
+  // analysts in SQL and Power BI." has no subject and is correct. Only
+  // these three shapes are faults.
+
+  // A modifier standing where a noun is required: "across compliance
+  // and end-to-end", "with day-to-day". Closed and dull on purpose --
+  // these are the words this generator actually reaches for.
+  const _DANGLING_MODIFIER = /\b(?:and|across|with|in|on|for|through|of)\s+(?:the\s+)?(?:end[-\s]?to[-\s]?end|day[-\s]?to[-\s]?day|cross[-\s]?functional|best[-\s]?in[-\s]?class|hands[-\s]?on|fast[-\s]?paced|high[-\s]?level|full[-\s]?stack|end[-\s]?user)\s*(?=[.,;:]|$)/i;
+
+  // Verbs a CV summary actually uses in a finite form. A clause with a
+  // gerund and none of these has no verb at all.
+  //
+  // The present-tense entries are -s FORMS ONLY. "Run", "lead", "build",
+  // "hold", "cover" and "drive" are all ordinary nouns, and accepting
+  // the bare form meant "cutting the overnight run" contained a verb:
+  // the verbless test then passed the exact sentence it was written
+  // for. A bare present-tense verb needs a plural subject, which this
+  // elliptical voice almost never has.
+  const _FINITE_VERB = /\b(?:is|are|was|were|has|have|had|will|would|can|could|does|do|did|brings|holds|leads|runs|owns|builds|delivers|manages|supports|drives|spans|covers|combines|specialises|specializes|built|led|ran|delivered|rebuilt|replaced|trained|automated|reduced|raised|designed|developed|managed|owned|established|authored|chaired|mentored|integrated|defined|collected|redesigned|architected|acted|held|rewrote|shipped|launched|migrated|introduced|negotiated|resolved|improved|created|produced|maintained|coordinated|oversaw)\b/i;
+
+  /**
+   * A clause whose only verb is a participle: "Impression reporting,
+   * cutting the overnight run from six hours to under one hour".
+   *
+   * Requires the noun-phrase-then-participle shape AND the absence of
+   * any finite verb, so an ordinary sentence that merely contains a
+   * gerund is untouched.
+   */
+  function _isVerbless(clause) {
+    const s = String(clause || '').trim();
+    if (!s) return false;
+    if (_FINITE_VERB.test(s)) return false;
+    return /^[A-Z][A-Za-z]*(?:\s+[A-Za-z]+){0,4},\s+\w+ing\b/.test(s);
+  }
+
+  /**
+   * Is this summary ungrammatical in one of the ways that recur?
+   *
+   * Clauses are split on semicolons as well as sentence ends, because
+   * the fault in the reported summary was the half BEFORE the
+   * semicolon: "Impression reporting, cutting the overnight run ...;
+   * replaced a 40-tab Excel pack". The second half is a fine CV clause
+   * and carried a finite verb, which hid the fragment in front of it.
+   *
+   * A semicolon is NOT itself a fault. "Cut the month-end close from
+   * nine working days to three; rebuilt the credit risk suite" is
+   * parallel ellipsis, which is how a strong summary is written, and is
+   * exactly what the rebuilder below composes on purpose.
+   */
+  function summaryReadsBroken(sentence) {
+    const s = String(sentence || '').trim();
+    if (!s) return '';
+    if (_DANGLING_MODIFIER.test(s)) return 'dangling';
+    for (const clause of s.split(/(?<=[.!?])\s+|;\s+/)) {
+      if (_isVerbless(clause)) return 'verbless';
+    }
+    return '';
+  }
+
+  const _MONTHS_RE = '(?:January|February|March|April|May|June|July|August|September'
+    + '|October|November|December|Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)';
+  const _STARTS_WITH_DATE = new RegExp('^\\s*(?:' + _MONTHS_RE + '\\b|\\d{1,2}[/-]|(?:19|20)\\d{2}\\b)', 'i');
+  const _DATE_START = new RegExp('\\s+(?:' + _MONTHS_RE + '\\b|\\d{2}/|(?:19|20)\\d{2}\\b)', 'i');
+  const _MONTH_ONLY = new RegExp('^\\s*' + _MONTHS_RE + '\\s*$', 'i');
+  const _SPELLED_NUMBER = /\b(?:two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|twenty|thirty|forty|fifty|hundred|thousand|million|billion)\b/i;
+
+  /** Titles, employers and the span the experience block actually states. */
+  function _historyFacts(cvText) {
+    const lines = String(cvText || '').split('\n');
+    const titles = [], companies = [], years = [], achievements = [];
+    let inExp = false, ongoing = false, pending = '';
+    for (const raw of lines) {
+      const l = raw.trim();
+      if (_EXP_HEAD.test(l)) { inExp = true; continue; }
+      if (_ANY_HEAD.test(l)) { inExp = false; continue; }
+      if (!inExp || !l) continue;
+      if (/^[-•*]/.test(l)) {
+        // A NUMBER SPELLED OUT IS STILL A NUMBER. "Cut the month-end
+        // cycle from nine working days to three" is the strongest
+        // sentence on some CVs and carries no digit at all, so a
+        // digits-only test threw it away before it could be considered.
+        if (/\d/.test(l) || _SPELLED_NUMBER.test(l)) {
+          achievements.push(l.replace(/^[-•*]\s*/, '').trim());
+        }
+        continue;
+      }
+      const found = l.match(/\b(19|20)\d{2}\b/g);
+      if (found) {
+        for (const y of found) years.push(parseInt(y, 10));
+        if (/present|current/i.test(l)) ongoing = true;
+        // "Meta January 2023 - Present" -- the employer is whatever sits
+        // in front of the first month or year. A line that STARTS with
+        // one is a bare date line and names no employer: taking the
+        // text before the date there produced companies called "August"
+        // and "January", which then appeared in the summary as places
+        // this person had worked.
+        if (_STARTS_WITH_DATE.test(l)) {
+          if (pending && !_MONTH_ONLY.test(pending) && companies.indexOf(pending) === -1) {
+            companies.push(pending);
+          }
+          pending = '';
+          continue;
+        }
+        const company = l.split(_DATE_START)[0].replace(/\s*[|,]\s*$/, '').trim();
+        if (company && !_MONTH_ONLY.test(company)
+          && company.split(/\s+/).length <= 5 && companies.indexOf(company) === -1) {
+          companies.push(company);
+        }
+        pending = '';
+        continue;
+      }
+      if (_TITLE_WORD.test(l) && l.split(/\s+/).length <= 7) {
+        const clean = l.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        if (clean && titles.indexOf(clean) === -1) titles.push(clean);
+        continue;
+      }
+      // A plain line inside the experience block, before a date line:
+      // the layout where the employer sits on its own row. Held until
+      // the date line confirms it, so a stray sentence is not banked.
+      if (l.split(/\s+/).length <= 5) pending = l.replace(/\s*[|,]\s*$/, '').trim();
+    }
+    let span = 0;
+    if (years.length) {
+      const from = Math.min.apply(null, years);
+      const to = ongoing ? new Date().getFullYear() : Math.max.apply(null, years);
+      span = Math.max(0, to - from);
+    }
+    return { titles, companies, years: span, achievements };
+  }
+
+  function _spellNumber(n) {
+    const words = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven',
+      'eight', 'nine', 'ten', 'eleven', 'twelve'];
+    return words[n] || String(n);
+  }
+
+  /**
+   * Judge the summary, and rebuild it from the document's own facts
+   * when it is untrue or empty. Returns the unchanged text otherwise.
+   */
+  function repairSummary(cvText, opts) {
+    const o = opts || {};
+    const text = String(cvText || '');
+    const lines = text.split('\n');
+    const at = lines.findIndex((l) => SUMMARY_HEADER_RE.test(l.trim()));
+    if (at === -1) return { text, rebuilt: false };
+    const current = String(lines[at + 1] || '').trim();
+    if (!current || _ANY_HEAD.test(current)) return { text, rebuilt: false };
+
+    const facts = _historyFacts(text);
+    if (!facts.titles.length) return { text, rebuilt: false };
+
+    const wordsOf = (s) => String(s).toLowerCase().split(/[^a-z]+/).filter((w) => w.length > 3);
+    const held = facts.titles;
+    const heldBlob = held.join(' | ').toLowerCase();
+
+    // (a) Does the opening claim a profession the history does not contain?
+    const claimed = _openingProfession(current);
+    let untrue = '';
+    if (claimed) {
+      const cw = wordsOf(claimed);
+      const contained = cw.length > 0 && cw.every((w) => heldBlob.indexOf(w) !== -1);
+      if (!contained) untrue = claimed;
+    }
+
+    // (b) Does it say anything a screener can check? A figure. Adjectives
+    // are not substance.
+    //
+    // TWO THINGS THIS TEST USED TO GET WRONG, BOTH OF WHICH WOULD NOW
+    // DESTROY A GOOD SUMMARY RATHER THAN A BAD ONE.
+    //
+    // It counted an EMPLOYER NAME as substance. That was written before
+    // employer names were understood as a prestige signal to keep OUT
+    // of the summary, so the test was rewarding the very thing the
+    // rebuild removes -- and a correctly written summary, carrying no
+    // employer, looked hollow for exactly the reason it was right.
+    //
+    // And it demanded a DIGIT. "Cut the month-end close from nine
+    // working days to three" is the strongest sentence on the page and
+    // contains no numeral at all. With the tailoring service now
+    // enforcing this same shape before it responds, a spelled-out
+    // figure is what a conforming summary will often carry -- so a
+    // digits-only test would have this pass tearing down good server
+    // output and rebuilding it from scratch, every time.
+    const hollow = !/\d/.test(current) && !_SPELLED_NUMBER.test(current);
+
+    // (c) Is it English? True and checkable is not the same as readable,
+    // and the summary that prompted this was both and neither.
+    const broken = summaryReadsBroken(current);
+
+    if (!untrue && !hollow && !broken) return { text, rebuilt: false };
+
+    // ---- rebuild, from this document and nothing else ---------------
+    // THE OVERLAP HAS TO BE ON A WORD THAT MEANS SOMETHING.
+    //
+    // A payroll posting is "Manager, Payroll Operations", and the only
+    // held title sharing a word with it was "AI Product Manager" --
+    // matched on "manager", which half the job titles in the world
+    // contain. The summary then opened by calling an engineer an AI
+    // product manager on a payroll application, and paired it with an
+    // achievement from a different role entirely.
+    //
+    // A rank word is not evidence of a match. With none left to match
+    // on, the lead stays the CURRENT role, which is the conventional
+    // choice and the one a reader expects.
+    const GENERIC_TITLE_WORD = new Set(['manager', 'senior', 'junior', 'lead', 'principal',
+      'staff', 'head', 'chief', 'director', 'officer', 'specialist', 'associate',
+      'assistant', 'executive', 'consultant', 'analyst', 'engineer', 'coordinator',
+      'administrator', 'supervisor', 'team', 'global', 'group', 'deputy']);
+    const target = normaliseJobTitle(o.jdTitle || '');
+    const targetWords = wordsOf(target).filter((w) => !GENERIC_TITLE_WORD.has(w));
+    const overlap = (s) => wordsOf(s).filter((w) => targetWords.indexOf(w) !== -1).length;
+    let lead = held[0];
+    let best = 0;
+    for (const h of held) {
+      const score = overlap(h);
+      if (score > best) { best = score; lead = h; }
+    }
+
+    // ── WHAT THE SUMMARY DELIBERATELY LEAVES OUT ──────────────────────
+    //
+    // A first version of this built "Software Engineer with nine years
+    // across Meta, SolimHealth and Accenture." Everything in it was
+    // true and three of its four ingredients were bias levers.
+    //
+    //   EMPLOYER NAMES are a prestige signal. Meta triggers a halo,
+    //   SolimHealth means nothing to anyone, and putting them in the
+    //   first line invites a judgement about where someone has worked
+    //   before any judgement about what they did. They are already in
+    //   the employment block two inches below, so nothing is lost by
+    //   leaving them out of the sentence that frames everything.
+    //
+    //   TOTAL YEARS is an age proxy, and age is among the most
+    //   documented biases in hiring. It is also redundant: the dates
+    //   are on the page.
+    //
+    //   PLACE NAMES carry nationality and relocation assumptions.
+    //
+    // The mechanism underneath all three is the same. Bias operates on
+    // AMBIGUITY -- wherever a reader has to infer, they infer from what
+    // they already believe. A summary that hands over verifiable work
+    // leaves less room to fill in. So this one carries the discipline,
+    // the scope of the work, and outcomes with numbers on them, and it
+    // carries no adjective about the person at all: no "accomplished",
+    // no "strong background", no "results-driven". Those are where a
+    // reader's priors do the writing.
+    const parts = [];
+    let opener = lead;
+
+    // THE SKILLS LINE IS NOT EVIDENCE OF DOING THE WORK.
+    //
+    // A first version tested the whole document, so "payroll" -- which
+    // the coverage pass had just written into the skills section --
+    // came back as something this candidate "covers", and the rebuilt
+    // summary reintroduced exactly the claim it had been written to
+    // remove. A term earns a place in the summary only if the
+    // EXPERIENCE does it: the roles, the employers and the bullets. The
+    // skills section is a list of words; the experience is the work.
+    // Excluding everything except the experience block was not enough:
+    // the HEADLINE under the name carries the posting's title, so
+    // "payroll" was still found -- in the line whose whole purpose is
+    // to name the job being applied for. Only the experience counts.
+    const evidence = (() => {
+      const src = text.split('\n');
+      const out = [];
+      let inExp = false;
+      for (const raw of src) {
+        const l = raw.trim();
+        if (_EXP_HEAD.test(l)) { inExp = true; continue; }
+        if (_ANY_HEAD.test(l)) { inExp = false; continue; }
+        if (inExp) out.push(raw);
+      }
+      return out.join('\n');
+    })();
+
+    // The posting's own requirements that this CV genuinely satisfies,
+    // in the posting's words. Never a requirement it does not.
+    const asked = (o.jobKeywords && (o.jobKeywords.all || o.jobKeywords)) || [];
+    const TX = (typeof global !== 'undefined' && global.KeywordTaxonomy)
+      || (typeof window !== 'undefined' && window.KeywordTaxonomy) || null;
+    const covered = [];
+    for (const term of (Array.isArray(asked) ? asked : [])) {
+      const label = TX && TX.canonical ? TX.canonical(term) : String(term);
+      if (covered.length >= 3) break;
+      if (!label || covered.indexOf(label) !== -1) continue;
+      const present = TX && TX.appearsIn ? TX.appearsIn(evidence, term)
+        : evidence.toLowerCase().indexOf(String(term).toLowerCase()) !== -1;
+      // The label's own casing: "SQL" and "Power BI" are not "sql" and
+      // "power bi", and a summary that lower-cases them looks careless
+      // in the line that is supposed to look most deliberate.
+      if (present) covered.push(label);
+    }
+    // The opener is assembled at the end, once the outcomes are known:
+    // see below.
+
+    // WHAT HAPPENED, WITH THE NUMBER ON IT.
+    //
+    // Two outcomes rather than one where the space allows, because a
+    // single figure reads as the one good thing and a pair reads as a
+    // pattern. Preferred by magnitude -- a bullet carrying a currency
+    // amount, a percentage or a multi-digit count says more than one
+    // that happens to contain a 3.
+    // RELEVANCE OUTRANKS SIZE.
+    //
+    // Scoring on the figure alone put "Trained 24 analysts across the
+    // London and Belfast offices in SQL and Power BI" on a Staff
+    // Software Engineer application -- true, quantified, and about a
+    // different job. A summary whose two halves are about different
+    // disciplines reads as assembled, which is what it is. A bullet
+    // that touches something the POSTING asked for is worth more than a
+    // bigger number about something it did not.
+    const relevance = (a) => {
+      let hits = 0;
+      for (const term of (Array.isArray(asked) ? asked : [])) {
+        const present = TX && TX.appearsIn ? TX.appearsIn(a, term)
+          : a.toLowerCase().indexOf(String(term).toLowerCase()) !== -1;
+        if (present) hits++;
+      }
+      return Math.min(hits, 2) * 4;
+    };
+    // A LONG BULLET STILL HAS A GOOD FIRST CLAUSE IN IT.
+    //
+    // Only two of this CV's seven quantified bullets were short enough
+    // to use, so the choice was made from a pool of two and relevance
+    // could not win. A bullet is written to be read whole on its own
+    // line; its opening clause is the claim, and the rest is the
+    // supporting detail the employment block already carries.
+    // Clause boundaries, in the order a sentence actually breaks at. A
+    // comma is the cleanest, but plenty of strong bullets carry their
+    // supporting detail after "by", "which" or "replacing" with no
+    // punctuation at all -- and a bullet that cannot be cut is a bullet
+    // that loses its place to a shorter, weaker one.
+    const _CUTS = [', ', '; ', ' by ', ' which ', ' that ', ' replacing ', ' while ', ' after '];
+    const shorten = (a, limit) => {
+      const max = limit || 170;
+      if (a.length <= max) return a;
+      const head = a.slice(0, max);
+      let cut = -1;
+      for (const mark of _CUTS) {
+        const at = head.lastIndexOf(mark);
+        if (at > cut) cut = at;
+      }
+      if (cut < 45) return '';
+      // " by replacing a manual rebuild" cuts at " replacing ", which
+      // leaves the sentence ending on "by". Any function word left
+      // dangling at the cut goes with it.
+      return head.slice(0, cut)
+        .replace(/[\s,;:-]+$/, '')
+        .replace(/\s+(?:by|which|that|while|after|and|with|for|to|in|on|of|from|a|an|the)$/i, '')
+        .trim();
+    };
+    // A TIGHT VERSION OF EACH, FOR WHEN TWO HAVE TO FIT.
+    //
+    // Two outcomes read as a pattern and one reads as an anecdote, but
+    // two full-length bullets do not fit two rendered lines. So each
+    // outcome also has a first-clause form: the claim without the
+    // supporting detail the employment block already carries. The pair
+    // is preferred whenever the tight forms fit, because the second
+    // figure is worth more than the first one's trailing clause.
+    const tight = (a) => {
+      // The FIRST clause boundary, searched across the whole sentence
+      // rather than inside the first ninety characters. A bullet whose
+      // opening claim runs to ninety-nine characters -- "...for a GBP
+      // 2.6bn consumer lending portfolio" -- had no boundary in the
+      // window, so it kept its full length, could not fit beside a
+      // second outcome, and lost its place to a shorter sentence
+      // carrying a far smaller number. The magnitude is the thing worth
+      // keeping; the trailing clause is not.
+      let at = -1;
+      for (const mark of _CUTS) {
+        const found = a.indexOf(mark);
+        if (found >= 45 && found <= 110 && (at === -1 || found < at)) at = found;
+      }
+      if (at !== -1) {
+        return a.slice(0, at).replace(/[\s,;:-]+$/, '')
+          .replace(/\s+(?:by|which|that|while|after|and|with|for|to|in|on|of|from|a|an|the)$/i, '')
+          .trim();
+      }
+      const cut = shorten(a, 92);
+      return (cut && cut.length >= 45) ? cut : a;
+    };
+    const weigh = (a) => (
+        // SCALE IS THE DIFFERENTIATOR.
+        //
+        // Everyone applying has done things. What separates a shortlist
+        // from a pile is the SIZE of what somebody operated on -- a
+        // GBP 2.6bn portfolio, billions of requests a day, 47 services,
+        // 24 analysts. A screener remembers a magnitude; they do not
+        // remember "improved efficiency". So a bullet carrying scale
+        // outranks one carrying a bare two-digit count, and a bullet
+        // carrying a DELTA -- from nine days to three -- outranks both,
+        // because it states the before as well as the after.
+      relevance(a)
+        + (/\bfrom\b[^.]{0,40}\bto\b/i.test(a)
+          && (/\d/.test(a) || _SPELLED_NUMBER.test(a)) ? 4 : 0)
+        + (/[£$€]\s?\d|\b\d+(?:\.\d+)?\s?(?:bn|billion|m\b|million|k\b)/i.test(a) ? 3 : 0)
+        + (/\b(?:billions|millions|thousands)\b/i.test(a) ? 3 : 0)
+        + (/\d+\s?%/.test(a) ? 2 : 0)
+        + (/\b\d{2,}\b/.test(a) ? 1 : 0)
+    );
+    const scored = facts.achievements
+      // NOT .map(shorten): map passes the INDEX as the second argument,
+      // which arrived as the character limit and truncated every bullet
+      // to nothing.
+      .map((a) => shorten(a))
+      .filter((a) => a && a.length >= 40 && a.length <= 170
+        && (/\d/.test(a) || _SPELLED_NUMBER.test(a)))
+      .map((a) => ({ text: a, weight: weigh(a) }))
+      .sort((a, b) => (b.weight - a.weight) || (a.text.length - b.text.length));
+    // A PAIR BEATS ONE LONG ONE.
+    //
+    // Greedily taking the highest-weighted bullet first filled the
+    // budget with a single 168-character sentence and left no room for
+    // a second. Two outcomes read as a pattern; one reads as the one
+    // good thing that happened. So the best-scoring COMBINATION that
+    // fits is chosen, rather than the best-scoring first item.
+    // Reserve exactly what the opening line will take. Where the
+    // posting's requirements supply the scope the sentence is already
+    // known; only the fallback path below is unknown at this point, and
+    // it is bounded by the same shape.
+    const openerLen = covered.length >= 2
+      ? (lead + ' working across ' + covered.slice(0, 3).join(', ')).length + 6
+      : lead.length + 46;
+    const budget = 215 - openerLen;
+    const top = scored.slice(0, 8);
+    const lower = (a) => a.charAt(0).toLowerCase() + a.slice(1);
+    // TWO OUTCOMES, ONE SENTENCE.
+    //
+    // Written as two full stops the pair reads as bullets that escaped
+    // into the summary. Joined with a semicolon it reads as one claim
+    // with two pieces of evidence, which is how a strong summary is
+    // actually written -- and it costs three characters instead of two
+    // sentence openings.
+    const join = (picks) => picks.length === 2
+      ? tight(picks[0].text).replace(/\s*\.\s*$/, '') + '; '
+        + lower(tight(picks[1].text).replace(/\s*\.\s*$/, '')) + '.'
+      : picks[0].text.replace(/\s*\.\s*$/, '') + '.';
+    // Different work, not the same story twice. Two bullets that share
+    // most of their words are one outcome told twice, and the second
+    // spends the budget for nothing.
+    const distinct = (a, b) => {
+      const wa = new Set(String(a).toLowerCase().match(/[a-z]{5,}/g) || []);
+      const wb = String(b).toLowerCase().match(/[a-z]{5,}/g) || [];
+      const shared = wb.filter((w) => wa.has(w)).length;
+      return shared < Math.max(2, Math.min(wa.size, wb.length) * 0.5);
+    };
+    let bestPick = null, bestScore = -1;
+    for (let i = 0; i < top.length; i++) {
+      // Full first; the tight form when the full will not fit. Without
+      // this a 168-character bullet carrying "GBP 2.6bn" lost outright
+      // to a 65-character one about twelve dashboards, purely on length.
+      const full = join([top[i]]);
+      if (full.length + 1 <= budget && top[i].weight > bestScore) {
+        bestPick = [top[i]]; bestScore = top[i].weight;
+      } else {
+        const cut = { text: tight(top[i].text), weight: weigh(tight(top[i].text)) };
+        if (join([cut]).length + 1 <= budget && cut.weight > bestScore) {
+          bestPick = [cut]; bestScore = cut.weight;
+        }
+      }
+      for (let j = 0; j < top.length; j++) {
+        if (j === i || !distinct(top[i].text, top[j].text)) continue;
+        const pair = join([top[i], top[j]]);
+        // SCORED ON WHAT IS ACTUALLY EMITTED. The pair is written in
+        // its tight form, and tightening can cut the very figure the
+        // bullet was chosen for -- so a pair was once picked on the
+        // strength of a "£2.6bn" that the trimmed sentence no longer
+        // contained. Both halves are weighed as they will appear.
+        const score = weigh(tight(top[i].text)) + weigh(tight(top[j].text)) + 1;
+        if (pair.length + 1 <= budget && score > bestScore) {
+          bestPick = [top[i], top[j]]; bestScore = score;
+        }
+      }
+    }
+    // ── THE OPENING LINE IS THE ONE THAT DECIDES ─────────────────────
+    //
+    // A screener gives a summary a few seconds. "AI Product Manager."
+    // on its own is a category label -- it says what to file this under
+    // and gives no reason to read the next line, which is the
+    // definition of a summary that gets skimmed past.
+    //
+    // Where the posting's own requirements are evidenced by the
+    // experience, those are the scope: they are what this reader is
+    // looking for, in their words, and they are true. Where NONE are --
+    // which is what happens on a role outside the candidate's field --
+    // the scope is taken from the outcomes themselves rather than left
+    // blank, so the line still says what this person works on.
+    // WHERE THE POSTING'S REQUIREMENTS ARE NOT EVIDENCED, SAY NOTHING.
+    //
+    // A version of this filled the gap by lifting noun phrases out of
+    // the chosen bullets, and produced "AI Product Manager working
+    // across Audit, PySpark and Presto pipeline and behind impression
+    // reporting." Every fragment came from the CV and the sentence was
+    // gibberish -- worse than the bare title it was written to improve,
+    // and exactly the kind of line a reader stops at for the wrong
+    // reason. A scope clause is only written when the posting's own
+    // requirements supply it; otherwise the outcomes carry the sentence
+    // on their own, which they do perfectly well.
+    const scope = covered.slice(0, 3);
+    if (scope.length >= 2) {
+      opener += ' working across ' + scope.slice(0, -1).join(', ')
+        + ' and ' + scope[scope.length - 1];
+    }
+    // One term reads worse than none -- "AI Product Manager working in
+    // audit" names a scope narrower than the job and invites the
+    // question of what else there is. Two or more reads as a remit.
+    parts.push(opener.replace(/\s+/g, ' ').trim() + '.');
+    if (bestPick) parts.push(join(bestPick));
+
+    const rebuilt = parts.join(' ').replace(/\s+/g, ' ').trim();
+
+    // NEVER REPLACE A SENTENCE WITH A WORSE ONE.
+    //
+    // A false claim has to go whatever replaces it. But "says nothing
+    // checkable" is a quality judgement, and on a CV with one employer
+    // and no quantified bullet the rebuild came out at forty-two
+    // characters -- shorter and thinner than the sentence it was
+    // deleting. So the hollow path has to earn the swap: the
+    // replacement must be a real summary, and must actually carry the
+    // substance the original was missing.
+    // This holds for the untrue path too. A false opening has to go --
+    // but swapping "Experienced Software Engineer..." for a
+    // forty-two-character line naming one employer and no achievement
+    // trades one bad summary for another, and the CV is no better off.
+    // Where the document cannot supply a stronger sentence, the
+    // separate summary-names-another-profession warning names the
+    // closer true title and leaves the writing to its author.
+    // "from six hours to under one" is a quantified outcome with no
+    // digit in it. Requiring a numeral here threw away a perfectly good
+    // rebuild and left the empty sentence standing.
+    const substantial = rebuilt.length >= 100
+      && (/\d/.test(rebuilt) || _SPELLED_NUMBER.test(rebuilt));
+    if (!substantial) return { text, rebuilt: false, couldNotImprove: true };
+    // And the replacement has to be English itself. A rebuild that
+    // trips the same reading tests is not an improvement on a sentence
+    // that trips them, however true its facts are.
+    if (summaryReadsBroken(rebuilt)) {
+      return { text, rebuilt: false, couldNotImprove: true };
+    }
+
+    lines[at + 1] = rebuilt;
+    return {
+      text: lines.join('\n'), rebuilt: true,
+      reason: untrue ? 'untrue' : (broken || 'hollow'),
+      claimed: untrue, was: current, now: rebuilt,
+    };
   }
 
   function scoreSevenFilters({ cvText, jdText, jdTitle, jobKeywords, warnings }) {
@@ -4450,6 +5647,10 @@
   // in this system, holding exactly the blend of process and people
   // skills the relocation below would tear apart.
   const _SOFT_LABEL_RE = /^(soft skills?|interpersonal|personal skills?)$/i;
+  // The line that holds terms the taxonomy has no category for. "Additional
+  // Skills" is the older name and still appears on CVs this has already
+  // written, so both are recognised.
+  const _BUCKET_LABEL_RE = /^(additional skills?|core competenc(?:y|ies)|other skills?)$/i;
   const _MAX_PER_GROUP = 10;
   // What a soft skill actually is. Anything else under a soft-skills
   // label is a tool, a process or a domain -- real keywords that belong
@@ -4504,7 +5705,40 @@
       .trim();
   }
 
-  function sanitiseSkillsSection(cvText) {
+  // A REQUIREMENT THE POSTING ASKED FOR IS NEVER TRIMMED FOR LENGTH.
+  //
+  // This runs AFTER the coverage pass has written the posting's terms
+  // onto the skills lines, and it replaces the CV. So the ten-per-group
+  // readability cap was deleting keywords that had just been added for
+  // this application, from the document that actually gets sent, after
+  // the gauge had already measured the version that still had them.
+  // Same shape as every other silent-loss bug here: the number described
+  // a file that no longer existed.
+  //
+  // The cap still governs everything else, which is what keeps a skills
+  // line readable. It simply cannot cost this application a keyword.
+  function sanitiseSkillsSection(cvText, jobKeywords) {
+    const _protected = (() => {
+      const set = new Set();
+      try {
+        const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy)
+          || (typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy : null);
+        for (const k of _flatKeywords(jobKeywords)) {
+          if (!k) continue;
+          set.add(_skillKey(k));
+          if (TX && typeof TX.keyOf === 'function') set.add('k:' + TX.keyOf(k));
+        }
+      } catch (e) {}
+      return set;
+    })();
+    const _isAsked = (item) => {
+      if (_protected.has(_skillKey(item))) return true;
+      try {
+        const TX = (typeof window !== 'undefined' && window.KeywordTaxonomy)
+          || (typeof KeywordTaxonomy !== 'undefined' ? KeywordTaxonomy : null);
+        return !!(TX && typeof TX.keyOf === 'function' && _protected.has('k:' + TX.keyOf(item)));
+      } catch (e) { return false; }
+    };
     const text = String(cvText || '');
     if (!text) return { text, dropped: 0, moved: 0, samples: [] };
     const lines = text.split('\n');
@@ -4566,7 +5800,9 @@
           moved++;
           continue;
         }
-        if (kept.length >= _MAX_PER_GROUP) { dropped++; samples.push(item0); continue; }
+        if (kept.length >= _MAX_PER_GROUP && !_isAsked(item)) {
+          dropped++; samples.push(item0); continue;
+        }
         seen.add(key);
         kept.push(item);
       }
@@ -4586,12 +5822,66 @@
       const own = groups.find((g) => _RELOCATED_LABEL.toLowerCase() === g.label.trim().toLowerCase());
       if (own && lines[own.at]) {
         lines[own.at] = lines[own.at].replace(/\s*$/, '') + ', '
-          + relocated.slice(0, _MAX_PER_GROUP).join(', ');
+          + relocated.slice(0, Math.max(_MAX_PER_GROUP,
+            relocated.filter(_isAsked).length)).join(', ');
       } else {
         lines[lastAt] = (lines[lastAt] === null ? '' : lines[lastAt] + '\n')
-          + indent + _RELOCATED_LABEL + ': ' + relocated.slice(0, _MAX_PER_GROUP).join(', ');
+          + indent + _RELOCATED_LABEL + ': ' + relocated.slice(0, Math.max(_MAX_PER_GROUP,
+            relocated.filter(_isAsked).length)).join(', ');
       }
     }
+    // ── A LABEL OVER ONE WORD IS NOT A GROUP ────────────────────────
+    //
+    // A real CV shipped:
+    //
+    //   Soft Skills: Empathy
+    //
+    // One word under a heading of its own. Every line above it carried
+    // four to ten members, so the eye stops there, and what it finds is
+    // a box somebody ticked. On a coaching posting, where the whole
+    // question is judgement about people, that line argues against the
+    // candidate more effectively than its absence would.
+    //
+    // Narrow on purpose. "Programming: Python" is an ordinary line and
+    // is left alone. This merges a BEHAVIOURAL singleton only, and only
+    // into another line of the same kind, because the alternative --
+    // folding it into whichever line comes next -- files Empathy under
+    // Cloud & DevOps.
+    {
+      const current = [];
+      for (let i = head + 1; i < end; i++) {
+        if (lines[i] === null) continue;
+        for (const part of String(lines[i]).split('\n')) {
+          const m = part.match(/^(\s*)([A-Za-z][A-Za-z &/+.]{1,40}?)(\s*:\s*)(\S.*)$/);
+          if (m) current.push({ at: i, raw: part, indent: m[1], label: m[2], sep: m[3], items: m[4] });
+        }
+      }
+      const kindOf = (label) => (_SOFT_LABEL_RE.test(label.trim()) ? 'soft'
+        : (_BUCKET_LABEL_RE.test(label.trim()) ? 'bucket' : ''));
+      const countOf = (items) => items.split(/,\s*/).map((s) => s.trim()).filter(Boolean).length;
+      for (const g of current) {
+        if (countOf(g.items) !== 1) continue;
+        if (!kindOf(g.label)) continue;
+        // The bucket first: a behavioural term the table had no category
+        // for is already sitting there, so that is where its peer goes.
+        const target = current.find((o) => o !== g && lines[o.at] !== null
+          && kindOf(o.label) === 'bucket')
+          || current.find((o) => o !== g && lines[o.at] !== null
+            && kindOf(o.label) === 'soft');
+        if (!target) continue;
+        const item = g.items.trim().replace(/[.;,]+$/, '');
+        const merged = target.indent + target.label + target.sep
+          + target.items.replace(/\s*,\s*$/, '').trimEnd() + ', ' + item;
+        lines[target.at] = String(lines[target.at]).split('\n')
+          .map((p) => (p === target.raw ? merged : p)).join('\n');
+        target.items = target.items.replace(/\s*,\s*$/, '').trimEnd() + ', ' + item;
+        target.raw = merged;
+        const rest = String(lines[g.at]).split('\n').filter((p) => p !== g.raw);
+        lines[g.at] = rest.length ? rest.join('\n') : null;
+        moved++;
+      }
+    }
+
     return {
       text: lines.filter((l) => l !== null).join('\n'),
       dropped, moved, samples: samples.slice(0, 6),
@@ -4602,13 +5892,29 @@
     let list = [];
     if (Array.isArray(languages)) list = languages;
     else if (typeof languages === 'string' && languages.trim()) list = languages.split(/[,;]+/);
+    // "NATIVE" IS A STATEMENT ABOUT WHERE SOMEONE IS FROM.
+    //
+    // A real CV shipped "English (native), French (native), Spanish
+    // (advanced), German (advanced)". Two claims of native fluency name
+    // the candidate's origin before a reader reaches the first bullet,
+    // in a skills section, where it buys nothing: what an employer needs
+    // to know is whether the person can work in the language, and
+    // "fluent" says that without saying anything else.
+    //
+    // The level is kept. Only this one word is replaced, and only where
+    // it is the whole level, so "near-native" is left as written.
+    const _NATIVE = /^(native|native speaker|mother tongue|first language|c2)$/i;
+    const level = (v) => (_NATIVE.test(v.trim()) ? 'fluent' : v.toLowerCase());
     return list.map((l) => {
       if (l && typeof l === 'object') {
         const name = String(l.language || l.name || '').trim();
-        const level = String(l.proficiency || l.level || '').trim();
-        return name ? (level ? name + ' (' + level.toLowerCase() + ')' : name) : '';
+        const lvl = String(l.proficiency || l.level || '').trim();
+        return name ? (lvl ? name + ' (' + level(lvl) + ')' : name) : '';
       }
-      return String(l || '').trim();
+      // A plain string arrives already formatted, "French (native)".
+      return String(l || '').trim()
+        .replace(/\(\s*([^)]+)\s*\)\s*$/, (m, inner) => (_NATIVE.test(inner.trim())
+          ? '(fluent)' : m));
     }).filter(Boolean).slice(0, 6);
   }
 
@@ -4625,6 +5931,17 @@
     }
     const langs = _normaliseLanguages(languages);
     const lines = text.split('\n');
+
+    // Whatever branch below runs, and whether or not the line is
+    // rewritten at all, no language on this page is declared native.
+    // _normaliseLanguages handles the copy this pass composes; a line
+    // already on the CV, from an earlier run or from the writing model,
+    // never reaches it.
+    for (let i = 0; i < lines.length; i++) {
+      if (!/^\s*Languages\s*(?:&|and)?\s*(?:Citizenship)?\s*:/i.test(lines[i])) continue;
+      lines[i] = lines[i].replace(/\(\s*(native speakers?|native|mother tongue|first language)\s*\)/gi,
+        '(fluent)');
+    }
 
     // The skills section's extent, line-based (see the injector: a
     // regex lookahead under /i cannot find the end of a section).
@@ -5904,9 +7221,25 @@
     // the real most-recent title is readable as its own line.
     if (outCV) {
       try {
-        const hl = ensureHeadline(outCV, jdTitle);
+        const hl = ensureHeadline(outCV, jdTitle, jdCompany);
+        // The header as a whole, after every pass that writes into it.
+        const tidied = tidyHeader(hl && hl.text ? hl.text : outCV, jdCompany);
+        if (tidied.removed.length) {
+          hl.text = tidied.text;
+          report.fixes.push('Header: removed ' + tidied.removed.length
+            + ' repeated line(s) (' + tidied.removed.join(', ') + ')');
+        }
+        // THE TEXT COMES BACK WHETHER OR NOT A HEADLINE WAS ADDED.
+        //
+        // This used to take hl.text only inside the `added` and
+        // `replaced` branches, so any other repair the pass made was
+        // computed and then thrown away -- which is how a CV kept
+        // BOTH "Manager, Payroll Operations - Sub Saharan" and
+        // "Manager, Payroll Operations" after the duplicate had
+        // already been removed. Every early return carries the
+        // original text unchanged, so this is safe on all of them.
+        outCV = hl.text || outCV;
         if (hl.added) {
-          outCV = hl.text;
           // Same correction as the replace path below: this line is the
           // role being APPLIED for, so a message promising "only ever a
           // title your history contains" describes the old rule.
@@ -5915,7 +7248,6 @@
             + 'reads, and the one a search indexes. Every real title stays stated '
             + 'with its dates in the employment block below.');
         } else if (hl.replaced) {
-          outCV = hl.text;
           // THE MESSAGE HAS TO MATCH WHAT THE CODE DOES.
           //
           // This said the opposite: "X is a title your history does not
@@ -5952,14 +7284,23 @@
     // and it is one flag to disable rather than a code change.
     if (outCV && profileLocation && f.truthfulLocation) {
       try {
-        const loc = ensureTruthfulLocation(outCV, profileLocation, jdLocation);
+        const loc = ensureTruthfulLocation(outCV, profileLocation, jdLocation, citizenship);
         if (loc.changed) {
           outCV = loc.text;
-          report.fixes.push('Header location corrected from "' + loc.was + '" to "'
-            + loc.now + '" -- it is read as where you live, and it sat beside '
-            + 'your own phone number saying otherwise.');
+          // A wrong city corrected and a relocation note added are two
+          // different events. Reporting the second as the first accuses
+          // the document of a fault it did not have.
+          report.fixes.push(loc.corrected
+            ? 'Header location corrected from "' + loc.was + '" to "' + loc.now
+              + '" -- it is read as where you live, and it sat beside your own '
+              + 'phone number saying otherwise.'
+            : 'Header now reads "' + loc.now + '". The posting is in another '
+              + 'country, where a recruiter\'s first question about a foreign '
+              + 'address is whether you would actually move, and saying nothing '
+              + 'invites the assumption that you would not.');
           report.warnings.push({
-            kind: 'header-claimed-the-jobs-location',
+            kind: loc.corrected ? 'header-claimed-the-jobs-location'
+              : 'header-states-relocation',
             was: loc.was,
             now: loc.now,
             note: 'The CV header said "' + loc.was + '", which is the posting\'s '
@@ -6163,7 +7504,7 @@
       // Last in the section: the labels are settled, so a group can be
       // judged by the label it will actually print with.
       try {
-        const ss = sanitiseSkillsSection(outCV);
+        const ss = sanitiseSkillsSection(outCV, jobKeywords);
         if (ss.dropped || ss.moved) {
           outCV = ss.text;
           const parts = [];
@@ -6398,6 +7739,25 @@
       if (h.selfHeavy) {
         report.warnings.push({ kind: 'cover-letter-self-heavy', iCount: h.iCount, youCount: h.youCount });
       }
+      // The two that mean the letter is incomplete rather than imperfect.
+      // Raised as critical because a missing opening paragraph is not
+      // something a reader forgives, and it is invisible to every other
+      // pass: each one tidied the remains without noticing the hole.
+      if (h.opensOnConnective) {
+        report.warnings.push({
+          kind: 'cover-letter-opening-lost', severity: 'critical', opening: h.opening,
+          note: 'The body starts with a connective, so it refers back to an opening '
+            + 'paragraph that is not there. Regenerate the letter before sending it.',
+        });
+      }
+      if (h.tooShort) {
+        report.warnings.push({
+          kind: 'cover-letter-too-short', severity: 'critical',
+          bodyWords: h.bodyWords, target: 150,
+          note: h.bodyWords + ' words of body. There is no room in that for an opening, '
+            + 'a proof point and a close, so one of the three is missing.',
+        });
+      }
     }
 
     // v3: honesty audit (warning only -- never rewrites the CV)
@@ -6421,7 +7781,62 @@
     // "looking to..." sentences)
     if (f.summaryClamp && outCV) {
       try {
-        const c = clampSummary(outCV, { maxChars: 220 });
+        // BEFORE the clamp, so a rebuilt summary is cut to two lines
+        // like any other -- and after the role headers are repaired, so
+        // the held titles and employers are readable as their own lines.
+        const sr = repairSummary(outCV, { jdTitle, jobKeywords });
+        if (sr.rebuilt) {
+          outCV = sr.text;
+          report.fixes.push(sr.reason === 'untrue'
+            ? 'Rewrote the professional summary: it opened "' + sr.claimed
+              + '", which is not a role your employment block contains. It now '
+              + 'leads with the closest title you have actually held and states '
+              + 'the years, the employers and one thing you did with a number on it.'
+            : 'Rewrote the professional summary: it carried nothing a screener can '
+              + 'check -- no scope, no number, only adjectives. It now states the '
+              + 'discipline, the remit and what actually happened with the figures '
+              + 'attached, all taken from the CV itself. Employer names, total years '
+              + 'and place names are left out on purpose: they are the levers a '
+              + 'reader judges on before reading the work, and they are already in '
+              + 'the employment block below.');
+          report.warnings.push({
+            kind: 'summary-rebuilt-from-facts', severity: 'info',
+            was: sr.was, now: sr.now, reason: sr.reason,
+            note: 'Read it before you send: it is assembled from your own history, '
+              + 'and a sentence you write yourself will always beat one assembled.',
+          });
+        }
+        // THE TARGET ROLE, NAMED IN THE SUMMARY.
+        //
+        // Here and not with the headline, which is where this was first
+        // wired. repairSummary runs below that point, read the sentence
+        // this adds as the summary claiming a title the employment block
+        // does not contain, and rebuilt the whole paragraph around a
+        // company name: "Meta candidate with a background as a Software
+        // Engineer". Correct behaviour from a check that had no way to
+        // tell a claim from a candidacy, and the wrong place to have
+        // written.
+        //
+        // THE TARGET ROLE, NAMED AT THE END OF THE SUMMARY.
+        //
+        // After repairSummary, so it is not read as a claim and rebuilt.
+        // Before the clamp, so the paragraph is still cut to the two
+        // lines a recruiter reads -- and the clamp's budget is reduced
+        // by what the closing line costs, so the sentence carrying the
+        // title is not the one the clamp throws away.
+        const st = ensureTitleInSummary(outCV, jdTitle, jdCompany, jdText);
+        const c = clampSummary(st.added ? st.text : outCV, {
+          maxChars: 220 + (st.added ? st.sentence.length + 1 : 0),
+        });
+        // THE TEXT COMES BACK WHETHER OR NOT THE CLAMP DID ANYTHING.
+        // Taking c.text only inside this branch threw away the closing
+        // line on every summary short enough not to need clamping,
+        // which is most of them.
+        if (st.added) {
+          outCV = c.text;
+          report.fixes.push('Summary: named the target role at the end ("'
+            + st.sentence + '"), which claims no title and no number of years');
+        }
         if (c.clamped || c.removedSentences > 0) {
           outCV = c.text;
           const parts = [];
@@ -6789,6 +8204,22 @@
       }
     } catch (e) {}
 
+    // THE LETTER IS THE ONE DOCUMENT THAT CAN SAY SOMETHING NEW.
+    try {
+      const echoes = coverLetterRestatesCv(outCV, outCL);
+      if (echoes.length) {
+        report.warnings.push({
+          kind: 'cover-letter-restates-cv',
+          count: echoes.length,
+          samples: echoes.map((e) => e.overlap + '% "' + e.paragraph.slice(0, 60) + '"'),
+          note: echoes.length + ' paragraph(s) of the cover letter restate a CV bullet ('
+            + echoes.map((e) => e.overlap + '%').join(', ') + '). The recruiter reads both, '
+            + 'so this spends the one document that can say what you would do HERE on '
+            + 'repeating what the CV already says.',
+        });
+      }
+    } catch (e) {}
+
     report.timingMs = Date.now() - t0;
     return { cvText: outCV, coverLetterText: outCL, report };
   }
@@ -6806,16 +8237,17 @@
     ensureExperienceHeading,
     repairRoleHeaders,
     stripCertificationsSection,
-    ensureCitizenshipLine,
+    ensureCitizenshipLine, ensureTruthfulLocation,
     normaliseSkillLabels,
     sanitiseSkillsSection,
-    echoJobTitle, normaliseJobTitle, scrubRawTitle, scoreSevenFilters, summaryNamesAnotherProfession, sortExperienceByStartDate,
+    ensureTitleInSummary,
+    echoJobTitle, normaliseJobTitle, tidyHeader, coverLetterRestatesCv, scrubRawTitle, repairSummary, _historyFacts, scoreSevenFilters, summaryNamesAnotherProfession, summaryReadsBroken, sortExperienceByStartDate,
     firstSixSecondsCheck,
     // v2
     stripFillers,
     weakVerbAudit,
     actionVerbAudit,
-    coverLetterHealth,
+    coverLetterHealth, coverLetterBody,
     // v3
     honestyAudit,
     clampSummary,

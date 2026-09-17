@@ -336,25 +336,11 @@
         log('Manual run blocked: AI Page Autofill is OFF');
         return { success: false, blocked: true, reason: 'autofill-disabled', filledCount: 0 };
       }
-      await this._requestInject({ reason: 'manual-run', force: true });
+      const injected = await this._requestInject({ reason: 'manual-run', force: true });
+      if (!injected?.ok) return { success: false, reason: injected?.reason || 'injection-failed', filledCount: 0 };
 
-      // The vendor engine exposes several entrypoints.  We fire every reasonable
-      // trigger so at least one engages regardless of which modules have loaded.
-      const triggers = [
-        () => window.postMessage({ type: 'JG_AUTOFILL_RUN_NOW', source: 'jobgenie' }, '*'),
-        () => window.dispatchEvent(new CustomEvent('jobright:autofill:run')),
-        () => window.dispatchEvent(new CustomEvent('ultimate-autofill:run')),
-        () => { try { window.__uaFillUnfilled && window.__uaFillUnfilled(); } catch (e) { warn(e); } },
-        () => { try { window.__uaAutoPilot && window.__uaAutoPilot(); } catch (e) { warn(e); } },
-        () => { try { window.__uaAutoTailorResume && window.__uaAutoTailorResume(); } catch (e) { warn(e); } },
-      ];
-      for (const t of triggers) { try { t(); } catch (e) {} }
-
-      // Give vendor engine a moment to execute, then best-effort count fields.
-      await new Promise((r) => setTimeout(r, 800));
-      const filledCount = this._estimateFilledCount();
-      log('Manual run complete, filled ~', filledCount);
-      return { success: true, filledCount };
+      if (!window.JobGenieAutofill) return { success: false, reason: 'engine-unavailable', filledCount: 0 };
+      return window.JobGenieAutofill.run();
     },
 
     _estimateFilledCount() {

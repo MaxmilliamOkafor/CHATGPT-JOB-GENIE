@@ -1,0 +1,51 @@
+IT Support Specialist
+Webflow | San Francisco, CA
+
+About Webflow
+Webflow is a Website Experience Platform that empowers modern marketing
+teams to build, manage and optimize sites without writing code. We are a
+remote-first company with a culture built on warmth, curiosity and a bias
+toward action. Our people bring flexibility and warmth to everything they
+do, and we take ownership of our outcomes together.
+
+What you'll do
+- Resolve employee tickets through our help desk ticketing system, owning
+  each issue from first response to closure.
+- Diagnose hardware and software issues across macOS and Windows 11
+  laptops, escalating where needed.
+- Maintain hardware and software inventory, tracking every device through
+  its lifecycle.
+- Handle IT onboarding for new hires: provision laptops, create accounts
+  and grant system access on day one.
+- Support meeting rooms, including presentation equipment, audiovisual
+  setup and Zoom Rooms hardware.
+- Use AI-powered support tools to triage and route incoming requests.
+- Take ownership of recurring problems and drive them to a root cause.
+
+What you'll bring
+- 2+ years in an IT support or help desk role.
+- Strong macOS troubleshooting skills; Windows 11 and Google Workspace
+  administration experience.
+- Excellent communication and attention to detail when working with
+  non-technical colleagues.
+- Experience with Jamf or a comparable device management platform.
+
+Nice to have
+- Scripting experience in Python or Bash.
+- Exposure to Okta, Slack administration or ServiceNow.
+
+Working arrangements
+- This role is physical office work, onsite five days per week in our San
+  Francisco office.
+- Must be able to lift up to 50lbs of equipment.
+
+Benefits
+- Equity ownership in Webflow through our employee stock option plan.
+- A generous annual training budget and access to a mentorship programme.
+- Benefits administration handled for you, including medical, dental and
+  vision from day one.
+- Flexible paid time off and a home office stipend.
+
+Webflow is an equal opportunity employer. We do not discriminate on the
+basis of race, religion, colour, national origin, gender, sexual
+orientation, age, marital status, veteran status or disability status.

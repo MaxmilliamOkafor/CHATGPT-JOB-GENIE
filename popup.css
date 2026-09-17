@@ -14,16 +14,25 @@
   --bg-card: rgba(255, 255, 255, 0.03);
   --bg-card-hover: rgba(255, 255, 255, 0.06);
   --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-accent: rgba(124, 58, 237, 0.3);
+  --border-accent: rgba(79, 70, 229, 0.3);
   
   --text-primary: #ffffff;
   --text-secondary: rgba(255, 255, 255, 0.7);
   --text-muted: rgba(255, 255, 255, 0.5);
   
-  --accent-primary: #7c3aed;
-  --accent-secondary: #00d4ff;
-  --accent-gradient: linear-gradient(135deg, #7c3aed 0%, #00d4ff 100%);
-  --accent-glow: rgba(124, 58, 237, 0.4);
+  /* ONE FLAT ACCENT, NO GRADIENT.
+     Violet-to-cyan read as consumer-app decoration on a tool people use
+     to apply for jobs. A single indigo does the same work -- marking the
+     primary action and nothing else -- without competing with the green
+     and red keyword chips, which are the only colour on the panel that
+     carries meaning.
+     --accent-gradient keeps its name, holding a flat colour, because a
+     dozen rules here and in popup-readability.css reference it. */
+  --accent-primary: #4f46e5;
+  --accent-secondary: #6366f1;
+  --accent-hover: #6366f1;
+  --accent-gradient: #4f46e5;
+  --accent-glow: rgba(79, 70, 229, 0.35);
   
   --success: #22c55e;
   --warning: #f59e0b;
@@ -255,7 +264,7 @@ body::-webkit-scrollbar-thumb {
   align-items: center;
   gap: 5px;
   padding: 3px 10px;
-  background: rgba(0, 212, 255, 0.1);
+  background: rgba(79, 70, 229, 0.1);
   border-radius: var(--radius-full);
   font-size: 10px;
 }
@@ -339,7 +348,7 @@ body::-webkit-scrollbar-thumb {
 .input-group input:focus {
   outline: none;
   border-color: var(--accent-secondary);
-  box-shadow: 0 0 0 2px rgba(0, 212, 255, 0.1);
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
 }
 
 .input-group input::placeholder {
@@ -1231,7 +1240,7 @@ body::-webkit-scrollbar-thumb {
 .keyword-count-badge {
   font-size: 10px;
   color: var(--accent-secondary);
-  background: rgba(0, 212, 255, 0.15);
+  background: rgba(79, 70, 229, 0.15);
   padding: 4px 10px;
   border-radius: var(--radius-full);
   display: inline-block;
@@ -2320,7 +2329,7 @@ body::-webkit-scrollbar-thumb {
   font-size: 9px;
   font-weight: 700;
   color: var(--accent-primary);
-  background: rgba(124, 58, 237, 0.2);
+  background: rgba(79, 70, 229, 0.2);
   padding: 2px 5px;
   border-radius: var(--radius-sm);
 }
@@ -2445,13 +2454,13 @@ body::-webkit-scrollbar-thumb {
   gap: 8px;
   padding: 10px 12px;
   cursor: pointer;
-  background: linear-gradient(90deg, rgba(124, 58, 237, 0.1), rgba(0, 212, 255, 0.05));
+  background: linear-gradient(90deg, rgba(79, 70, 229, 0.1), rgba(79, 70, 229, 0.05));
   font-size: 12px;
   font-weight: 600;
 }
 
 .diff-header:hover {
-  background: linear-gradient(90deg, rgba(124, 58, 237, 0.15), rgba(0, 212, 255, 0.1));
+  background: linear-gradient(90deg, rgba(79, 70, 229, 0.15), rgba(79, 70, 229, 0.1));
 }
 
 .diff-content {
@@ -2737,7 +2746,7 @@ body::-webkit-scrollbar-thumb {
 
 /* ============ QUALIFICATION THRESHOLD PANEL ============ */
 .qualification-threshold-panel {
-  background: linear-gradient(135deg, rgba(124, 58, 237, 0.1) 0%, rgba(0, 212, 255, 0.05) 100%);
+  background: linear-gradient(135deg, rgba(79, 70, 229, 0.1) 0%, rgba(79, 70, 229, 0.05) 100%);
   border: 1px solid var(--border-accent);
   border-radius: var(--radius-md);
   padding: 12px;
@@ -3081,7 +3090,7 @@ body::-webkit-scrollbar-thumb {
 .fu-input:focus, .fu-select:focus, .fu-textarea:focus {
   outline: none;
   border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.18);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.18);
 }
 .fu-textarea { resize: vertical; min-height: 150px; line-height: 1.5; }
 .fu-input-mono { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 10.5px; }
@@ -3116,13 +3125,13 @@ body::-webkit-scrollbar-thumb {
   color: #fff;
   background: var(--accent-gradient);
   border-color: transparent;
-  box-shadow: 0 2px 10px rgba(124, 58, 237, 0.32);
+  box-shadow: 0 2px 10px rgba(79, 70, 229, 0.32);
 }
-.fu-btn-primary:hover { box-shadow: 0 3px 14px rgba(124, 58, 237, 0.45); color: #fff; }
+.fu-btn-primary:hover { box-shadow: 0 3px 14px rgba(79, 70, 229, 0.45); color: #fff; }
 .fu-btn-sm { flex: 0 0 auto; min-width: 0; padding: 6px 9px; font-size: 10.5px; }
 
 .fu-more {
-  color: var(--accent-primary, #7c3aed);
+  color: var(--accent-primary, #4f46e5);
   text-decoration: none;
   font-weight: 600;
   white-space: nowrap;
@@ -3155,12 +3164,12 @@ body::-webkit-scrollbar-thumb {
   padding: 3px 6px;
   border-radius: var(--radius-full);
   color: var(--accent-secondary);
-  background: rgba(0, 212, 255, 0.08);
-  border: 1px solid rgba(0, 212, 255, 0.2);
+  background: rgba(79, 70, 229, 0.08);
+  border: 1px solid rgba(79, 70, 229, 0.2);
   cursor: pointer;
   transition: all var(--transition-fast);
 }
-.fu-token:hover { background: rgba(0, 212, 255, 0.18); border-color: rgba(0,212,255,0.45); }
+.fu-token:hover { background: rgba(79, 70, 229, 0.18); border-color: rgba(79, 70, 229,0.45); }
 
 /* --- inline notes ------------------------------------------------------- */
 .fu-note { font-size: 10px; line-height: 1.45; color: var(--text-muted); margin: 6px 0 0; }
@@ -3202,3 +3211,43 @@ body::-webkit-scrollbar-thumb {
   cursor: pointer;
   flex-shrink: 0;
 }
+
+/* Job Genie workspace: restrained palette, readable density, keyboard access. */
+:root {
+  --bg-primary: #101827; --bg-secondary: #172235;
+  --bg-card: #1c293d; --bg-card-hover: #23334b;
+  --border-subtle: #35445a; --border-accent: #638db8;
+  --text-primary: #f3f6fc; --text-secondary: #c5d0df; --text-muted: #a5b5c9;
+  --accent-primary: #82b5ff; --accent-secondary: #a3caff;
+  --accent-gradient: linear-gradient(135deg, #82b5ff, #a3caff);
+  --accent-glow: transparent;
+}
+body { width: 420px; min-height: 480px; max-height: 600px; background: var(--bg-primary); font-size: 13px; line-height: 1.5; }
+.container { padding: 20px; }
+.header { align-items: center; padding-bottom: 18px; }
+.logo-text h1 { font-size: 20px; background: none; -webkit-text-fill-color: var(--text-primary); letter-spacing: -.5px; }
+.tagline { font-size: 12px; letter-spacing: 0; }
+.logo-icon { width: 40px; height: 40px; box-shadow: none; }
+.setting-help, .debug-help, .fu-note { font-size: 12px; line-height: 1.6; color: var(--text-secondary); }
+.job-card, .actions-card, .documents-card, .ai-provider-panel, .settings-panel, .login-card { border: 1px solid var(--border-subtle); box-shadow: none; border-radius: 12px; }
+.workspace-settings { margin: 14px 0; padding: 0 14px; }
+.workspace-settings > summary { padding: 14px 0; cursor: pointer; font-weight: 600; color: var(--text-primary); }
+.workspace-settings > summary > span { float: right; color: var(--text-muted); font-weight: 400; font-size: 12px; }
+.workspace-settings[open] > summary { margin-bottom: 12px; border-bottom: 1px solid var(--border-subtle); }
+.workspace-guidance { margin: 14px 0 10px; color: var(--text-secondary); font-size: 12px; }
+.ats-guidance { border-left: 3px solid var(--accent-primary); padding: 10px 12px; margin: 12px 0; background: var(--bg-secondary); border-radius: 0 8px 8px 0; }
+.ats-guidance strong { font-size: 12px; }
+.ats-guidance p { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+button, input, select, textarea { font: inherit; }
+button { cursor: pointer; }
+.btn { min-height: 40px; }
+.btn-primary, .btn-gradient, .btn-accent { background: #a3caff; color: #10213b; box-shadow: none; font-weight: 650; }
+.btn-primary:hover:not(:disabled), .btn-gradient:hover:not(:disabled), .btn-accent:hover:not(:disabled) { background: #c2dcff; box-shadow: none; transform: none; }
+.btn-glow::before, .btn-glow::after { display: none; }
+input:not([type=checkbox]):not([type=radio]), select, textarea { max-width: 100%; min-height: 40px; }
+:where(button, a, input, select, textarea, summary):focus-visible { outline: 3px solid #a3caff; outline-offset: 3px; }
+.toggle-switch:focus-within { outline: 3px solid #a3caff; outline-offset: 3px; border-radius: 20px; }
+.user-email, .job-title, .job-company, .test-message { overflow-wrap: anywhere; min-width: 0; }
+.popup-footer { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 419px) { body { width: 100%; min-width: 320px; } .container { padding: 14px; } }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

@@ -585,7 +585,8 @@
   function _walk(node, hits) {
     if (!node || typeof node !== 'object') return;
     if (Array.isArray(node)) { node.forEach((n) => _walk(n, hits)); return; }
-    if (String(node['@type'] || '').toLowerCase().indexOf('jobposting') !== -1) hits.push(node);
+    const types = [].concat(node['@type'] || []);
+    if (types.some(t => /^(?:https?:\/\/schema\.org\/)?JobPosting$/i.test(String(t)))) hits.push(node);
     for (const k of Object.keys(node)) {
       if (node[k] && typeof node[k] === 'object') _walk(node[k], hits);
     }
@@ -602,6 +603,8 @@
         const hits = [];
         _walk(data, hits);
         for (const p of hits) {
+          // Never combine one listing's title with another listing's description.
+          if (!_stripHtml(p.title) || !_stripHtml(p.description)) continue;
           out.found = true;
           if (!out.title) out.title = _stripHtml(p.title);
           if (!out.description) out.description = _stripHtml(p.description);
@@ -624,7 +627,7 @@
             const id = p.identifier;
             out.jobId = _stripHtml(typeof id === 'string' ? id : (id && id.value));
           }
-          if (out.title && out.description && out.company) return out;
+          return out;
         }
       }
     } catch (e) {}

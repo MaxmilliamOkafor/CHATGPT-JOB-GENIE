@@ -1,0 +1,284 @@
+// "AI PRODUCT MANAGER (CONTRACT, PART-TIME)" IS NOT A JOB TITLE.
+//
+// Measured on a generated document, the Job Title a parser extracts was
+//
+//     "AI Product Manager (Contract, part-time)"
+//
+// That is a real stored field. Workday, Taleo and iCIMS keep it,
+// recruiters search and filter on it, and several normalise it against a
+// title taxonomy. That string matches neither a search for "AI Product
+// Manager" nor any taxonomy entry, so the role is harder to find than it
+// would be with no qualifier at all.
+//
+// The qualifier is not dropped, because whether a role was a contract is
+// something an employer is entitled to know. It moves to the one place
+// that costs nothing. Ranked by how much damage a stray qualifier does:
+//
+//     Job Title   searched and matched directly    keep clean
+//     Company     matched against employer names   keep clean
+//     Dates       parsed for tenure arithmetic     keep clean
+//     Bullets     free text, keyword-matched only  safe
+//
+// so it becomes the role's first bullet, read in the same glance.
+let PASS = 0, FAIL = 0;
+const t = (n, c, x) => { c ? PASS++ : FAIL++; console.log((c ? '  PASS  ' : '  FAIL  ') + n + (c ? '' : '\n           >> ' + x)); };
+
+const fs = require('fs'), path = require('path'), Module = require('module');
+const DIR = path.join(__dirname, '..');
+global.window = global;
+for (const f of ['content-quality-engine.js', 'recruiter-audit.js']) {
+  const file = path.join(DIR, f);
+  const m = new Module(file, null); m.filename = file;
+  m.paths = Module._nodeModulePaths(DIR);
+  m._compile(fs.readFileSync(file, 'utf8'), file);
+}
+const run = (cv) => global.RecruiterAudit.runRecruiterAudit({
+  cvText: cv, jdText: 'product', jdTitle: 'AI Product Manager', jobKeywords: ['genai'],
+}).cvText.split('\n');
+
+const build = (title) => [
+  'Max Okafor', '', 'PROFESSIONAL EXPERIENCE',
+  'SolimHealth', title, 'August 2022 - December 2022',
+  '- Built a GenAI system.', '',
+  'EDUCATION', 'MSc Artificial Intelligence (Distinction)',
+].join('\n');
+
+console.log('THE QUALIFIER LEAVES THE TITLE AND KEEPS ITS MEANING');
+for (const [title, clean, moved] of [
+  ['AI Product Manager (Contract, part-time)', 'AI Product Manager', 'Contract, part-time'],
+  ['Data Analyst (Internship)', 'Data Analyst', 'Internship'],
+  ['Software Engineer (Freelance)', 'Software Engineer', 'Freelance'],
+  ['Delivery Lead (Fixed-term)', 'Delivery Lead', 'Fixed-term'],
+  ['Ops Manager (Maternity cover)', 'Ops Manager', 'Maternity cover'],
+  ['Analyst (Temporary)', 'Analyst', 'Temporary'],
+]) {
+  const all2 = run(build(title));
+  const expAt2 = all2.findIndex((l) => /^PROFESSIONAL EXPERIENCE$/i.test(l.trim()));
+  const lines = all2.slice(expAt2 + 1);
+  const titleLine = lines.find((l) => l.trim().startsWith(clean));
+  t('  ' + title, titleLine && titleLine.trim() === clean, 'title line: ' + JSON.stringify(titleLine));
+  t('    -> kept as "' + moved + '"',
+    lines.some((l) => new RegExp('^\\s*-\\s*' + moved.replace(/[-[\]{}()*+?.\\^$|]/g, '\\$&') + '\\.', 'i').test(l)),
+    JSON.stringify(lines.filter((l) => /^\s*-/.test(l))));
+}
+
+console.log('\nBUT A PARENTHETICAL THAT IS PART OF THE JOB IS LEFT ALONE');
+// "(EMEA)" and "(Data Platform)" name the job. Stripping them would
+// remove information the title genuinely carries.
+for (const title of ['Senior Software Engineer (EMEA)', 'Engineer (Data Platform)',
+  'Analyst (Risk & Controls)', 'Manager (Northern Region)']) {
+  const lines = run(build(title));
+  t('  ' + title, lines.some((l) => l.trim() === title), JSON.stringify(lines.slice(0, 8)));
+}
+
+console.log('\nAND NOTHING OUTSIDE THE EXPERIENCE SECTION IS TOUCHED');
+{
+  const lines = run(build('AI Product Manager (Contract)'));
+  t('  a degree keeps its classification',
+    lines.some((l) => /MSc Artificial Intelligence \(Distinction\)/.test(l)),
+    'the education line was rewritten: ' + JSON.stringify(lines.filter((l) => /MSc/.test(l))));
+}
+
+console.log('\nAND THE DATE STAYS GLUED TO ITS TITLE');
+// The adjacency is what binds a date to a role. Inserting the bullet
+// between them would hand the date to whichever title came before.
+{
+  // Scoped to the EXPERIENCE section. Searching the whole document found
+  // the role headline under the name first -- a different line that is
+  // also just the title -- and then measured the distance from it to the
+  // date, which is not the adjacency this is about.
+  const all = run(build('AI Product Manager (Contract, part-time)')).filter((l) => l.trim());
+  const expAt = all.findIndex((l) => /^PROFESSIONAL EXPERIENCE$/i.test(l.trim()));
+  const lines = all.slice(expAt + 1);
+  const ti = lines.findIndex((l) => l.trim() === 'AI Product Manager');
+  const di = lines.findIndex((l) => /August 2022/.test(l));
+  t('  the date is the very next line', ti > -1 && di === ti + 1,
+    'title at ' + ti + ', date at ' + di + ': ' + JSON.stringify(lines));
+  t('  and the qualifier sits after it, as a bullet',
+    /^\s*-\s*Contract, part-time\./i.test(lines[di + 1] || ''),
+    JSON.stringify(lines[di + 1]));
+  t('  the role\'s real bullets survive',
+    lines.some((l) => /Built a GenAI system/.test(l)), JSON.stringify(lines));
+}
+
+console.log('\nAND IT IS REPORTED AS A FIX, NOT A WARNING');
+{
+  const out = global.RecruiterAudit.runRecruiterAudit({
+    cvText: build('AI Product Manager (Contract, part-time)'),
+    jdText: 'product', jdTitle: 'AI Product Manager', jobKeywords: ['genai'],
+  });
+  t('  the change is stated', out.report.fixes.some((f) => /employment type/i.test(f)),
+    JSON.stringify(out.report.fixes));
+}
+
+console.log('\nAND IT STILL REACHES THE CV WHEN THE PROFILE HOLDS IT SEPARATELY');
+// The profile now splits the employment type into its own field, so the
+// title arrives clean and the rule above finds nothing to do. Without
+// this the information simply disappears, and a contract or part-time
+// role reads as permanent and full-time -- a misrepresentation by
+// omission that surfaces at reference stage.
+{
+  const withField = (type, title) => global.RecruiterAudit.runRecruiterAudit({
+    cvText: build(title || 'AI Product Manager'),
+    jdText: 'product', jdTitle: 'AI Product Manager', jobKeywords: ['genai'],
+    experience: [{ company: 'SolimHealth', employment_type: type }],
+  });
+
+  for (const type of ['Contract, part-time', 'Internship', 'Freelance', 'Fixed-term']) {
+    const out = withField(type);
+    const lines = out.cvText.split('\n');
+    t('  "' + type + '" is stated in the description',
+      lines.some((l) => l.trim().toLowerCase() === '- ' + type.toLowerCase() + '.'),
+      JSON.stringify(lines));
+    t('    -> and never in the title',
+      lines.some((l) => l.trim() === 'AI Product Manager')
+        && !lines.some((l) => /AI Product Manager.*\(/.test(l)),
+      JSON.stringify(lines.filter((l) => /Product Manager/.test(l))));
+  }
+
+  // The date must still sit directly under the title.
+  {
+    const lines = withField('Contract').cvText.split('\n').filter((l) => l.trim());
+    const ti = lines.findIndex((l) => l.trim() === 'AI Product Manager' && lines[lines.indexOf(l) + 1]);
+    const exp = lines.slice(lines.findIndex((l) => /^PROFESSIONAL EXPERIENCE$/i.test(l.trim())) + 1);
+    const at = exp.findIndex((l) => l.trim() === 'AI Product Manager');
+    t('  the date is still the line after the title',
+      at > -1 && /August 2022/.test(exp[at + 1] || ''),
+      JSON.stringify(exp.slice(0, 5)) + ' (ti ' + ti + ')');
+  }
+
+  // Full-time and permanent are what a reader assumes, so saying them
+  // costs a line per role and adds nothing.
+  for (const assumed of ['Full-time', 'Permanent', '']) {
+    const out = withField(assumed);
+    t('  "' + (assumed || '(blank)') + '" is not printed',
+      !/^\s*-\s*(full|permanent)/im.test(out.cvText),
+      JSON.stringify(out.cvText.split('\n').filter((l) => /^-/.test(l))));
+  }
+
+  // And it is never said twice, whichever route it took.
+  {
+    const both = global.RecruiterAudit.runRecruiterAudit({
+      cvText: build('AI Product Manager (Contract, part-time)'),
+      jdText: 'product', jdTitle: 'AI Product Manager', jobKeywords: ['genai'],
+      experience: [{ company: 'SolimHealth', employment_type: 'Contract, part-time' }],
+    }).cvText;
+    t('  stated once when the title carried it as well',
+      (both.match(/Contract/gi) || []).length === 1,
+      JSON.stringify(both.split('\n').filter((l) => /Contract/i.test(l))));
+  }
+
+  // A company the CV does not name contributes nothing.
+  {
+    const other = global.RecruiterAudit.runRecruiterAudit({
+      cvText: build('AI Product Manager'),
+      jdText: 'product', jdTitle: 'AI Product Manager', jobKeywords: ['genai'],
+      experience: [{ company: 'Google', employment_type: 'Internship' }],
+    }).cvText;
+    t('  another employer\'s contract type is not attached',
+      !/Internship/i.test(other), JSON.stringify(other));
+  }
+
+  // Free text in a profile field is still free text.
+  {
+    const junk = withField('whatever I felt like typing').cvText;
+    t('  a value that is not an employment type is ignored',
+      !/whatever I felt/i.test(junk), JSON.stringify(junk));
+  }
+}
+
+console.log('\nAND THE COMPANY FIELD IS THE COMPANY\'S NAME');
+// Same fault one line up. "Meta (formerly Facebook Inc)" is one text
+// item and it lands in the Company field a parser stores. Employers
+// match that against a name: "Meta" matches, the parenthetical does not.
+{
+  const build = (company) => ['Max Okafor', '', 'PROFESSIONAL EXPERIENCE',
+    company, 'Senior Software Engineer', 'January 2023 - Present',
+    '- Built things.', '', 'EDUCATION', 'MSc Artificial Intelligence (Distinction)'].join('\n');
+  const run2 = (cv) => global.RecruiterAudit.runRecruiterAudit({
+    cvText: cv, jdText: 'x', jdTitle: 'Engineer', jobKeywords: ['python'] }).cvText.split('\n');
+
+  // EVERY parenthetical goes and none is kept elsewhere. A rename is the
+  // employer's corporate history rather than the candidate's work. A
+  // descriptor like "(AI Startup)" is a label applied to the employer,
+  // not something the candidate did, and the bullets under the role
+  // already show what kind of place it was.
+  for (const [line, want] of [
+    ['Meta (formerly Facebook Inc)', 'Meta'],
+    ['Acme Ltd (previously Widget Co)', 'Acme Ltd'],
+    ['Beta Group (now part of Gamma)', 'Beta Group'],
+    ['Delta Ltd (t/a Delta Digital)', 'Delta Ltd'],
+    ['SolimHealth (AI Startup)', 'SolimHealth'],
+    ['Acme (Series B)', 'Acme'],
+  ]) {
+    const lines = run2(build(line));
+    t('  ' + line, lines.some((l) => l.trim() === want), JSON.stringify(lines.slice(0, 6)));
+    const inner = line.match(/\(([^)]+)\)/)[1];
+    t('    -> and it is not kept anywhere else',
+      !lines.some((l) => l.includes(inner)),
+      'still present: ' + JSON.stringify(lines.filter((l) => l.includes(inner))));
+  }
+
+  // The adjacency a parser needs to bind a date to a role must survive.
+  {
+    const lines = run2(build('SolimHealth (AI Startup)')).filter((l) => l.trim());
+    const c = lines.findIndex((l) => l.trim() === 'SolimHealth');
+    t('    -> title still follows the company',
+      /Senior Software Engineer/.test(lines[c + 1] || ''), JSON.stringify(lines));
+    t('    -> and the date still follows the title',
+      /January 2023/.test(lines[c + 2] || ''), JSON.stringify(lines));
+  }
+
+  // AND WITH THE ROLE'S LOCATION BESIDE IT, WHICH IS THE NORMAL CASE.
+  //
+  // This shipped broken. The rule above required the company line to
+  // hold no tab, which was true when it was written and stopped being
+  // true the day per-role locations were added: the line became
+  // "Meta (formerly Facebook Inc)\tDublin, Ireland", the tab test
+  // rejected it, and the rename went straight back into the Company
+  // field. Nothing failed, because every case above passes a profile
+  // with no location in it.
+  {
+    const withLoc = (company) => global.RecruiterAudit.runRecruiterAudit({
+      cvText: build(company), jdText: 'x', jdTitle: 'Engineer', jobKeywords: ['python'],
+      experience: [{ company: 'Meta', location: 'Dublin, Ireland' }],
+    }).cvText.split('\n');
+
+    const lines = withLoc('Meta (formerly Facebook Inc)');
+    const co = lines.filter((l) => l.indexOf('Meta') === 0)[0] || '';
+    t('  the parenthetical still goes when a location is attached',
+      co === 'Meta\tDublin, Ireland', JSON.stringify(co));
+    t('    -> and the rename is nowhere in the document',
+      !lines.some((l) => /Facebook/.test(l)),
+      'still present: ' + JSON.stringify(lines.filter((l) => /Facebook/.test(l))));
+
+    // The employment type must still be moved off the TITLE rather than
+    // taken by the company rule, which is what the tab test used to
+    // guarantee on its own.
+    const typed = global.RecruiterAudit.runRecruiterAudit({
+      cvText: ['Max Okafor', '', 'PROFESSIONAL EXPERIENCE',
+        'Meta', 'Senior Software Engineer (Contract, part-time)',
+        'January 2023 - Present', '- Built things.', '',
+        'EDUCATION', 'MSc Artificial Intelligence'].join('\n'),
+      jdText: 'x', jdTitle: 'Engineer', jobKeywords: ['python'],
+      experience: [{ company: 'Meta', location: 'Dublin, Ireland' }],
+    });
+    t('  the title keeps losing its employment type, not the company',
+      /^Senior Software Engineer$/m.test(typed.cvText)
+        && /Contract, part-time/.test(typed.cvText),
+      JSON.stringify(typed.cvText));
+  }
+
+  // A company with no parenthetical, and a degree classification, are
+  // both left exactly as they are.
+  {
+    const lines = run2(build('Accenture'));
+    t('  a plain company name is untouched',
+      lines.some((l) => l.trim() === 'Accenture'), JSON.stringify(lines.slice(0, 6)));
+    t('  and a degree keeps its classification',
+      lines.some((l) => /\(Distinction\)/.test(l)), JSON.stringify(lines));
+  }
+}
+
+console.log('\n' + PASS + ' passed, ' + FAIL + ' failed');
+process.exit(FAIL ? 1 : 0);

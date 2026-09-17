@@ -416,6 +416,7 @@
   function extractMandatoryFromJD(jdText) {
     if (!jdText || typeof jdText !== 'string') return [];
     
+    jdText = global.UniversalJDParser ? global.UniversalJDParser.processAnyJobDescription(jdText).text : jdText;
     const jdLower = jdText.toLowerCase();
     const found = new Set();
     
