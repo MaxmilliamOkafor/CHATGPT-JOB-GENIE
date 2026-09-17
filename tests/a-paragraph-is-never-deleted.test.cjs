@@ -83,10 +83,25 @@ console.log('\nAND THE REMOVAL ITSELF IS NOT WEAKENED');
 {
   // A paragraph with one restating sentence and one original keeps the
   // original and drops the restatement, exactly as before.
+  // Long enough that the body still clears the floor after removal.
+  // Below the floor the removed sentence comes back on purpose, which is
+  // a different rule and is asserted above.
   const out = CL.enforceCoverLetterOriginality(letter(
     'I led the migration of a UK retail client legacy application to AWS microservices, '
       + 'delivering all 47 services in 11 months. What I would bring here is the review '
       + 'discipline that made it survive contact with production.',
+    'Your posting describes a support function where the same question arrives through '
+      + 'three channels and is answered three times, which is a documentation problem '
+      + 'wearing a staffing problem as a disguise, and it is the part of the work I would '
+      + 'want to own here rather than the part I would tolerate.',
+    'In a first quarter I would expect to spend most of my time on whatever the rota is '
+      + 'currently absorbing by hand, because that is reliably where the recurring cost '
+      + 'sits and it is rarely where anyone is looking for it.',
+    'Cloudbeds runs support across live chat, email and phone for properties in a hundred '
+      + 'and fifty countries, and at that spread the cost of an answer that only exists in '
+      + 'one person\'s head compounds quietly until somebody measures it. Writing the answer '
+      + 'down once is cheaper than answering it forty times, and it is the kind of work that '
+      + 'never shows up on a roadmap until someone insists on it.',
     'I would be glad to talk it through.'), BULLETS);
   t('  the restatement goes', !/47 services/.test(out.text), out.text);
   t('  ...and is reported', out.removedSentences.length >= 1,
@@ -95,6 +110,60 @@ console.log('\nAND THE REMOVAL ITSELF IS NOT WEAKENED');
     /review discipline/.test(out.text), out.text);
   t('  ...and that paragraph is not reported as emptied',
     out.emptiedParagraphs.length === 0, JSON.stringify(out.emptiedParagraphs));
+}
+
+console.log('\nAND ORIGINALITY IS NEVER ENFORCED DOWN TO NOTHING');
+{
+  // The guarantee that was missing, and the one that matters. Two
+  // letters went to real employers at 85 and 80 words of body, both
+  // opening on a reference to a paragraph that had been removed. Every
+  // deletion was individually correct and the result was not a letter.
+  const bullets = [
+    'Designed and delivered the artificial intelligence and natural language processing '
+      + 'systems behind a dementia detection product that identifies cognitive decline '
+      + 'early enough for clinicians to intervene.',
+    'Acted as technical lead on five pre-sales bids, authoring the architecture sections '
+      + 'and presenting proposed solutions to client CTOs, across engagements totalling 3.2m.',
+  ];
+  const restating = letter(
+    'I designed and delivered the artificial intelligence and natural language processing '
+      + 'systems behind a dementia detection product that identifies cognitive decline early '
+      + 'enough for clinicians to intervene. I acted as technical lead on five pre-sales '
+      + 'bids, authoring the architecture sections and presenting proposed solutions to '
+      + 'client CTOs, across engagements totalling 3.2m.',
+    'I am available for a discussion at your earliest convenience.');
+  const words = (text) => text.split(/\n{2,}/)
+    .filter((p) => p.trim() && !/^(Dear|Sincerely|Maxmilliam)/.test(p.trim()))
+    .join(' ').split(/\s+/).filter(Boolean).length;
+  const out = CL.enforceCoverLetterOriginality(restating, bullets);
+  t('  the body is not gutted', words(out.text) >= words(restating) - 5,
+    words(restating) + ' -> ' + words(out.text) + ' words');
+  t('  ...and what came back is reported',
+    out.restoredForLength.length >= 1, JSON.stringify(out.restoredForLength.length));
+  t('  ...least restating first',
+    !/dementia detection/.test(out.restoredForLength[0] || ''),
+    JSON.stringify((out.restoredForLength[0] || '').slice(0, 60)));
+}
+
+console.log('\nAND A DEMONSTRATIVE OPENING IS REPORTED');
+{
+  // The second letter out opened "This consultative approach resulted in
+  // improved patient outcomes", which points back exactly as hard as
+  // "Additionally" and reads exactly as broken. It cannot be stripped
+  // the way a connective can, because removing "This" leaves a sentence
+  // with no subject, so it is reported for a rewrite instead.
+  const out = CL.enforceCoverLetterOriginality(letter(
+    'This consultative approach resulted in improved patient outcomes.',
+    'I would be glad to talk it through.'), []);
+  t('  it is flagged', /^This consultative approach/.test(out.danglingOpening),
+    JSON.stringify(out.danglingOpening));
+  t('  ...and the sentence is left intact, not mangled',
+    /This consultative approach resulted/.test(out.text), out.text);
+  const fine = CL.enforceCoverLetterOriginality(letter(
+    'Your posting describes a support team answering the same question forty times.',
+    'I would be glad to talk it through.'), []);
+  t('  a real opening is not flagged', fine.danglingOpening === '',
+    JSON.stringify(fine.danglingOpening));
 }
 
 console.log('\nAND THE AWKWARD SHAPES DO NOT BREAK IT');

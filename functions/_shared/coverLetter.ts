@@ -82,6 +82,19 @@ export interface CoverLetterOriginality {
    * it at all.
    */
   emptiedParagraphs: string[];
+  /**
+   * Sentences put back because removing them left the letter below the
+   * body floor. Originality is enforced up to the point where the
+   * document stops being a letter, and no further.
+   */
+  restoredForLength: string[];
+  /**
+   * Set when the first body paragraph still opens on a demonstrative
+   * ("This approach", "These results"), which points at something the
+   * reader has not been shown. It cannot be stripped without leaving a
+   * subjectless sentence, so it is reported for a rewrite.
+   */
+  danglingOpening: string;
 }
 
 /**
@@ -171,7 +184,20 @@ export function enforceCoverLetterOriginality(
   // back at, and "Additionally" with nothing behind it tells a reader the
   // document was assembled rather than written. The connective is dropped
   // and the sentence keeps its meaning; only the back-reference goes.
+  // A DEMONSTRATIVE IS A BACK-REFERENCE TOO.
+  //
+  // The first version caught only connectives. The next letter out
+  // opened "This consultative approach resulted in improved patient
+  // outcomes", which points back just as hard and reads just as broken.
+  // "This approach", "These results", "Such work", "It did" -- all of
+  // them name something the reader has not been shown.
+  //
+  // A demonstrative cannot be stripped the way a connective can, because
+  // removing "This" leaves a sentence with no subject. It is reported
+  // instead, and the length floor below is what actually saves the
+  // letter.
   const ORPHAN = /^(additionally|furthermore|moreover|in addition|also|secondly|similarly|likewise|besides|what(?:'s| is) more)\b[,]?\s*/i;
+  const DANGLING = /^(this|these|those|that|such|it)\b/i;
   let seenBody = false;
   const stitched = paragraphs.map((para) => {
     if (!para.trim() || isStructuralParagraph(para)) return para;
@@ -182,9 +208,59 @@ export function enforceCoverLetterOriginality(
     return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : para;
   });
 
+  // ORIGINALITY IS NEVER ENFORCED DOWN TO NOTHING.
+  //
+  // This is the guarantee that was missing, and the one that matters.
+  // Two letters went to real employers at 85 and 80 words of body, both
+  // opening on a reference to a paragraph that had been removed. Every
+  // deletion was individually correct and the result was not a letter.
+  //
+  // Removal is capped by the document: sentences come back, least
+  // restating first, until the body clears the floor. A letter carrying
+  // one sentence that echoes the CV is a letter. One that is three
+  // sentences long is a fragment, and no amount of originality makes it
+  // worth sending.
+  const FLOOR_WORDS = 150;
+  let body = stitched.filter((p) => p.trim() && !isStructuralParagraph(p));
+  const restoredForLength: string[] = [];
+  const countWords = (list: string[]) =>
+    list.join(" ").split(/\s+/).filter(Boolean).length;
+
+  if (removedSentences.length && countWords(body) < FLOOR_WORDS) {
+    const byLeastRestating = removedSentences
+      .map((sentence) => ({
+        sentence,
+        overlap: bullets.reduce((max, b) => Math.max(max, overlapRatio(sentence, b)), 0),
+      }))
+      .sort((a, b) => a.overlap - b.overlap);
+    for (const { sentence } of byLeastRestating) {
+      if (countWords(body) >= FLOOR_WORDS) break;
+      restoredForLength.push(sentence);
+      body = body.concat(sentence);
+      const at = removedSentences.indexOf(sentence);
+      if (at !== -1) removedSentences.splice(at, 1);
+    }
+  }
+
+  // Restored sentences rejoin the last body paragraph rather than
+  // standing alone, so the letter keeps its shape.
+  let out = stitched.filter((p) => p.trim());
+  if (restoredForLength.length) {
+    for (let i = out.length - 1; i >= 0; i--) {
+      if (isStructuralParagraph(out[i])) continue;
+      out[i] = (out[i].trim() + " " + restoredForLength.join(" ")).replace(/[ \t]{2,}/g, " ");
+      break;
+    }
+  }
+
+  const firstBody = out.find((p) => p.trim() && !isStructuralParagraph(p)) || "";
+  const danglingOpening = DANGLING.test(firstBody.trim()) ? firstBody.trim().slice(0, 120) : "";
+
   return {
-    text: stitched.filter((p) => p.trim()).join("\n\n"),
+    text: out.join("\n\n"),
     emptiedParagraphs,
+    restoredForLength,
+    danglingOpening,
     removedSentences,
     maxSentenceOverlap,
     paragraphOverlaps,
